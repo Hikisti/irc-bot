@@ -3,13 +3,14 @@ import threading
 import time
 
 class IrcBot:
-    def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channel="#bottest123"):
+    def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channels=None):
         self.server = server
         self.port = port
         self.nickname = nickname
-        self.channel = channel
+        self.channels = channels if channels else ["#bottest123"]  # Default channel
         self.running = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
 
     def connect(self):
         """Connect to the IRC server and join the channel."""
@@ -26,7 +27,7 @@ class IrcBot:
 
             # Wait a few seconds before joining channel
             time.sleep(3)
-            self.join_channel()
+            self.join_channels()
 
             # Keep the bot running
             while self.running:
@@ -50,14 +51,15 @@ class IrcBot:
 
                     if line.startswith("PING"):
                         self.pong(line)
-                    elif " 001 " in line:  # Welcome message received
-                        print("Server welcome message received. Joining channel...")
-                        self.join_channel()
+                    elif " 001 " in line:  # Server welcome message
+                        print("Server welcome message received. Joining channels...")
+                        self.join_channels()  # Join multiple channels
                     elif "PRIVMSG" in line:
                         self.process_message(line)
             except Exception as e:
                 print(f"Error in listen loop: {e}")
                 self.running = False
+
 
     def pong(self, message):
         """Respond to PING messages from the server."""
@@ -73,25 +75,29 @@ class IrcBot:
         except Exception as e:
             print(f"Failed to send message: {e}")
 
-    def join_channel(self):
-        """Join a specified channel."""
-        print(f"Joining channel {self.channel}...")
-        self.send_raw(f"JOIN {self.channel}")
+    def join_channels(self):
+        """Join multiple channels."""
+        for channel in self.channels:
+            print(f"Attempting to join {channel}...")
+            self.send_raw(f"JOIN {channel}")
+            time.sleep(1)  # Prevent flooding
 
     def send_message(self, message):
         """Send a message to the channel."""
         print(f"Sending message to {self.channel}: {message}")
         self.send_raw(f"PRIVMSG {self.channel} :{message}")
-
+    
     def process_message(self, message):
-        """Extract the nickname, channel, and actual message."""
+        """Extract nickname, channel, and message."""
         parts = message.split(" ", 3)
         if len(parts) < 4:
             return
         prefix, command, channel, msg = parts
-        nick = prefix.split("!")[0][1:]  # Extract nick
-        msg = msg[1:]  # Remove leading ':' from message
-        print(f"[{channel}] {nick}: {msg}")
+        nick = prefix.split("!")[0][1:]  # Extract nickname
+        msg = msg[1:]  # Remove leading ':'
+        
+        if channel in self.channels:
+            print(f"[{channel}] {nick}: {msg}")  # Show messages from all joined channels
 
     def stop(self):
         """Stop the bot and close the connection."""
@@ -100,7 +106,6 @@ class IrcBot:
         self.send_raw("QUIT :Bot shutting down")
         self.sock.close()
 
-# Example usage:
 if __name__ == "__main__":
-    bot = IrcBot()
+    bot = IrcBot(channels=["#smliiga", "#nhl.fi", "#nakkimuusi"])
     bot.connect()
