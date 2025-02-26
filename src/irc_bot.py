@@ -1,72 +1,106 @@
 import socket
+import threading
+import time
 
-class IrcBot (object):
-    def __init__(self):
-        self.ircsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server = "dreamhack.se.quakenet.org"
-        self.channel = ""
-        self.botnick = "SuurinJaKaunein"
-        self.adminname = "Hikisti"
-        self.exitcode = "bye " + self.botnick
-        self.name = ""
-        self.message = ""
+class IrcBot:
+    def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channel="#bottest123"):
+        self.server = server
+        self.port = port
+        self.nickname = nickname
+        self.channel = channel
+        self.running = False
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    def connect(self):
+        """Connect to the IRC server and join the channel."""
+        print(f"Connecting to {self.server}:{self.port} as {self.nickname}...")
+        try:
+            self.sock.connect((self.server, self.port))
+            self.send_raw(f"NICK {self.nickname}")
+            self.send_raw(f"USER {self.nickname} 0 * :{self.nickname}")
+            self.running = True
+            
+            # Start listening in a separate thread
+            listener = threading.Thread(target=self.listen, daemon=True)
+            listener.start()
+
+            # Wait a few seconds before joining channel
+            time.sleep(3)
+            self.join_channel()
+
+            # Keep the bot running
+            while self.running:
+                time.sleep(1)
+        except Exception as e:
+            print(f"Connection error: {e}")
+
+    def listen(self):
+        """Listen for messages from the server."""
+        while self.running:
+            try:
+                response = self.sock.recv(2048).decode("utf-8", errors="ignore").strip()
+                if not response:
+                    print("Connection lost. Exiting...")
+                    self.running = False
+                    break
+
+                for line in response.split("\n"):
+                    line = line.strip()
+                    print(f"< {line}")  # Debugging
+
+                    if line.startswith("PING"):
+                        self.pong(line)
+                    elif " 001 " in line:  # Welcome message received
+                        print("Server welcome message received. Joining channel...")
+                        self.join_channel()
+                    elif "PRIVMSG" in line:
+                        self.process_message(line)
+            except Exception as e:
+                print(f"Error in listen loop: {e}")
+                self.running = False
+
+    def pong(self, message):
+        """Respond to PING messages from the server."""
+        server = message.split()[1]
+        print(f"Responding to PING from {server}")
+        self.send_raw(f"PONG {server}")
+
+    def send_raw(self, message):
+        """Send a raw command to the IRC server."""
+        print(f"> {message}")  # Debugging
+        try:
+            self.sock.send((message + "\r\n").encode("utf-8"))
+        except Exception as e:
+            print(f"Failed to send message: {e}")
 
     def join_channel(self):
-        ircmsg = ""
-        while ircmsg.find(f"Welcome to the QuakeNet IRC Network, {self.botnick}") == -1:
-            ircmsg = self.receive_information()
-            self.check_ping(ircmsg)
-        self.ircsock.send(bytes("JOIN " + "#bottest123" + "\n", "UTF-8"))
-        #self.ircsock.send(bytes("JOIN " + "#valioliiga" + "\n", "UTF-8"))
-        #self.ircsock.send(bytes("JOIN " + "#nakkimuusi" + "\n", "UTF-8"))
-        
-    def connect_to_server(self):
-        self.ircsock.connect((self.server, 6667))
-        self.ircsock.send(bytes("USER " + self.botnick + " " + self.botnick + " " + self.botnick + " " + self.botnick + "\n", "UTF-8"))
-        self.ircsock.send(bytes("NICK " + self.botnick + "\n", "UTF-8"))
+        """Join a specified channel."""
+        print(f"Joining channel {self.channel}...")
+        self.send_raw(f"JOIN {self.channel}")
 
-    def check_ping(self, msg):
-        if msg.find('PING') != -1:
-            self.ircsock.send(bytes('PONG ' + msg.split(":")[1] + "\n", "UTF-8"))
-   
-    def send_a_message(self, msg):
-        self.ircsock.send(bytes("PRIVMSG " + self.channel + " :" + str(msg) + "\n", "UTF-8"))
+    def send_message(self, message):
+        """Send a message to the channel."""
+        print(f"Sending message to {self.channel}: {message}")
+        self.send_raw(f"PRIVMSG {self.channel} :{message}")
 
-    def receive_information(self):
-        ircmsg = self.ircsock.recv(2048).decode("ISO-8859-1")
-        ircmsg = ircmsg.strip('\n\r')
-        print(ircmsg)
-        return ircmsg
+    def process_message(self, message):
+        """Extract the nickname, channel, and actual message."""
+        parts = message.split(" ", 3)
+        if len(parts) < 4:
+            return
+        prefix, command, channel, msg = parts
+        nick = prefix.split("!")[0][1:]  # Extract nick
+        msg = msg[1:]  # Remove leading ':' from message
+        print(f"[{channel}] {nick}: {msg}")
 
-    def split_nick_and_message_and_channel(self, msg):
-        self.name = msg.split('!', 1)[0][1:]
-        self.message = msg.split('PRIVMSG', 1)[1].split(':', 1)[1]
-        self.channel = msg.split('PRIVMSG', 1)[1].split(':', 1)[0].strip()
+    def stop(self):
+        """Stop the bot and close the connection."""
+        print("Stopping bot...")
+        self.running = False
+        self.send_raw("QUIT :Bot shutting down")
+        self.sock.close()
 
-    def stop_the_bot(self, msg):
-        if self.name.lower() == self.adminname.lower() and msg.rstrip() == self.exitcode:
-            self.send_a_message("I will quit, bye.")
-            self.ircsock.send(bytes("QUIT \n", "UTF-8"))
-            return True
-        else:
-            return False
-
-    def main(self):
-        self.connect_to_server()
-        self.join_channel()
-        while True:
-            ircmsg = ""
-            self.name = ""
-            self.message = ""
-            ircmsg = self.receive_information()
-
-            if ircmsg.find("PRIVMSG") != -1:
-                self.split_nick_and_message_and_channel(ircmsg)
- 
-            if self.stop_the_bot(self.message):
-                break
-            self.check_ping(ircmsg)
-
-if __name__ == '__main__':
-    ircBot = IrcBot()
-    ircBot.main()
+# Example usage:
+if __name__ == "__main__":
+    bot = IrcBot()
+    bot.connect()
