@@ -86,10 +86,11 @@ class IrcBot:
             self.send_raw(f"JOIN {channel}")
             time.sleep(1)  # Prevent flooding
 
-    def send_message(self, message):
-        """Send a message to the channel."""
-        print(f"Sending message to {self.channel}: {message}")
-        self.send_raw(f"PRIVMSG {self.channel} :{message}")
+    def send_message(self, channel, message):
+        """Send a message to the specified IRC channel."""
+        print(f"Sending message to {channel}: {message}")
+        self.send_raw(f"PRIVMSG {channel} :{message}")
+        
 
     def process_message(self, message):
         """Extracts sender, channel, and message, then processes commands."""
