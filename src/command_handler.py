@@ -1,6 +1,6 @@
 import traceback
-#from commands.electricity import ElectricityCommand
-#from commands.weather import WeatherCommand
+from electricity import ElectricityCommand
+from weather import WeatherCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
