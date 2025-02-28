@@ -2,6 +2,8 @@ import socket
 import threading
 import time
 
+from command_handler import CommandHandler
+
 class IrcBot:
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channels=None):
         self.server = server
