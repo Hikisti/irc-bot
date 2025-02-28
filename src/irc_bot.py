@@ -10,6 +10,8 @@ class IrcBot:
         self.channels = channels if channels else ["#bottest123"]  # Default channel
         self.running = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.command_handler = CommandHandler()  # Initialize command handler
+
 
 
     def connect(self):
@@ -86,9 +88,9 @@ class IrcBot:
         """Send a message to the channel."""
         print(f"Sending message to {self.channel}: {message}")
         self.send_raw(f"PRIVMSG {self.channel} :{message}")
-    
+
     def process_message(self, message):
-        """Extract nickname, channel, and message."""
+        """Extracts sender, channel, and message, then processes commands."""
         parts = message.split(" ", 3)
         if len(parts) < 4:
             return
@@ -96,8 +98,9 @@ class IrcBot:
         nick = prefix.split("!")[0][1:]  # Extract nickname
         msg = msg[1:]  # Remove leading ':'
         
-        if channel in self.channels:
-            print(f"[{channel}] {nick}: {msg}")  # Show messages from all joined channels
+        if channel in self.channels and msg.startswith("!"):
+            self.command_handler.handle_command(self, nick, channel, msg)
+    
 
     def stop(self):
         """Stop the bot and close the connection."""
@@ -107,5 +110,5 @@ class IrcBot:
         self.sock.close()
 
 if __name__ == "__main__":
-    bot = IrcBot(channels=["#smliiga", "#nhl.fi", "#nakkimuusi"])
+    bot = IrcBot()
     bot.connect()
