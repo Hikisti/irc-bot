@@ -113,5 +113,5 @@ class IrcBot:
         self.sock.close()
 
 if __name__ == "__main__":
-    bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi"])
+    bot = IrcBot()
     bot.connect()

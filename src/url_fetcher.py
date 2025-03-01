@@ -50,7 +50,8 @@ class URLFetcher:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             title = soup.title.string.strip() if soup.title else "No title found"
-            return f'"{title}"'
+            print(f"Full title: {title}")
+            return title
         except requests.exceptions.RequestException:
             return None
 
