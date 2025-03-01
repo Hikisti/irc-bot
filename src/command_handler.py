@@ -1,6 +1,7 @@
 import traceback
 from electricity import ElectricityCommand
 from weather import WeatherCommand
+from stock import StockCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -9,7 +10,8 @@ class CommandHandler:
         # Define aliases and argument restrictions
         self.command_aliases = {
             ElectricityCommand(): {"aliases": ["!sähkö", "!sahko"], "allow_args": False},
-            WeatherCommand(): {"aliases": ["!weather", "!w"], "allow_args": True}
+            WeatherCommand(): {"aliases": ["!weather", "!w"], "allow_args": True},
+            StockCommand(): {"aliases": ["!stock"], "allow_args": True}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
