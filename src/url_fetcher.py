@@ -20,6 +20,7 @@ class URLFetcher:
         
         for url in urls:
             title_info = self.get_title(url)
+            print(f"Title info: {title_info}")
             if title_info:
                 self.bot.send_message(channel, title_info)  # Send title to IRC
 
