@@ -4,8 +4,6 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
 class URLFetcher:
-    MAX_IRC_MSG_LENGTH = 400  # Adjust based on IRC limits
-
     def __init__(self, bot):
         """Initialize with a reference to the IRC bot to send messages back to channels."""
         self.bot = bot
@@ -20,7 +18,6 @@ class URLFetcher:
         
         for url in urls:
             title_info = self.get_title(url)
-            print(f"Title info: {title_info}")
             if title_info:
                 self.bot.send_message(channel, title_info)  # Send title to IRC
 
@@ -51,7 +48,6 @@ class URLFetcher:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             title = soup.title.string.strip() if soup.title else "No title found"
-            print(f"Full title: {title}")
             return title
         except requests.exceptions.RequestException:
             return None
