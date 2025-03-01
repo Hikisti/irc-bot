@@ -3,6 +3,7 @@ import threading
 import time
 
 from command_handler import CommandHandler
+from url_fetcher import URLFetcher
 
 class IrcBot:
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channels=None):
@@ -13,8 +14,7 @@ class IrcBot:
         self.running = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.command_handler = CommandHandler()  # Initialize command handler
-
-
+        self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
 
     def connect(self):
         """Connect to the IRC server and join the channel."""
@@ -91,7 +91,6 @@ class IrcBot:
         print(f"Sending message to {channel}: {message}")
         self.send_raw(f"PRIVMSG {channel} :{message}")
         
-
     def process_message(self, message):
         """Extracts sender, channel, and message, then processes commands."""
         parts = message.split(" ", 3)
@@ -101,10 +100,12 @@ class IrcBot:
         nick = prefix.split("!")[0][1:]  # Extract nickname
         msg = msg[1:]  # Remove leading ':'
         
-        if channel in self.channels and msg.startswith("!"):
-            self.command_handler.handle_command(self, nick, channel, msg)
+        if channel in self.channels:
+            if msg.startswith("!"):  # Command handling
+                self.command_handler.handle_command(self, nick, channel, msg)
+            else:  # Check for URLs in messages
+                self.url_fetcher.detect_and_fetch(nick, channel, msg)
     
-
     def stop(self):
         """Stop the bot and close the connection."""
         print("Stopping bot...")
