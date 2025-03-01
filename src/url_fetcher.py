@@ -50,7 +50,7 @@ class URLFetcher:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             title = soup.title.string.strip() if soup.title else "No title found"
-            return title[:URLFetcher.MAX_IRC_MSG_LENGTH]
+            return f'"{title}"'
         except requests.exceptions.RequestException:
             return None
 
