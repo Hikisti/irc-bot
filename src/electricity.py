@@ -1,13 +1,17 @@
 import requests
 import datetime
+import pytz
 
 class ElectricityCommand:
     """Fetches electricity prices in Finland for the current date and hour."""
 
     def execute(self, args=None):
         try:
-            # Get current date and hour
-            now = datetime.datetime.now()
+            # Define Helsinki timezone
+            helsinki_tz = pytz.timezone("Europe/Helsinki")
+
+            # Get current date and hour in Helsinki timezone
+            now = datetime.datetime.now(helsinki_tz)
             date = now.strftime("%Y-%m-%d")
             hour = now.strftime("%H")  # 24-hour format
 
