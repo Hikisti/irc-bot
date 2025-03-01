@@ -20,7 +20,7 @@ class StockCommand:
     def get_stock_price(self, symbol):
         """Fetch stock price, ensuring correct percentage and absolute price change."""
         try:
-            stock = self.ticker(symbol)
+            stock = yf.Ticker(symbol)
             data = stock.history(period="1d")  # Get today's stock data
             
             if data.empty:
