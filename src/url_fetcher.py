@@ -9,6 +9,7 @@ class URLFetcher:
         self.bot = bot
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        MAX_IRC_MSG_LENGTH = 400  # Adjust based on IRC limits
 
     def detect_and_fetch(self, nick, channel, message):
         """Detects URLs in the message and fetches their titles."""
@@ -48,7 +49,7 @@ class URLFetcher:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             title = soup.title.string.strip() if soup.title else "No title found"
-            return title
+            return title[:URLFetcher.MAX_IRC_MSG_LENGTH]
         except requests.exceptions.RequestException:
             return None
 
