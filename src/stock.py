@@ -42,24 +42,22 @@ class StockCommand:
             return f"Error fetching stock data: {e}"
 
     def get_crypto_price(self, crypto_name, currency="usd"):
-        """Fetch cryptocurrency price in the specified currency with correct 24h change calculations."""
+        """Fetch cryptocurrency price with correct 24h absolute price change calculations."""
         try:
             data = self.cg.get_price(
                 ids=crypto_name, 
                 vs_currencies=currency, 
                 include_24hr_change="true", 
-                include_24hr_vol="true", 
-                include_market_cap="false",
-                include_last_updated_at="true",
-                include_24hr_price_change="true"  # Ensure this field is included
+                include_24hr_vol="true"
             )
 
             if crypto_name not in data:
                 return f"Could not retrieve data for cryptocurrency '{crypto_name}'."
 
             price = data[crypto_name].get(currency, 0)
-            change_currency = data[crypto_name].get(f"{currency}_24h_price_change", 0)  # Correct field for absolute price change
-            change_percent = data[crypto_name].get(f"{currency}_24h_change", 0)  # Percentage change
+            change_percent = data[crypto_name].get(f"{currency}_24h_change", 0)  # % change
+            change_currency = (price * change_percent) / 100  # Correct absolute change in currency
+
             volume = data[crypto_name].get(f"{currency}_24h_vol", 0) / 1_000_000_000  # Convert to billions
 
             # Ensure correct color codes
