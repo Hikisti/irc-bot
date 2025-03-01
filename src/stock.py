@@ -18,25 +18,26 @@ class StockCommand:
             return self.get_stock_price(symbol.upper())
 
     def get_stock_price(self, symbol):
-        """Fetch stock price with correct colors and today's change."""
+        """Fetch stock price, ensuring correct percentage and absolute price change."""
         try:
-            stock = yf.Ticker(symbol)
-            info = stock.info
-
-            if "regularMarketPrice" not in info:
+            stock = self.ticker(symbol)
+            data = stock.history(period="1d")  # Get today's stock data
+            
+            if data.empty:
                 return f"Could not retrieve data for stock '{symbol}'."
 
-            name = info.get("shortName", symbol)
-            price = info["regularMarketPrice"]
-            currency = info.get("currency", "Unknown")
-            change = info.get("regularMarketChange", 0)  # Use the correct field
-            change_percent = info.get("regularMarketChangePercent", 0) * 100  # Convert to percentage
-            volume = info.get("regularMarketVolume", 0) / 1_000  # Convert to thousands
+            price = stock.info.get("regularMarketPrice", 0)  # Current stock price
+            prev_close = stock.info.get("regularMarketPreviousClose", 0)  # Previous close price
+            volume = stock.info.get("regularMarketVolume", 0) / 1_000  # Convert to thousands
+
+            # Ensure the change calculation is correct
+            change_currency = price - prev_close  # Absolute change
+            change_percent = (change_currency / prev_close) * 100 if prev_close else 0  # Percentage change
 
             # Ensure correct color codes
-            color = "\x0309" if change >= 0 else "\x0304"  # Bright Green for positive, Bright Red for negative
-            
-            return f"\x02{name} ({symbol}):\x02 {price:,.2f} {currency}, today {color}{change:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}k."
+            color = "\x0309" if change_currency >= 0 else "\x0304"  # Bright Green for positive, Bright Red for negative
+
+            return f"\x02{stock.info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} USD, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}k."
 
         except Exception as e:
             return f"Error fetching stock data: {e}"
