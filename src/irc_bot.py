@@ -87,8 +87,8 @@ class IrcBot:
 
     def send_message(self, channel, message):
         """Send a message to the specified IRC channel."""
-        print(f"Sending message to {channel}: {message}")
-        self.send_raw(f"PRIVMSG {channel} :{message}")
+        safe_message = message.replace("\n", " ").replace("\r", " ")  # Remove line breaks
+        self.send_raw(f"PRIVMSG {channel} :{safe_message}")  # Prefix colon to prevent misinterpretation
         
     def process_message(self, message):
         """Extracts sender, channel, and message, then processes commands."""
