@@ -12,10 +12,19 @@ class StockCommand:
 
         symbol = args.strip().lower()
 
+        """Determines whether the symbol is a stock or a cryptocurrency and fetches data accordingly."""
+        stock_data = self.get_stock_price(symbol.upper())
+        
+        if stock_data:
+            return stock_data  # If stock is found, return it
+        
+        crypto_data = self.get_crypto_price(symbol)
+
         if symbol in self.crypto_list:
-            return self.get_crypto_price(symbol)
-        else:
-            return self.get_stock_price(symbol.upper())
+            if crypto_data:
+                return crypto_data  # Otherwise, return crypto data
+        
+        return f"Could not find stock or crypto for '{symbol}'." 
 
     def get_stock_price(self, symbol):
         """Fetch stock price, ensuring correct percentage and absolute price change."""
