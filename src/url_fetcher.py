@@ -4,12 +4,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
 class URLFetcher:
+    MAX_IRC_MSG_LENGTH = 400  # Adjust based on IRC limits
+
     def __init__(self, bot):
         """Initialize with a reference to the IRC bot to send messages back to channels."""
         self.bot = bot
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        MAX_IRC_MSG_LENGTH = 400  # Adjust based on IRC limits
 
     def detect_and_fetch(self, nick, channel, message):
         """Detects URLs in the message and fetches their titles."""
