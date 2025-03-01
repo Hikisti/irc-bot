@@ -64,7 +64,6 @@ class IrcBot:
                 print(f"Error in listen loop: {e}")
                 self.running = False
 
-
     def pong(self, message):
         """Respond to PING messages from the server."""
         server = message.split()[1]
@@ -100,8 +99,11 @@ class IrcBot:
         nick = prefix.split("!")[0][1:]  # Extract nickname
         msg = msg[1:]  # Remove leading ':'
         
-        if channel in self.channels and msg.startswith("!"):
-            self.command_handler.handle_command(self, nick, channel, msg)
+        if channel in self.channels:
+            if msg.startswith("!"):  # Command handling
+                self.command_handler.handle_command(self, nick, channel, msg)
+            else:  # Check for URLs in messages
+                self.url_fetcher.detect_and_fetch(nick, channel, msg)
     
     def stop(self):
         """Stop the bot and close the connection."""
