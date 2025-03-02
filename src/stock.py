@@ -1,32 +1,50 @@
 import yfinance as yf
 
 class StockCommand:
+    """Fetches stock price and market data for a given ticker symbol."""
+
     def execute(self, args):
-        """Handles stock queries, ensuring correct calculations."""
+        """Handles stock queries with better error handling."""
         if not args:
-            return "Please provide a stock ticker (e.g., !stock TSLA)."
+            return "Usage: !stock <ticker> (e.g., !stock TSLA)."
 
         symbol = args.strip().upper()
 
         try:
             stock = yf.Ticker(symbol)
-            data = stock.history(period="1d")  # Get today's stock data
+            data = stock.history(period="1d")  # Fetch today's stock data
             
             if data.empty:
-                return f"Could not retrieve data for stock '{symbol}'."
+                return f"Error: No stock data available for '{symbol}'."
 
-            price = stock.info.get("regularMarketPrice", 0)  # Current stock price
-            prev_close = stock.info.get("regularMarketPreviousClose", 0)  # Previous close price
-            volume = stock.info.get("regularMarketVolume", 0) / 1_000  # Convert to thousands
+            # Extract stock information safely
+            try:
+                info = stock.info
+                price = info.get("regularMarketPrice")
+                prev_close = info.get("regularMarketPreviousClose")
+                volume = info.get("regularMarketVolume", 0)  # Default to 0 if missing
+            except Exception:
+                return f"Error: Could not retrieve stock information for '{symbol}'."
 
-            # Ensure correct change calculations
-            change_currency = price - prev_close  
-            change_percent = (change_currency / prev_close) * 100 if prev_close else 0  
+            # Validate stock prices before calculations
+            if price is None or prev_close is None:
+                return f"Error: Market price data is missing for '{symbol}'."
 
-            # Correct color codes
-            color = "\x0309" if change_currency >= 0 else "\x0304"  # Bright Green for positive, Bright Red for negative
+            # Calculate price changes
+            change_currency = price - prev_close
+            change_percent = (change_currency / prev_close) * 100 if prev_close else 0
 
-            return f"\x02{stock.info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} USD, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}k."
+            # Convert volume to thousands for readability
+            volume_k = volume / 1_000 if volume else 0
 
-        except Exception as e:
-            return f"Error fetching stock data: {e}"
+            # Choose color formatting for IRC messages
+            color = "\x0309" if change_currency >= 0 else "\x0304"  # Green for positive, Red for negative
+
+            return f"\x02{info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} USD, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume_k:.2f}k."
+
+        except ValueError:
+            return f"Error: Invalid stock symbol '{symbol}'."
+        except (ConnectionError, TimeoutError):
+            return "Error: Unable to connect to stock data provider. Please try again later."
+        except Exception:
+            return f"Error: An unexpected issue occurred while retrieving stock data for '{symbol}'."

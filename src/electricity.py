@@ -16,25 +16,36 @@ class ElectricityCommand:
             hour = now.strftime("%H")  # 24-hour format
 
             # API URL with formatted date and hour
-            URL = "https://api.porssisahko.net/v1/price.json?date={0}&hour={1}".format(date, hour)
-            
-            # Fetch data from API
-            response = requests.get(URL, timeout=5)  # 5-second timeout
+            url = f"https://api.porssisahko.net/v1/price.json?date={date}&hour={hour}"
+
+            # Fetch data from API with a timeout
+            response = requests.get(url, timeout=5)
             response.raise_for_status()  # Raise exception for HTTP errors
             
-            # Parse JSON response
-            data = response.json()
-            
-            # Extract electricity price
-            if "price" not in data:
-                return "Error: Price data not found in API response."
-            
-            price = data["price"]  # Assuming API returns price in cents
-            return "{0} snt / kWh".format(price)
+            # Parse JSON response safely
+            try:
+                data = response.json()
+            except ValueError:
+                return "Error: Could not parse electricity price data."
 
-        except requests.exceptions.RequestException as e:
-            return f"Error fetching electricity prices: {e}"
-        except ValueError:
-            return "Error: Invalid response format from electricity API."
-        except Exception as e:
-            return f"Unexpected error: {e}"
+            # Validate response structure
+            if not isinstance(data, dict) or "price" not in data:
+                return "Error: Unexpected data format from electricity API."
+
+            # Extract and validate electricity price
+            price = data.get("price")
+            if not isinstance(price, (int, float)):
+                return "Error: Invalid price data received."
+
+            return f"{price:.2f} snt / kWh"
+
+        except requests.exceptions.Timeout:
+            return "Error: Electricity price request timed out. Please try again later."
+        except requests.exceptions.ConnectionError:
+            return "Error: Unable to connect to the electricity price API."
+        except requests.exceptions.HTTPError as e:
+            return f"Error: API returned {e.response.status_code} {e.response.reason}."
+        except requests.exceptions.RequestException:
+            return "Error: Failed to retrieve electricity price data."
+        except Exception:
+            return "Error: An unexpected issue occurred while fetching electricity prices."

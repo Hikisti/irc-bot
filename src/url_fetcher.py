@@ -4,93 +4,115 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
 class URLFetcher:
+    """Fetches webpage titles and metadata for URLs posted in IRC channels."""
+
     def __init__(self, bot):
-        """Initialize with a reference to the IRC bot to send messages back to channels."""
+        """Initialize with a reference to the IRC bot to send messages back."""
         self.bot = bot
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
 
     def detect_and_fetch(self, nick, channel, message):
-        """Detects URLs in the message and fetches their titles."""
+        """Detects URLs in messages and fetches their titles."""
         urls = self.extract_urls(message)
         if not urls:
-            return  # No URLs, do nothing
-        
+            return  # No URLs found, do nothing
+
         for url in urls:
             title_info = self.get_title(url)
             if title_info:
                 self.bot.send_message(channel, title_info)  # Send title to IRC
 
     def extract_urls(self, text):
-        """Extracts URLs from a message using regex."""
-        url_pattern = re.compile(r'https?://\S+')
+        """Extracts valid URLs from a message using a more refined regex."""
+        url_pattern = re.compile(r"https?://[^\s<>\"']+")
         return url_pattern.findall(text)
 
     def get_title(self, url):
-        """Fetches the title of a webpage, with special handling for known services."""
+        """Fetches the title of a webpage, handling known services separately."""
         domain = urlparse(url).netloc.lower()
 
-        if "youtube.com" in domain or "youtu.be" in domain:
-            return self.get_youtube_info(url)
-        elif "instagram.com" in domain:
-            return self.get_instagram_title(url)
-        elif "x.com" in domain or "twitter.com" in domain:
-            return self.get_x_title(url)
-        elif "reddit.com" in domain:
-            return self.get_reddit_title(url)
-        else:
-            return self.get_generic_title(url)
+        try:
+            if "youtube.com" in domain or "youtu.be" in domain:
+                return self.get_youtube_info(url)
+            elif "instagram.com" in domain:
+                return self.get_instagram_title(url)
+            elif "x.com" in domain or "twitter.com" in domain:
+                return self.get_x_title(url)
+            elif "reddit.com" in domain:
+                return self.get_reddit_title(url)
+            else:
+                return self.get_generic_title(url)
+        except Exception as e:
+            return f"Error fetching title: {e}"
 
     def get_generic_title(self, url):
-        """Fetches the title of a standard web page, prioritizing Open Graph metadata."""
+        """Fetches the title of a standard web page, preferring Open Graph metadata."""
         try:
             response = self.session.get(url, timeout=5)
             response.raise_for_status()
 
-            response.encoding = response.apparent_encoding  # Ensure correct encoding
+            # Handle encoding issues
+            response.encoding = response.apparent_encoding
+
             soup = BeautifulSoup(response.text, "html.parser")
 
-            # Try to get the Open Graph title first
+            # Prefer Open Graph title if available
             og_title = soup.find("meta", property="og:title")
             if og_title and og_title.get("content"):
-                title = og_title["content"].strip()
-            else:
-                title = soup.title.string.strip() if soup.title else "No title found"
+                return og_title["content"].strip()
 
-            print(f"Full title: {title}")
-            return title
-        except requests.exceptions.RequestException:
-            return None
+            # Otherwise, fall back to the standard HTML title
+            if soup.title and soup.title.string:
+                return soup.title.string.strip()
+
+            return "No title found"
         
+        except requests.exceptions.Timeout:
+            return "Error: The request timed out."
+        except requests.exceptions.ConnectionError:
+            return "Error: Could not connect to the server."
+        except requests.exceptions.HTTPError as e:
+            return f"Error: HTTP {e.response.status_code} for {url}"
+        except requests.exceptions.RequestException:
+            return "Error: Failed to fetch webpage."
+        except Exception:
+            return "Error: Unexpected error while fetching the title."
+
     def get_youtube_info(self, url):
-        """Fetches the title and uploader name for YouTube videos."""
+        """Fetches the title and uploader name for YouTube videos using the oEmbed API."""
         try:
             video_id = None
-            if "youtube.com" in url:
-                query = parse_qs(urlparse(url).query)
+            parsed_url = urlparse(url)
+            if "youtube.com" in parsed_url.netloc:
+                query = parse_qs(parsed_url.query)
                 video_id = query.get("v", [None])[0]
-            elif "youtu.be" in url:
-                video_id = urlparse(url).path.lstrip('/')
-            
+            elif "youtu.be" in parsed_url.netloc:
+                video_id = parsed_url.path.lstrip("/")
+
             if not video_id:
-                return None
-            
+                return "Error: Invalid YouTube URL."
+
             api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             response = self.session.get(api_url, timeout=5)
             response.raise_for_status()
+
             data = response.json()
             return f"YouTube: {data['title']} (by {data['author_name']})"
+
         except requests.exceptions.RequestException:
-            return None
+            return "Error: Could not retrieve YouTube video details."
+        except Exception:
+            return "Error: Unexpected issue while fetching YouTube info."
 
     def get_instagram_title(self, url):
-        """Fetches the title of an Instagram post."""
-        return self.get_generic_title(url)  # Instagram blocks scraping, fallback to page title
+        """Fetches the title of an Instagram post (fallback to generic since Instagram blocks scraping)."""
+        return self.get_generic_title(url)
 
     def get_x_title(self, url):
-        """Fetches the content of an X (formerly Twitter) post."""
-        return self.get_generic_title(url)  # Twitter blocks scraping, fallback to page title
+        """Fetches the content of an X (formerly Twitter) post (fallback to generic since Twitter blocks scraping)."""
+        return self.get_generic_title(url)
 
     def get_reddit_title(self, url):
-        """Fetches the title of a Reddit post."""
-        return self.get_generic_title(url)  # Reddit blocks scraping, fallback to page title
+        """Fetches the title of a Reddit post (fallback to generic since Reddit blocks scraping)."""
+        return self.get_generic_title(url)
