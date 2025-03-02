@@ -42,16 +42,26 @@ class URLFetcher:
             return self.get_generic_title(url)
 
     def get_generic_title(self, url):
-        """Fetches the title of a standard web page."""
+        """Fetches the title of a standard web page, prioritizing Open Graph metadata."""
         try:
             response = self.session.get(url, timeout=5)
             response.raise_for_status()
+
+            response.encoding = response.apparent_encoding  # Ensure correct encoding
             soup = BeautifulSoup(response.text, "html.parser")
-            title = soup.title.string.strip() if soup.title else "No title found"
+
+            # Try to get the Open Graph title first
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                title = og_title["content"].strip()
+            else:
+                title = soup.title.string.strip() if soup.title else "No title found"
+
+            print(f"Full title: {title}")
             return title
         except requests.exceptions.RequestException:
             return None
-
+        
     def get_youtube_info(self, url):
         """Fetches the title and uploader name for YouTube videos."""
         try:

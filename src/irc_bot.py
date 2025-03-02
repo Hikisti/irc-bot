@@ -1,12 +1,13 @@
 import socket
 import threading
 import time
+import sys
 
 from command_handler import CommandHandler
 from url_fetcher import URLFetcher
 
 class IrcBot:
-    def __init__(self, server="irc.quakenet.org", port=6667, nickname="SuurinJaKaunein", channels=None):
+    def __init__(self, server="irc.quakenet.org", port=6667, nickname="KukistiBot", channels=None):
         self.server = server
         self.port = port
         self.nickname = nickname
@@ -113,5 +114,12 @@ class IrcBot:
         self.sock.close()
 
 if __name__ == "__main__":
-    bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi"])
+    debug_mode = "--debug" in sys.argv  # Check if --debug argument is present
+
+    if debug_mode:
+        print("Running in debug mode: Joining only the default channel.")
+        bot = IrcBot()  # No channels argument, so it defaults to ["#bottest123"]
+    else:
+        bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi"])
+
     bot.connect()
