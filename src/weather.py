@@ -4,7 +4,7 @@ import requests
 
 class WeatherCommand:
     """Fetches current weather for a given city."""
-    
+
     def __init__(self):
         load_dotenv()  # Load environment variables from .env
         self.api_key = os.getenv("WEATHER_API_KEY")
@@ -28,27 +28,30 @@ class WeatherCommand:
             params = {"key": self.api_key, "q": query, "aqi": "no"}
 
             response = requests.get(self.base_url, params=params, timeout=5)
-            response.raise_for_status()
+            response.raise_for_status()  # Raises error for HTTP 4xx and 5xx responses
             data = response.json()
 
+            # Validate response structure
             if "location" not in data or "current" not in data:
-                return f"Error: Unexpected response from weather API."
+                return "Error: Unexpected response from weather API."
 
-            location = data["location"]["name"]
-            country = data["location"]["country"]
-            condition = data["current"]["condition"]["text"]
-            temperature_celsius = data["current"]["temp_c"]
-            temperature_celsius_feelslike = data["current"]["feelslike_c"]
-            wind_kph = data["current"]["wind_kph"]
-            wind_dir = data["current"]["wind_dir"]
+            location = data["location"].get("name", "Unknown location")
+            country = data["location"].get("country", "Unknown country")
+            condition = data["current"].get("condition", {}).get("text", "Unknown condition")
+            temp_c = data["current"].get("temp_c", "?")
+            feels_like = data["current"].get("feelslike_c", "?")
+            wind_kph = data["current"].get("wind_kph", 0)
+            wind_dir = data["current"].get("wind_dir", "?")
 
-            return "Current weather in {0}, {1}: {2}, {3} °C (feels like {4} °C). Wind: {5} {6:.1f} m/s.".format(
-                location, country, condition, temperature_celsius, temperature_celsius_feelslike, wind_dir, wind_kph / 3.6
-            )
+            return f"Current weather in {location}, {country}: {condition}, {temp_c}°C (feels like {feels_like}°C). Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s."
 
-        except requests.exceptions.RequestException as e:
-            return f"Error fetching weather data: {e}"
-        except (ValueError, KeyError):
-            return "Error: Could not parse weather data."
-        except Exception as e:
-            return f"Unexpected error: {e}"
+        except requests.exceptions.HTTPError as e:
+            return f"Error fetching weather data: {e.response.status_code} {e.response.reason}"
+        except requests.exceptions.Timeout:
+            return "Error: Weather API request timed out. Please try again later."
+        except requests.exceptions.ConnectionError:
+            return "Error: Unable to connect to the weather API."
+        except requests.exceptions.RequestException:
+            return "Error: Failed to retrieve weather data."
+        except Exception:
+            return "Error: An unexpected issue occurred while fetching weather data."
