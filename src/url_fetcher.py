@@ -38,7 +38,7 @@ class URLFetcher:
             elif "instagram.com" in domain:
                 return self.get_instagram_title(url)
             elif "x.com" in domain or "twitter.com" in domain:
-                return self.get_x_title(url)
+                return None  # Skip fetching titles for X (Twitter) links
             elif "reddit.com" in domain:
                 return self.get_reddit_title(url)
             else:
@@ -66,19 +66,20 @@ class URLFetcher:
             if soup.title and soup.title.string:
                 return soup.title.string.strip()
 
-            return "No title found"
-        
+            return None  # No title found, return nothing
+
         except requests.exceptions.Timeout:
             return "Error: The request timed out."
         except requests.exceptions.ConnectionError:
             return "Error: Could not connect to the server."
         except requests.exceptions.HTTPError as e:
-            return f"Error: HTTP {e.response.status_code} for {url}"
+            return f"Error: HTTP {response.status_code}"
         except requests.exceptions.RequestException:
             return "Error: Failed to fetch webpage."
         except Exception:
             return "Error: Unexpected error while fetching the title."
 
+        
     def get_youtube_info(self, url):
         """Fetches the title and uploader name for YouTube videos using the oEmbed API."""
         try:
