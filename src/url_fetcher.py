@@ -40,7 +40,7 @@ class URLFetcher:
             elif "x.com" in domain or "twitter.com" in domain:
                 return None  # Skip fetching titles for X (Twitter) links
             elif "reddit.com" in domain:
-                return self.get_reddit_title(url)
+                return None  # Skip fetching titles for Reddit links
             else:
                 return self.get_generic_title(url)
         except Exception as e:
@@ -79,32 +79,42 @@ class URLFetcher:
         except Exception:
             return "Error: Unexpected error while fetching the title."
 
-        
     def get_youtube_info(self, url):
-        """Fetches the title and uploader name for YouTube videos using the oEmbed API."""
+        """Fetches the title and uploader name for YouTube videos, including Shorts."""
         try:
             video_id = None
             parsed_url = urlparse(url)
-            if "youtube.com" in parsed_url.netloc:
-                query = parse_qs(parsed_url.query)
-                video_id = query.get("v", [None])[0]
-            elif "youtu.be" in parsed_url.netloc:
-                video_id = parsed_url.path.lstrip("/")
 
+            if "youtube.com" in parsed_url.netloc:
+                if "/shorts/" in parsed_url.path:
+                    video_id = parsed_url.path.split("/shorts/")[1]  # Extract Shorts video ID
+                else:
+                    query = parse_qs(parsed_url.query)
+                    video_id = query.get("v", [None])[0]  # Extract regular video ID
+            elif "youtu.be" in parsed_url.netloc:
+                video_id = parsed_url.path.lstrip('/')  # Extract video ID from short YouTube links
+            
             if not video_id:
                 return "Error: Invalid YouTube URL."
 
+            # Fetch video details using YouTube's oEmbed API
             api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             response = self.session.get(api_url, timeout=5)
             response.raise_for_status()
-
             data = response.json()
-            return f"YouTube: {data['title']} (by {data['author_name']})"
 
+            return f"YouTube: {data['title']} (by {data['author_name']})"
+        
+        except requests.exceptions.HTTPError as e:
+            return f"Error: HTTP {e.response.status_code} while retrieving YouTube details."
+        except requests.exceptions.Timeout:
+            return "Error: YouTube request timed out."
+        except requests.exceptions.ConnectionError:
+            return "Error: Could not connect to YouTube."
         except requests.exceptions.RequestException:
-            return "Error: Could not retrieve YouTube video details."
+            return "Error: Failed to fetch YouTube video details."
         except Exception:
-            return "Error: Unexpected issue while fetching YouTube info."
+            return "Error: Unexpected issue while fetching YouTube info."        
 
     def get_instagram_title(self, url):
         """Fetches the title of an Instagram post (fallback to generic since Instagram blocks scraping)."""
