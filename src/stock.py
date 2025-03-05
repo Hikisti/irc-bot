@@ -4,7 +4,7 @@ class StockCommand:
     """Fetches stock price and market data for a given ticker symbol."""
 
     def execute(self, args):
-        """Handles stock queries with better error handling."""
+        """Handles stock queries with improved currency handling."""
         if not args:
             return "Usage: !stock <ticker> (e.g., !stock TSLA)."
 
@@ -23,6 +23,7 @@ class StockCommand:
                 price = info.get("regularMarketPrice")
                 prev_close = info.get("regularMarketPreviousClose")
                 volume = info.get("regularMarketVolume", 0)  # Default to 0 if missing
+                currency = info.get("currency", "USD")  # Get stock currency, default to USD
             except Exception:
                 return f"Error: Could not retrieve stock information for '{symbol}'."
 
@@ -40,7 +41,7 @@ class StockCommand:
             # Choose color formatting for IRC messages
             color = "\x0309" if change_currency >= 0 else "\x0304"  # Green for positive, Red for negative
 
-            return f"\x02{info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} USD, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume_k:.2f}k."
+            return f"\x02{info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} {currency}, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume_k:.2f}k."
 
         except ValueError:
             return f"Error: Invalid stock symbol '{symbol}'."
