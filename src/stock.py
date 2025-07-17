@@ -4,7 +4,7 @@ class StockCommand:
     """Fetches stock price and market data for a given ticker symbol."""
 
     def execute(self, args):
-        """Handles stock queries with improved error handling and currency support."""
+        """Handles stock queries with improved currency handling."""
         if not args:
             return "Usage: !stock <ticker> (e.g., !stock TSLA)."
 
@@ -12,39 +12,40 @@ class StockCommand:
 
         try:
             stock = yf.Ticker(symbol)
+            data = stock.history(period="1d")  # Fetch today's stock data
+            
+            if data.empty:
+                return f"Error: No stock data available for '{symbol}'."
 
-            # Try to get basic price data first
-            info = stock.info
-            if not info or "regularMarketPrice" not in info:
-                return f"Error: Stock information unavailable for '{symbol}'."
+            # Extract stock information safely
+            try:
+                info = stock.info
+                price = info.get("regularMarketPrice")
+                prev_close = info.get("regularMarketPreviousClose")
+                volume = info.get("regularMarketVolume", 0)  # Default to 0 if missing
+                currency = info.get("currency", "USD")  # Get stock currency, default to USD
+            except Exception:
+                return f"Error: Could not retrieve stock information for '{symbol}'."
 
-            price = info.get("regularMarketPrice")
-            prev_close = info.get("regularMarketPreviousClose")
-            volume = info.get("regularMarketVolume", 0)
-            currency = info.get("currency", "USD")
-            short_name = info.get("shortName", symbol)
-
-            # Check required fields
+            # Validate stock prices before calculations
             if price is None or prev_close is None:
-                return f"Error: Market data incomplete for '{symbol}'."
+                return f"Error: Market price data is missing for '{symbol}'."
 
             # Calculate price changes
             change_currency = price - prev_close
             change_percent = (change_currency / prev_close) * 100 if prev_close else 0
+
+            # Convert volume to thousands for readability
             volume_k = volume / 1_000 if volume else 0
 
-            # IRC color: green or red
-            color = "\x0309" if change_currency >= 0 else "\x0304"
+            # Choose color formatting for IRC messages
+            color = "\x0309" if change_currency >= 0 else "\x0304"  # Green for positive, Red for negative
 
-            return (
-                f"\x02{short_name} ({symbol}):\x02 {price:.2f} {currency}, "
-                f"today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. "
-                f"Volume {volume_k:.2f}k."
-            )
+            return f"\x02{info.get('shortName', symbol)} ({symbol}):\x02 {price:.2f} {currency}, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume_k:.2f}k."
 
-        except (ValueError, TypeError):
+        except ValueError:
             return f"Error: Invalid stock symbol '{symbol}'."
         except (ConnectionError, TimeoutError):
-            return "Error: Network issue while retrieving stock data."
-        except Exception as e:
-            return f"Error: Could not retrieve stock data for '{symbol}'. ({str(e)})"
+            return "Error: Unable to connect to stock data provider. Please try again later."
+        except Exception:
+            return f"Error: An unexpected issue occurred while retrieving stock data for '{symbol}'."
