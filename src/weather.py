@@ -39,11 +39,17 @@ class WeatherCommand:
             country = data["location"].get("country", "Unknown country")
             condition = data["current"].get("condition", {}).get("text", "Unknown condition")
             temp_c = data["current"].get("temp_c", "?")
-            feels_like = data["current"].get("feelslike_c", "?")
+            temp_f = data["current"].get("temp_f", "?")
+            feels_like_c = data["current"].get("feelslike_c", "?")
+            feels_like_f = data["current"].get("feelslike_f", "?")
             wind_kph = data["current"].get("wind_kph", 0)
             wind_dir = data["current"].get("wind_dir", "?")
 
-            return f"Current weather in {location}, {country}: {condition}, {temp_c}°C (feels like {feels_like}°C). Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s."
+            return (
+                f"Current weather in {location}, {country}: {condition}, "
+                f"{temp_c}°C ({temp_f}°F) (feels like {feels_like_c}°C/{feels_like_f}°F). "
+                f"Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s."
+            )
 
         except requests.exceptions.HTTPError as e:
             return f"Error fetching weather data: {e.response.status_code} {e.response.reason}"
