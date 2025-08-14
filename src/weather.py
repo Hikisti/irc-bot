@@ -45,9 +45,14 @@ class WeatherCommand:
             wind_kph = data["current"].get("wind_kph", 0)
             wind_dir = data["current"].get("wind_dir", "?")
 
+            # Calculate temperatures in Kelvin
+            temp_k = temp_c + 273.15 if temp_c != "?" else "?"
+            feels_like_k = feels_like_c + 273.15 if feels_like_c != "?" else "?"
+
             return (
                 f"Current weather in {location}, {country}: {condition}, "
-                f"{temp_c}°C ({temp_f}°F) (feels like {feels_like_c}°C/{feels_like_f}°F). "
+                f"{temp_c}°C ({temp_f}°F / {temp_k:.1f}K) "
+                f"(feels like {feels_like_c}°C/{feels_like_f}°F/{feels_like_k:.1f}K). "
                 f"Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s."
             )
 
