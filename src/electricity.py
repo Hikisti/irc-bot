@@ -2,21 +2,24 @@ import requests
 import datetime
 import pytz
 
+
 class ElectricityCommand:
-    """Fetches electricity prices in Finland for the current date and hour."""
+    """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
 
     def execute(self, args=None):
         try:
             # Define Helsinki timezone
             helsinki_tz = pytz.timezone("Europe/Helsinki")
 
-            # Get current date and hour in Helsinki timezone
+            # Get current time in Helsinki timezone
             now = datetime.datetime.now(helsinki_tz)
-            date = now.strftime("%Y-%m-%d")
-            hour = now.strftime("%H")  # 24-hour format
+            
+            # Convert to UTC and format as ISO 8601 with Z suffix
+            now_utc = now.astimezone(pytz.UTC)
+            iso_timestamp = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-            # API URL with formatted date and hour
-            url = f"https://api.porssisahko.net/v1/price.json?date={date}&hour={hour}"
+            # API URL with ISO 8601 UTC timestamp
+            url = f"https://api.porssisahko.net/v2/price.json?date={iso_timestamp}"
 
             # Fetch data from API with a timeout
             response = requests.get(url, timeout=5)
