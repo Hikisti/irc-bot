@@ -3,11 +3,21 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
+
 class URLFetcher:
     """Detects URLs in IRC messages and fetches their titles with service-specific handling."""
 
     MAX_IRC_MESSAGE_LENGTH = 400  # Safe maximum for IRC message length
     MAX_TITLE_LENGTH = 300        # Max allowed title length to avoid excess flood kicks
+
+    # Domains that should be ignored (no title fetching)
+    BLACKLISTED_DOMAINS = {
+        "maps.google.com",
+        "maps.app.goo.gl",
+        "x.com",
+        "twitter.com",
+        "reddit.com"
+    }
 
     def __init__(self, bot):
         """
@@ -43,22 +53,34 @@ class URLFetcher:
         url_pattern = re.compile(r"https?://[^\s<>\"']+")
         return url_pattern.findall(text)
 
+    def is_blacklisted(self, domain: str) -> bool:
+        """
+        Returns True if the domain is blacklisted.
+        Matches both exact domains and their subdomains.
+        """
+        domain = domain.lower()
+        for blocked in self.BLACKLISTED_DOMAINS:
+            if domain == blocked or domain.endswith("." + blocked):
+                return True
+        return False
+
     def get_title(self, url):
         """
         Dispatches URL to service-specific handlers, or falls back to generic.
         Skips known services (like X and Reddit) where scraping is unreliable or blocked.
+        Also skips any URL whose domain is in the blacklist.
         """
         domain = urlparse(url).netloc.lower()
+
+        # Check blacklist first
+        if self.is_blacklisted(domain):
+            return None  # Silently skip blacklisted domains
 
         try:
             if "youtube.com" in domain or "youtu.be" in domain:
                 return self.get_youtube_info(url)
             elif "instagram.com" in domain:
                 return self.get_instagram_title(url)
-            elif "x.com" in domain or "twitter.com" in domain:
-                return None  # Skip X/Twitter due to scraping restrictions
-            elif "reddit.com" in domain:
-                return None  # Skip Reddit due to inconsistent content structure
             else:
                 return self.get_generic_title(url)
         except Exception as e:
