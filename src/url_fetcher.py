@@ -16,7 +16,8 @@ class URLFetcher:
         "maps.app.goo.gl",
         "x.com",
         "twitter.com",
-        "reddit.com"
+        "reddit.com",
+        "nettiauto.com"
     }
 
     def __init__(self, bot):
