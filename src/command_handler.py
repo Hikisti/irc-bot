@@ -4,6 +4,7 @@ from weather import WeatherCommand
 from stock import StockCommand
 from crypto import CryptoCommand
 from aijamatto import AijaMattoCommand
+from time_command import TimeCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -15,7 +16,8 @@ class CommandHandler:
             WeatherCommand(): {"aliases": ["!weather", "!w"], "allow_args": True},
             StockCommand(): {"aliases": ["!stock"], "allow_args": True},
             CryptoCommand(): {"aliases": ["!crypto"], "allow_args": True},
-            AijaMattoCommand(): {"aliases": ["!bjorck"], "allow_args": False}
+            AijaMattoCommand(): {"aliases": ["!bjorck"], "allow_args": False},
+            TimeCommand(): {"aliases": ["!time"], "allow_args": True}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
