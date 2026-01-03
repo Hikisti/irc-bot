@@ -1,7 +1,6 @@
 import os
 import requests
 
-
 class TimeCommand:
     """
     Fetches local time for a given city for IRC bot usage.
@@ -47,31 +46,28 @@ class TimeCommand:
         except requests.exceptions.RequestException as e:
             return f"Error: Failed to contact time service: {e}."
         except Exception as e:
-            return f"Error: Unexpected issue while fetching time: {e}."
+            return f"Error: Unexpected issue while fetching time: {e}"
 
         try:
             data = resp.json()
         except ValueError:
-            return "Error: Invalid response from time service."
+            return "Error: Invalid response from time service"
 
-        # Handle common response shapes from IPGeolocation timezone API
         if not isinstance(data, dict) or "time_24" not in data:
             error_msg = data.get("error") or data.get("message")
             if error_msg:
                 return f"Error: {error_msg}"
-            return "Error: Time service returned unexpected data."
+            return "Error: Time service returned unexpected data"
 
         date_str = data.get("date", "")
         time_str = data.get("time_24", "")
 
-        # Try multiple possible location fields (API docs show variations)
         location_info = (
             data.get("location") or 
             data.get("geo") or 
             {}
         )
         
-        # Extract city and country from various possible fields
         city_from_api = (
             location_info.get("city") or
             location_info.get("location_string") or
@@ -86,25 +82,26 @@ class TimeCommand:
             None
         )
 
-        # Clean up city display name
         city_display = city_from_api.strip()
+        
+        # Remove trailing country name if city already contains it to avoid duplication
+        if country_name and city_display.lower().endswith(", " + country_name.lower()):
+            city_display = city_display[: -(len(", " + country_name))].rstrip()
+        
         if city_display:
             city_display = city_display[0].upper() + city_display[1:]
 
-        # Build location string
         if country_name:
             location = f"{city_display}, {country_name}"
         else:
             location = city_display
 
-        # Format date YYYY-MM-DD -> DD/MM/YY
         formatted_date = date_str
         if len(date_str) == 10 and date_str.count("-") == 2:
             yyyy, mm, dd = date_str.split("-")
             formatted_date = f"{dd}/{mm}/{yyyy[2:]}"
 
-        # Ensure time is HH:MM:SS
         if len(time_str) == 5:
             time_str = time_str + ":00"
 
-        return f"Local time in {location}: {formatted_date} {time_str}."
+        return f"Local time in {location}: {formatted_date} {time_str}"
