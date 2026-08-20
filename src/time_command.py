@@ -177,9 +177,20 @@ class TimeCommand:
         if len(time_str) == 5:
             time_str = time_str + ":00"
 
-        timezone_suffix = f" {tz_abbr}" if tz_abbr else ""
+        tz_label = self._format_tz_label(tz_abbr)
+        timezone_suffix = f" {tz_label}" if tz_label else ""
 
         return f"Local time in {location}: {formatted_date} {time_str}{timezone_suffix}"
+
+    @staticmethod
+    def _format_tz_label(tz_name):
+        """Some zones (e.g. Russia, Pitcairn) have no named abbreviation in
+        tzdata and tzname() returns a raw offset like "+10" instead - label
+        those explicitly as "UTC+10" so it doesn't read as a missing value.
+        """
+        if tz_name and tz_name.lstrip("+-").isdigit():
+            return f"UTC{tz_name}"
+        return tz_name
 
     def _time_for_abbreviation(self, abbr: str) -> str:
         iana_name = self.TIMEZONE_ABBREVIATIONS[abbr]
