@@ -44,11 +44,12 @@ class WeatherCommand:
             feels_like_f = data["current"].get("feelslike_f", "?")
             wind_kph = data["current"].get("wind_kph", 0)
             wind_dir = data["current"].get("wind_dir", "?")
+            humidity = data["current"].get("humidity", "?")
 
             return (
                 f"Current weather in {location}, {country}: {condition}, "
                 f"{temp_c}°C ({temp_f}°F) (feels like {feels_like_c}°C/{feels_like_f}°F). "
-                f"Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s."
+                f"Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s. Humidity: {humidity}%."
             )
 
         except requests.exceptions.HTTPError as e:
