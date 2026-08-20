@@ -49,7 +49,13 @@ in `src/irc_bot.py`.
 | Electricity price | `!sähkö`, `!sahko` | none | `!sähkö` |
 | Time | `!time` | city, or timezone abbreviation | `!time austin`, `!time cdt` |
 | F1 schedule | `!f1` | none | `!f1` |
+| Liiga live tracker | `!liiga` | `start` or `stop` | `!liiga start` |
 | Björck | `!bjorck` | none | `!bjorck` |
+
+`!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
+started in, and announces goals and final scores as they happen. It stops automatically once
+all of today's games have ended, or on `!liiga stop`. Uses the unofficial liiga.fi JSON API, so
+no key is needed but the endpoint isn't guaranteed to stay stable.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).
