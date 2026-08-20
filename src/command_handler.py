@@ -6,6 +6,7 @@ from crypto import CryptoCommand
 from aijamatto import AijaMattoCommand
 from time_command import TimeCommand
 from f1_command import F1Command
+from liiga_command import LiigaCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -19,7 +20,8 @@ class CommandHandler:
             CryptoCommand(): {"aliases": ["!crypto"], "allow_args": True},
             AijaMattoCommand(): {"aliases": ["!bjorck"], "allow_args": False},
             TimeCommand(): {"aliases": ["!time"], "allow_args": True},
-            F1Command(): {"aliases": ["!f1"], "allow_args": False}
+            F1Command(): {"aliases": ["!f1"], "allow_args": False},
+            LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
@@ -43,7 +45,10 @@ class CommandHandler:
                     print(f"Command {command} does not allow arguments. Ignoring.")
                     return  # Ignore command
 
-                response = main_command.execute(args)
+                if getattr(main_command, "needs_irc_context", False) is True:
+                    response = main_command.execute(args, irc_bot=irc_bot, channel=channel)
+                else:
+                    response = main_command.execute(args)
 
                 if response:
                     irc_bot.send_message(channel, response)  # Send response to IRC
