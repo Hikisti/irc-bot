@@ -24,7 +24,7 @@ class LiigaCommand:
     needs_irc_context = True
 
     BASE_URL = "https://www.liiga.fi/api/v2/games"
-    TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications"]
+    TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
