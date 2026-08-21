@@ -224,6 +224,30 @@ class TestPollOnce:
         assert "HIFK 1-0 Ilves" in message
         assert "02:05" in message  # 125s -> 2:05 into period 1
 
+    def test_goal_and_final_use_mirc_colors(self, liiga_command):
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
+
+        updated = {1: make_game(
+            home_goals=[goal_event(home_score=1, away_score=0)],
+            ended=True,
+        )}
+        with patch.object(liiga_command, "_fetch_today_games", return_value=updated):
+            liiga_command._poll_once(bot, "#chan")
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        goal_msg = next(m for m in messages if "GOAL:" in m)
+        final_msg = next(m for m in messages if "FINAL:" in m)
+
+        assert goal_msg.startswith(liiga_command.GOAL_PREFIX)
+        assert liiga_command.GREEN in goal_msg
+        assert final_msg.startswith(liiga_command.FINAL_PREFIX)
+        assert liiga_command.ORANGE in final_msg
+        # Both prefixes must reset formatting so the rest of the line isn't
+        # left bold/colored on the user's client.
+        assert liiga_command.COLOR_RESET in goal_msg
+        assert liiga_command.COLOR_RESET in final_msg
+
     def test_goal_with_assists_and_tag(self, liiga_command):
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
@@ -267,8 +291,8 @@ class TestPollOnce:
             liiga_command._poll_once(bot, "#chan")
 
         messages = [c[0][1] for c in bot.send_message.call_args_list]
-        assert any(m.startswith("FINAL:") for m in messages)
-        final_msg = next(m for m in messages if m.startswith("FINAL:"))
+        assert any("FINAL:" in m for m in messages)
+        final_msg = next(m for m in messages if "FINAL:" in m)
         assert "HIFK 1-2 Ilves" in final_msg
 
     def test_all_ended_returns_true(self, liiga_command):

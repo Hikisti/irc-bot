@@ -31,6 +31,15 @@ class LiigaCommand:
 
     PERIOD_LABELS = {1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO"}
 
+    # mIRC formatting codes. Bold + a mid-saturation color so the prefix
+    # stays legible regardless of the viewer's background (black/white/blue/etc).
+    BOLD = "\x02"
+    COLOR_RESET = "\x0F"
+    GREEN = "\x0303"
+    ORANGE = "\x0307"
+    GOAL_PREFIX = f"{BOLD}{GREEN}GOAL:{COLOR_RESET}"
+    FINAL_PREFIX = f"{BOLD}{ORANGE}FINAL:{COLOR_RESET}"
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
@@ -243,7 +252,7 @@ class LiigaCommand:
         time_str = f" {clock} {period_label}".rstrip() if clock else f" {period_label}".rstrip()
 
         return (
-            f"GOAL: {scoring_team} — {scorer_name}{tag_str}{assist_str} | "
+            f"{self.GOAL_PREFIX} {scoring_team} — {scorer_name}{tag_str}{assist_str} | "
             f"{home} {home_score}-{away_score} {away}{time_str}"
         )
 
@@ -275,7 +284,9 @@ class LiigaCommand:
         else:
             suffix = ""
 
-        self._safe_send(irc_bot, channel, f"FINAL: {home} {home_goals}-{away_goals} {away}{suffix}")
+        self._safe_send(
+            irc_bot, channel, f"{self.FINAL_PREFIX} {home} {home_goals}-{away_goals} {away}{suffix}"
+        )
 
     # ---- data fetching --------------------------------------------------
 
