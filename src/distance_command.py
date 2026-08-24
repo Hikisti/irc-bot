@@ -126,6 +126,16 @@ class DistanceCommand:
         if not features:
             return None, f"Error: Could not find a location matching '{city}'."
 
+        if len(features) > 1:
+            candidates = [
+                (
+                    (f.get("properties") or {}).get("label"),
+                    (f.get("properties") or {}).get("population"),
+                )
+                for f in features
+            ]
+            print(f"Distance API geocode candidates for '{city}': {candidates}")
+
         feature = self._best_match(features)
         coords = (feature.get("geometry") or {}).get("coordinates")
         if not coords or len(coords) < 2:
