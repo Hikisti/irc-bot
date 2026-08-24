@@ -137,6 +137,65 @@ class TestGeocoding:
         assert "rate limit" in result.lower()
 
 
+class TestAmbiguousCityDisambiguation:
+    """Regression coverage for a real incident: geocoding "miami" returned
+    an obscure Colombian village ahead of Miami, FL, because Pelias ranks
+    by text-match relevance, not by how well-known a place is."""
+
+    def _multi_candidate_payload(self, candidates):
+        return {
+            "features": [
+                {
+                    "geometry": {"coordinates": [lon, lat]},
+                    "properties": {"label": label, "population": population},
+                }
+                for (label, lon, lat, population) in candidates
+            ]
+        }
+
+    def test_prefers_the_most_populous_candidate(self, distance_command):
+        payload = self._multi_candidate_payload([
+            ("Miami, La Guajira, Colombia", -74.78, 10.99, 2000),
+            ("Miami, FL, USA", -80.19, 25.76, 442241),
+            ("Miami, OK, USA", -94.88, 36.87, 13570),
+        ])
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result, error = distance_command._geocode("miami")
+
+        assert error is None
+        assert result["label"] == "Miami, FL, USA"
+        assert result["lon"] == -80.19
+
+    def test_falls_back_to_first_result_when_no_population_data(self, distance_command):
+        payload = {
+            "features": [
+                {"geometry": {"coordinates": [1, 2]}, "properties": {"label": "First match"}},
+                {"geometry": {"coordinates": [3, 4]}, "properties": {"label": "Second match"}},
+            ]
+        }
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result, error = distance_command._geocode("ambiguous")
+
+        assert error is None
+        assert result["label"] == "First match"
+
+    def test_end_to_end_picks_the_famous_miami(self, distance_command):
+        miami_candidates = self._multi_candidate_payload([
+            ("Miami, La Guajira, Colombia", -74.78, 10.99, 2000),
+            ("Miami, FL, USA", -80.19, 25.76, 442241),
+        ])
+        responses = [
+            make_response(geocode_payload("Austin, TX, USA", -97.74, 30.27)),
+            make_response(miami_candidates),
+            make_response(directions_payload(2100000, 72000)),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("Austin,Miami")
+
+        assert "Miami, FL, USA" in result
+        assert "Colombia" not in result
+
+
 class TestDrivingDistance:
     def test_happy_path(self, distance_command):
         responses = [

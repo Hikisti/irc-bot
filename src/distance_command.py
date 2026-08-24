@@ -101,7 +101,12 @@ class DistanceCommand:
         try:
             resp = self.session.get(
                 self.GEOCODE_URL,
-                params={"text": city, "size": 1},
+                # Ask for a few candidates, not just the top one - Pelias
+                # ranks by text-match relevance, which for a globally
+                # ambiguous name (e.g. "Miami") can rank an obscure hamlet
+                # above the famous city of the same name. _best_match()
+                # then prefers the most populous candidate instead.
+                params={"text": city, "size": 5},
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
@@ -121,13 +126,26 @@ class DistanceCommand:
         if not features:
             return None, f"Error: Could not find a location matching '{city}'."
 
-        feature = features[0] or {}
+        feature = self._best_match(features)
         coords = (feature.get("geometry") or {}).get("coordinates")
         if not coords or len(coords) < 2:
             return None, f"Error: Could not resolve coordinates for '{city}'."
 
         label = (feature.get("properties") or {}).get("label") or city
         return {"label": label, "lon": coords[0], "lat": coords[1]}, None
+
+    def _best_match(self, features):
+        """Picks the most populous candidate among the geocoder's top
+        matches. Pelias's own ranking is relevance-only, which can put an
+        obscure same-named place above a famous one (e.g. "miami" once
+        resolved to a small town in Colombia instead of Miami, FL). When
+        no candidate reports a population, this preserves Pelias's
+        original top choice (max() picks the first item on ties)."""
+        def population(feature):
+            pop = ((feature or {}).get("properties") or {}).get("population")
+            return pop if isinstance(pop, (int, float)) else -1
+
+        return max(features, key=population) or {}
 
     # ---- routing --------------------------------------------------------
 
