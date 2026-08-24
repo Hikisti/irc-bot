@@ -1,3 +1,4 @@
+import json as json_module
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ def make_response(json_data, status_code=200, reason="Error"):
     resp.status_code = status_code
     resp.reason = reason
     resp.json.return_value = json_data
+    resp.text = json_module.dumps(json_data)
     resp.raise_for_status = MagicMock()
     if status_code >= 400:
         resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)

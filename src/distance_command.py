@@ -146,6 +146,7 @@ class DistanceCommand:
             return None, "Error: Could not connect to the distance service (routing)."
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400:
+                print(f"Distance API routing 400: {e.response.text[:500]}")
                 return None, (
                     f"Error: No driving route found between "
                     f"{origin['label']} and {destination['label']}."
@@ -172,6 +173,14 @@ class DistanceCommand:
 
     def _describe_http_error(self, error, stage) -> str:
         status = error.response.status_code if error.response is not None else None
+        # ORS's response body usually explains *why* (bad key format, quota
+        # exceeded, profile not enabled, etc.) far better than a bare status
+        # code - print it server-side so it shows up in the bot's console
+        # log without needing to reproduce the request by hand.
+        if error.response is not None:
+            body = error.response.text
+            print(f"Distance API {stage} error {status}: {body[:500]}")
+
         if status in (401, 403):
             return "Error: Distance service rejected the API key."
         if status == 429:
