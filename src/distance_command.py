@@ -37,8 +37,11 @@ class DistanceCommand:
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "KukistiBot-Distance/1.0",
-            "Accept": "application/json",
         })
+        # Deliberately no explicit Accept header: ORS's directions endpoint
+        # currently only serves GeoJSON for driving-car and returns 406 for
+        # a bare "application/json" Accept, so we let requests' default
+        # (Accept: */*) through and just parse whatever comes back.
         if self.api_key:
             self.session.headers["Authorization"] = self.api_key
 
@@ -157,19 +160,41 @@ class DistanceCommand:
         except ValueError:
             return None, "Error: Invalid response from distance service (routing)."
 
-        routes = data.get("routes") if isinstance(data, dict) else None
-        if not routes:
+        summary = self._extract_route_summary(data)
+        if summary is None:
             return None, (
                 f"Error: No driving route found between "
                 f"{origin['label']} and {destination['label']}."
             )
 
-        summary = (routes[0] or {}).get("summary") or {}
         distance_m = summary.get("distance")
         if distance_m is None:
             return None, "Error: Distance service returned unexpected data."
 
         return {"distance_m": distance_m, "duration_s": summary.get("duration")}, None
+
+    def _extract_route_summary(self, data):
+        """ORS's directions endpoint has returned two different response
+        shapes for driving-car depending on content negotiation: the
+        GeoJSON FeatureCollection shape (currently the default) and an
+        older plain "routes" shape. Handle both."""
+        if not isinstance(data, dict):
+            return None
+
+        features = data.get("features")
+        if features:
+            feature = features[0] or {}
+            summary = (feature.get("properties") or {}).get("summary")
+            if summary:
+                return summary
+
+        routes = data.get("routes")
+        if routes:
+            summary = (routes[0] or {}).get("summary")
+            if summary:
+                return summary
+
+        return None
 
     def _describe_http_error(self, error, stage) -> str:
         status = error.response.status_code if error.response is not None else None

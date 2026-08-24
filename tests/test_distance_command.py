@@ -28,6 +28,25 @@ def geocode_payload(label, lon, lat):
 
 
 def directions_payload(distance_m, duration_s):
+    """The shape ORS's directions endpoint actually returns for driving-car
+    (GeoJSON FeatureCollection) - confirmed against the live API."""
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "properties": {
+                    "summary": {"distance": distance_m, "duration": duration_s},
+                    "segments": [{"distance": distance_m, "duration": duration_s}],
+                },
+                "geometry": {"type": "LineString", "coordinates": []},
+            }
+        ],
+    }
+
+
+def legacy_directions_payload(distance_m, duration_s):
+    """Older "routes" shape - kept as a fallback in the parser in case
+    content negotiation ever serves it again."""
     return {"routes": [{"summary": {"distance": distance_m, "duration": duration_s}}]}
 
 
@@ -132,6 +151,23 @@ class TestDrivingDistance:
             "Driving distance from Kokkola, Finland to Vimpeli, Finland: "
             "88.4 km (54.9 mi), ~1h 12min drive."
         )
+
+    def test_legacy_routes_shape_still_parses(self, distance_command):
+        responses = [
+            make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
+            make_response(geocode_payload("Vimpeli, Finland", 23.81, 63.19)),
+            make_response(legacy_directions_payload(88400, 4320)),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("Kokkola,Vimpeli")
+
+        assert "88.4 km" in result
+
+    def test_accept_header_is_not_overridden(self, distance_command):
+        """Regression test: ORS's directions endpoint 406s on a bare
+        "application/json" Accept header - make sure we leave requests'
+        permissive "*/*" default in place instead of narrowing it."""
+        assert distance_command.session.headers.get("Accept") == "*/*"
 
     def test_duration_under_an_hour(self, distance_command):
         responses = [
