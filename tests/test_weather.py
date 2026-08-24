@@ -24,10 +24,11 @@ def weather_command(monkeypatch):
 
 
 class TestWeatherCommand:
-    def test_missing_api_key_raises_on_init(self, monkeypatch):
+    def test_missing_api_key_returns_error_without_crashing(self, monkeypatch):
         monkeypatch.delenv("WEATHER_API_KEY", raising=False)
-        with patch("src.weather.load_dotenv"), pytest.raises(ValueError):
-            WeatherCommand()
+        with patch("src.weather.load_dotenv"):
+            wc = WeatherCommand()
+        assert "WEATHER_API_KEY is not set" in wc.execute("austin")
 
     def test_no_args_returns_usage_error(self, weather_command):
         assert "Usage:" in weather_command.execute("")

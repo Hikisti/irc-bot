@@ -10,12 +10,12 @@ class WeatherCommand:
         self.api_key = os.getenv("WEATHER_API_KEY")
         self.base_url = "http://api.weatherapi.com/v1/current.json"
 
-        if not self.api_key:
-            raise ValueError("Error: WEATHER_API_KEY is missing. Set it in the .env file.")
-
     def execute(self, args):
         if not args:
             return "Usage: !weather <city> or !weather <city>,<country>"
+
+        if not self.api_key:
+            return "Error: WEATHER_API_KEY is not set in environment."
 
         try:
             # Parse city and optional country

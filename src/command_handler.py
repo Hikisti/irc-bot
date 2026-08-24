@@ -7,6 +7,7 @@ from aijamatto import AijaMattoCommand
 from time_command import TimeCommand
 from f1_command import F1Command
 from liiga_command import LiigaCommand
+from distance_command import DistanceCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -21,7 +22,8 @@ class CommandHandler:
             AijaMattoCommand(): {"aliases": ["!bjorck"], "allow_args": False},
             TimeCommand(): {"aliases": ["!time"], "allow_args": True},
             F1Command(): {"aliases": ["!f1"], "allow_args": False},
-            LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True}
+            LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True},
+            DistanceCommand(): {"aliases": ["!distance"], "allow_args": True}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
