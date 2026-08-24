@@ -138,90 +138,115 @@ class TestGeocoding:
 
 
 class TestAmbiguousCityDisambiguation:
-    """Regression coverage for a real incident: geocoding "miami" returned
-    a *neighbourhood* inside Barranquilla, Colombia (labelled just
-    "Barranquilla, AT, Colombia") ahead of Miami, FL, because Pelias ranks
-    by text-match relevance, not by how well-known a place is - and this
-    ORS deployment doesn't report "population" on any candidate (confirmed
-    live), so layer is the only signal actually available to fix it."""
+    """Regression coverage for a real incident, captured directly from
+    production logs: geocoding "miami" put a candidate named
+    "Barranquilla" (a Colombian city, matched via some Pelias/WhosOnFirst
+    alias not reflected in its own `name`/`label`) at identical
+    confidence (1.0) and match_type ("exact") to the correct
+    "Miami, FL, USA" candidate - so neither confidence, match_type,
+    layer, nor population could distinguish them. Only the candidate's
+    own `name` field actually corresponds (or doesn't) to what was
+    searched for."""
 
-    def _multi_candidate_payload(self, candidates):
-        """Each candidate is (label, lon, lat, layer, population)."""
-        return {
-            "features": [
-                {
-                    "geometry": {"coordinates": [lon, lat]},
-                    "properties": {"label": label, "layer": layer, "population": population},
-                }
-                for (label, lon, lat, layer, population) in candidates
-            ]
-        }
+    # Trimmed down real fixtures from the live "!distance austin miami"
+    # incident (full properties dump from the bot's console log).
+    REAL_AUSTIN_CANDIDATES = {
+        "features": [
+            {"geometry": {"coordinates": [-97.7431, 30.2711]},
+             "properties": {"name": "Austin", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Austin, TX, USA"}},
+            {"geometry": {"coordinates": [-92.9746, 43.6666]},
+             "properties": {"name": "Austin", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Austin, MN, USA"}},
+            {"geometry": {"coordinates": [-96.2716, 29.8878]},
+             "properties": {"name": "Austin County", "layer": "county", "confidence": 0.4,
+                             "match_type": "fallback", "label": "Austin County, TX, USA"}},
+            {"geometry": {"coordinates": [-97.6412, 30.4526]},
+             "properties": {"name": "Williamson", "layer": "neighbourhood", "confidence": 0.6,
+                             "match_type": "fallback", "label": "Williamson, Austin, TX, USA"}},
+            {"geometry": {"coordinates": [-92.3527, 35.1892]},
+             "properties": {"name": "Austin", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Austin, AR, USA"}},
+        ]
+    }
+    REAL_MIAMI_CANDIDATES = {
+        "features": [
+            {"geometry": {"coordinates": [-74.7849130, 10.9873330]},
+             "properties": {"name": "Barranquilla", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Barranquilla, AT, Colombia"}},
+            {"geometry": {"coordinates": [-80.1936589, 25.7616798]},
+             "properties": {"name": "Miami", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Miami, FL, USA"}},
+            {"geometry": {"coordinates": [-94.8880385, 36.8742138]},
+             "properties": {"name": "Miami", "layer": "locality", "confidence": 1,
+                             "match_type": "exact", "label": "Miami, OK, USA"}},
+            {"geometry": {"coordinates": [-84.2724, 39.6614]},
+             "properties": {"name": "Miami Township", "layer": "localadmin", "confidence": 1,
+                             "match_type": "exact", "label": "Miami Township, OH, USA"}},
+            {"geometry": {"coordinates": [-84.2777, 39.1731]},
+             "properties": {"name": "Miami Township", "layer": "localadmin", "confidence": 1,
+                             "match_type": "exact", "label": "Miami Township, OH, USA"}},
+        ]
+    }
 
-    def test_prefers_locality_over_neighbourhood_with_no_population_data(self, distance_command):
-        # The exact shape confirmed live: no candidate reports a population,
-        # and the top relevance match is a neighbourhood, not a real city.
-        payload = self._multi_candidate_payload([
-            ("Barranquilla, AT, Colombia", -74.78, 10.99, "neighbourhood", None),
-            ("Miami, FL, USA", -80.19, 25.76, "locality", None),
-            ("Miami, OK, USA", -94.88, 36.87, "locality", None),
-            ("Miami Township, OH, USA", -84.25, 39.66, "localadmin", None),
-        ])
-        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+    def test_rejects_a_candidate_whose_name_does_not_match_the_query(self, distance_command):
+        with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_MIAMI_CANDIDATES)):
             result, error = distance_command._geocode("miami")
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
 
-    def test_prefers_locality_over_county(self, distance_command):
-        # Real data: "Austin County, TX, USA" (layer=county) must not beat
-        # "Austin, TX, USA" (layer=locality), even though a county is a
-        # bigger/more "important"-sounding administrative unit.
-        payload = self._multi_candidate_payload([
-            ("Austin, TX, USA", -97.74, 30.27, "locality", None),
-            ("Austin County, TX, USA", -96.27, 29.88, "county", None),
-        ])
-        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+    def test_still_picks_correctly_for_austin(self, distance_command):
+        with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_AUSTIN_CANDIDATES)):
             result, error = distance_command._geocode("austin")
 
         assert error is None
         assert result["label"] == "Austin, TX, USA"
 
     def test_prefers_the_most_populous_candidate_when_population_is_available(self, distance_command):
-        payload = self._multi_candidate_payload([
-            ("Miami, OK, USA", -94.88, 36.87, "locality", 13570),
-            ("Miami, FL, USA", -80.19, 25.76, "locality", 442241),
-        ])
+        payload = {
+            "features": [
+                {"geometry": {"coordinates": [-94.88, 36.87]},
+                 "properties": {"name": "Miami", "layer": "locality", "population": 13570,
+                                 "label": "Miami, OK, USA"}},
+                {"geometry": {"coordinates": [-80.19, 25.76]},
+                 "properties": {"name": "Miami", "layer": "locality", "population": 442241,
+                                 "label": "Miami, FL, USA"}},
+            ]
+        }
         with patch.object(distance_command.session, "get", return_value=make_response(payload)):
             result, error = distance_command._geocode("miami")
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
 
-    def test_falls_back_to_first_result_when_no_disambiguating_signal_at_all(self, distance_command):
+    def test_falls_back_to_first_result_when_no_candidate_name_matches(self, distance_command):
+        # e.g. an abbreviation or nickname that isn't literally any
+        # candidate's own name - degrade to Pelias's own top pick rather
+        # than filtering everything away.
         payload = {
             "features": [
-                {"geometry": {"coordinates": [1, 2]}, "properties": {"label": "First match"}},
-                {"geometry": {"coordinates": [3, 4]}, "properties": {"label": "Second match"}},
+                {"geometry": {"coordinates": [1, 2]}, "properties": {"name": "Something Else", "label": "First match"}},
+                {"geometry": {"coordinates": [3, 4]}, "properties": {"name": "Other Thing", "label": "Second match"}},
             ]
         }
         with patch.object(distance_command.session, "get", return_value=make_response(payload)):
-            result, error = distance_command._geocode("ambiguous")
+            result, error = distance_command._geocode("nyc")
 
         assert error is None
         assert result["label"] == "First match"
 
+    def test_name_match_is_case_insensitive(self, distance_command):
+        with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_MIAMI_CANDIDATES)):
+            result, error = distance_command._geocode("MIAMI")
+
+        assert error is None
+        assert result["label"] == "Miami, FL, USA"
+
     def test_end_to_end_picks_the_famous_miami(self, distance_command):
-        austin_candidates = self._multi_candidate_payload([
-            ("Austin, TX, USA", -97.74, 30.27, "locality", None),
-            ("Austin, MN, USA", -92.97, 43.67, "locality", None),
-        ])
-        miami_candidates = self._multi_candidate_payload([
-            ("Barranquilla, AT, Colombia", -74.78, 10.99, "neighbourhood", None),
-            ("Miami, FL, USA", -80.19, 25.76, "locality", None),
-        ])
         responses = [
-            make_response(austin_candidates),
-            make_response(miami_candidates),
+            make_response(self.REAL_AUSTIN_CANDIDATES),
+            make_response(self.REAL_MIAMI_CANDIDATES),
             make_response(directions_payload(2100000, 72000)),
         ]
         with patch.object(distance_command.session, "get", side_effect=responses):

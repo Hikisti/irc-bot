@@ -1,4 +1,3 @@
-import json
 import os
 
 from dotenv import load_dotenv
@@ -103,10 +102,9 @@ class DistanceCommand:
             resp = self.session.get(
                 self.GEOCODE_URL,
                 # Ask for a few candidates, not just the top one - Pelias
-                # ranks by text-match relevance, which for a globally
-                # ambiguous name (e.g. "Miami") can rank an obscure hamlet
-                # above the famous city of the same name. _best_match()
-                # then prefers the most populous candidate instead.
+                # ranks by text-match relevance, which can rank a wrongly
+                # matched place above the correct city of that name (see
+                # _best_match() for a real example this was built against).
                 params={"text": city, "size": 5},
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
@@ -127,15 +125,7 @@ class DistanceCommand:
         if not features:
             return None, f"Error: Could not find a location matching '{city}'."
 
-        if len(features) > 1:
-            # Two disambiguation attempts (population, then layer) both
-            # turned out to tie on the fields we were looking at - dump
-            # everything Pelias gives us instead of guessing which field
-            # matters next.
-            all_props = [(f.get("properties") or {}) for f in features]
-            print(f"Distance API geocode full properties for '{city}': {json.dumps(all_props)}")
-
-        feature = self._best_match(features)
+        feature = self._best_match(features, city)
         coords = (feature.get("geometry") or {}).get("coordinates")
         if not coords or len(coords) < 2:
             return None, f"Error: Could not resolve coordinates for '{city}'."
@@ -144,24 +134,37 @@ class DistanceCommand:
         return {"label": label, "lon": coords[0], "lat": coords[1]}, None
 
     # Pelias layer values, roughly biggest-to-smallest for the layers that
-    # can plausibly be "the city someone means" by a bare name. Real ORS
-    # data (confirmed live) doesn't report population on any candidate, so
-    # layer is the only disambiguating signal actually available -
-    # "miami" 's top relevance match was a *neighbourhood* inside
-    # Barranquilla, Colombia (labelled just "Barranquilla, AT, Colombia"),
-    # which outranked "Miami, FL, USA" on text relevance alone.
+    # can plausibly be "the city someone means" by a bare name.
     LAYER_RANK = {"locality": 3, "localadmin": 2, "borough": 1}
 
-    def _best_match(self, features):
+    def _best_match(self, features, query):
         """Picks the best candidate among the geocoder's top matches.
-        Pelias's own ranking is relevance-only, which can put an obscure
-        same-named neighbourhood/hamlet above the famous city of that name.
-        Prefers city-level results (locality/localadmin/borough) over
-        finer-grained ones (neighbourhood, venue, address, ...) or
-        coarser ones (county, region, country); ties within a layer keep
-        Pelias's own relevance order (max() picks the first item on ties).
-        Population is used as a tie-breaker on top of that in case a
-        deployment ever does report it."""
+
+        Confirmed live (via a real incident): "!distance austin miami"
+        geocoded "miami" to a candidate whose own properties.name is
+        "Barranquilla" (a Colombian city), at confidence 1.0 and
+        match_type "exact" - identical scoring to the correct
+        "Miami, FL, USA" candidate, presumably matched via some alternate
+        name in Pelias's WhosOnFirst index that isn't reflected in `name`
+        or `label`. Neither confidence, match_type, layer, nor population
+        distinguish it from a correct match, so the only reliable signal
+        left is: does this candidate's own name actually correspond to
+        what was searched for? Filters to candidates whose name matches
+        the query first (falling back to the full list if none do, e.g.
+        for queries that don't literally appear in any candidate's name),
+        then breaks ties by layer (city-level beats county/neighbourhood)
+        and population, keeping Pelias's own relevance order beyond that.
+        """
+        def normalize(text):
+            return (text or "").strip().casefold()
+
+        query_norm = normalize(query)
+        named_matches = [
+            f for f in features
+            if normalize((f.get("properties") or {}).get("name")) == query_norm
+        ]
+        candidates = named_matches or features
+
         def rank(feature):
             props = (feature or {}).get("properties") or {}
             layer_rank = self.LAYER_RANK.get(props.get("layer"), 0)
@@ -169,7 +172,7 @@ class DistanceCommand:
             population = population if isinstance(population, (int, float)) else -1
             return (layer_rank, population)
 
-        return max(features, key=rank) or {}
+        return max(candidates, key=rank) or {}
 
     # ---- routing --------------------------------------------------------
 
