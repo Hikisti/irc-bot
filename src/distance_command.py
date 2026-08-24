@@ -1,3 +1,4 @@
+import json
 import os
 
 from dotenv import load_dotenv
@@ -127,15 +128,12 @@ class DistanceCommand:
             return None, f"Error: Could not find a location matching '{city}'."
 
         if len(features) > 1:
-            candidates = [
-                (
-                    (f.get("properties") or {}).get("label"),
-                    (f.get("properties") or {}).get("layer"),
-                    (f.get("properties") or {}).get("population"),
-                )
-                for f in features
-            ]
-            print(f"Distance API geocode candidates for '{city}' (label, layer, population): {candidates}")
+            # Two disambiguation attempts (population, then layer) both
+            # turned out to tie on the fields we were looking at - dump
+            # everything Pelias gives us instead of guessing which field
+            # matters next.
+            all_props = [(f.get("properties") or {}) for f in features]
+            print(f"Distance API geocode full properties for '{city}': {json.dumps(all_props)}")
 
         feature = self._best_match(features)
         coords = (feature.get("geometry") or {}).get("coordinates")
