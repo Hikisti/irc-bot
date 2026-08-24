@@ -121,11 +121,8 @@ class LiigaCommand:
                 return  # stopped (or superseded) before the lookup finished
             entry["games"] = {gid: self._snapshot(g) for gid, g in games.items()}
 
-        names = ", ".join(
-            f"{self._team_name(g, 'homeTeam')}-{self._team_name(g, 'awayTeam')}"
-            for g in games.values()
-        )
-        self._safe_send(irc_bot, channel, f"Tracking {len(games)} Liiga game(s) today: {names}")
+        summary = self._format_games_summary(games.values())
+        self._safe_send(irc_bot, channel, f"Tracking {len(games)} Liiga game(s) today: {summary}")
 
         self._poll_loop(irc_bot, channel, stop_event)
 
@@ -213,6 +210,36 @@ class LiigaCommand:
                 entry["games"] = new_state
 
         return all_ended
+
+    # ---- start-time summary -------------------------------------------
+
+    def _game_start_label(self, game):
+        """Scheduled start time in Helsinki local time as 'HH:MM', or None
+        if the game has no usable start timestamp."""
+        start = game.get("start")
+        if not start:
+            return None
+        try:
+            dt = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+        return dt.astimezone(self.HELSINKI_TZ).strftime("%H:%M")
+
+    def _format_games_summary(self, games) -> str:
+        """Groups games by scheduled start time, e.g.
+        '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30 JYP-Lukko'."""
+        groups = {}
+        order = []
+        for game in games:
+            label = self._game_start_label(game) or "??:??"
+            name = f"{self._team_name(game, 'homeTeam')}-{self._team_name(game, 'awayTeam')}"
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append(name)
+
+        order.sort(key=lambda label: (label == "??:??", label))
+        return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
 
     # ---- announcements --------------------------------------------------
 

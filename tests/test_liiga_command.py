@@ -9,9 +9,11 @@ from liiga_command import LiigaCommand
 
 
 def make_game(gid=1, home="HIFK", away="Ilves", home_goals=None, away_goals=None,
-              started=True, ended=False, finished_type="ACTIVE_OR_NOT_STARTED"):
+              started=True, ended=False, finished_type="ACTIVE_OR_NOT_STARTED",
+              start="2026-09-05T14:00:00Z"):
     return {
         "id": gid,
+        "start": start,
         "homeTeam": {
             "teamName": home,
             "goals": len(home_goals or []),
@@ -96,7 +98,9 @@ class TestStartDoesNotBlock:
             join_channel_thread(liiga_command, "#chan")
 
         bot.send_message.assert_called_once()
-        assert "Tracking 1 Liiga game" in bot.send_message.call_args[0][1]
+        message = bot.send_message.call_args[0][1]
+        assert "Tracking 1 Liiga game" in message
+        assert "17:00 HIFK-Ilves" in message
 
     def test_start_reserves_slot_immediately_against_races(self, liiga_command):
         """A second !liiga start while the first lookup is still in flight
@@ -408,6 +412,38 @@ class TestFetchTodayGames:
             result = liiga_command._fetch_today_games()
 
         assert result == {7: good_game}
+
+
+class TestGamesSummary:
+    def test_single_game_shows_its_start_time(self, liiga_command):
+        games = [make_game(start="2026-09-05T14:00:00Z")]  # 17:00 Helsinki (EEST, UTC+3)
+        assert liiga_command._format_games_summary(games) == "17:00 HIFK-Ilves"
+
+    def test_same_start_time_is_grouped(self, liiga_command):
+        games = [
+            make_game(gid=1, home="HIFK", away="Ilves", start="2026-09-05T14:00:00Z"),
+            make_game(gid=2, home="Tappara", away="Kärpät", start="2026-09-05T14:00:00Z"),
+        ]
+        assert liiga_command._format_games_summary(games) == "17:00 HIFK-Ilves, Tappara-Kärpät"
+
+    def test_different_start_times_are_separate_groups_in_order(self, liiga_command):
+        games = [
+            make_game(gid=1, home="JYP", away="Lukko", start="2026-09-05T15:30:00Z"),
+            make_game(gid=2, home="HIFK", away="Ilves", start="2026-09-05T14:00:00Z"),
+        ]
+        assert liiga_command._format_games_summary(games) == "17:00 HIFK-Ilves | 18:30 JYP-Lukko"
+
+    def test_missing_start_time_falls_back_and_sorts_last(self, liiga_command):
+        games = [
+            make_game(gid=1, home="JYP", away="Lukko", start=None),
+            make_game(gid=2, home="HIFK", away="Ilves", start="2026-09-05T14:00:00Z"),
+        ]
+        assert liiga_command._format_games_summary(games) == "17:00 HIFK-Ilves | ??:?? JYP-Lukko"
+
+    def test_start_time_is_converted_to_helsinki_local(self, liiga_command):
+        # 2026-01-05 is outside DST (EET, UTC+2): 14:00 UTC -> 16:00 local.
+        games = [make_game(start="2026-01-05T14:00:00Z")]
+        assert liiga_command._format_games_summary(games) == "16:00 HIFK-Ilves"
 
 
 class TestSeasonCalculation:
