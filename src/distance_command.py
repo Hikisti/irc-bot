@@ -130,11 +130,12 @@ class DistanceCommand:
             candidates = [
                 (
                     (f.get("properties") or {}).get("label"),
+                    (f.get("properties") or {}).get("layer"),
                     (f.get("properties") or {}).get("population"),
                 )
                 for f in features
             ]
-            print(f"Distance API geocode candidates for '{city}': {candidates}")
+            print(f"Distance API geocode candidates for '{city}' (label, layer, population): {candidates}")
 
         feature = self._best_match(features)
         coords = (feature.get("geometry") or {}).get("coordinates")
@@ -144,18 +145,33 @@ class DistanceCommand:
         label = (feature.get("properties") or {}).get("label") or city
         return {"label": label, "lon": coords[0], "lat": coords[1]}, None
 
-    def _best_match(self, features):
-        """Picks the most populous candidate among the geocoder's top
-        matches. Pelias's own ranking is relevance-only, which can put an
-        obscure same-named place above a famous one (e.g. "miami" once
-        resolved to a small town in Colombia instead of Miami, FL). When
-        no candidate reports a population, this preserves Pelias's
-        original top choice (max() picks the first item on ties)."""
-        def population(feature):
-            pop = ((feature or {}).get("properties") or {}).get("population")
-            return pop if isinstance(pop, (int, float)) else -1
+    # Pelias layer values, roughly biggest-to-smallest for the layers that
+    # can plausibly be "the city someone means" by a bare name. Real ORS
+    # data (confirmed live) doesn't report population on any candidate, so
+    # layer is the only disambiguating signal actually available -
+    # "miami" 's top relevance match was a *neighbourhood* inside
+    # Barranquilla, Colombia (labelled just "Barranquilla, AT, Colombia"),
+    # which outranked "Miami, FL, USA" on text relevance alone.
+    LAYER_RANK = {"locality": 3, "localadmin": 2, "borough": 1}
 
-        return max(features, key=population) or {}
+    def _best_match(self, features):
+        """Picks the best candidate among the geocoder's top matches.
+        Pelias's own ranking is relevance-only, which can put an obscure
+        same-named neighbourhood/hamlet above the famous city of that name.
+        Prefers city-level results (locality/localadmin/borough) over
+        finer-grained ones (neighbourhood, venue, address, ...) or
+        coarser ones (county, region, country); ties within a layer keep
+        Pelias's own relevance order (max() picks the first item on ties).
+        Population is used as a tie-breaker on top of that in case a
+        deployment ever does report it."""
+        def rank(feature):
+            props = (feature or {}).get("properties") or {}
+            layer_rank = self.LAYER_RANK.get(props.get("layer"), 0)
+            population = props.get("population")
+            population = population if isinstance(population, (int, float)) else -1
+            return (layer_rank, population)
+
+        return max(features, key=rank) or {}
 
     # ---- routing --------------------------------------------------------
 

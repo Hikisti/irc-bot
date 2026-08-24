@@ -139,34 +139,65 @@ class TestGeocoding:
 
 class TestAmbiguousCityDisambiguation:
     """Regression coverage for a real incident: geocoding "miami" returned
-    an obscure Colombian village ahead of Miami, FL, because Pelias ranks
-    by text-match relevance, not by how well-known a place is."""
+    a *neighbourhood* inside Barranquilla, Colombia (labelled just
+    "Barranquilla, AT, Colombia") ahead of Miami, FL, because Pelias ranks
+    by text-match relevance, not by how well-known a place is - and this
+    ORS deployment doesn't report "population" on any candidate (confirmed
+    live), so layer is the only signal actually available to fix it."""
 
     def _multi_candidate_payload(self, candidates):
+        """Each candidate is (label, lon, lat, layer, population)."""
         return {
             "features": [
                 {
                     "geometry": {"coordinates": [lon, lat]},
-                    "properties": {"label": label, "population": population},
+                    "properties": {"label": label, "layer": layer, "population": population},
                 }
-                for (label, lon, lat, population) in candidates
+                for (label, lon, lat, layer, population) in candidates
             ]
         }
 
-    def test_prefers_the_most_populous_candidate(self, distance_command):
+    def test_prefers_locality_over_neighbourhood_with_no_population_data(self, distance_command):
+        # The exact shape confirmed live: no candidate reports a population,
+        # and the top relevance match is a neighbourhood, not a real city.
         payload = self._multi_candidate_payload([
-            ("Miami, La Guajira, Colombia", -74.78, 10.99, 2000),
-            ("Miami, FL, USA", -80.19, 25.76, 442241),
-            ("Miami, OK, USA", -94.88, 36.87, 13570),
+            ("Barranquilla, AT, Colombia", -74.78, 10.99, "neighbourhood", None),
+            ("Miami, FL, USA", -80.19, 25.76, "locality", None),
+            ("Miami, OK, USA", -94.88, 36.87, "locality", None),
+            ("Miami Township, OH, USA", -84.25, 39.66, "localadmin", None),
         ])
         with patch.object(distance_command.session, "get", return_value=make_response(payload)):
             result, error = distance_command._geocode("miami")
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
-        assert result["lon"] == -80.19
 
-    def test_falls_back_to_first_result_when_no_population_data(self, distance_command):
+    def test_prefers_locality_over_county(self, distance_command):
+        # Real data: "Austin County, TX, USA" (layer=county) must not beat
+        # "Austin, TX, USA" (layer=locality), even though a county is a
+        # bigger/more "important"-sounding administrative unit.
+        payload = self._multi_candidate_payload([
+            ("Austin, TX, USA", -97.74, 30.27, "locality", None),
+            ("Austin County, TX, USA", -96.27, 29.88, "county", None),
+        ])
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result, error = distance_command._geocode("austin")
+
+        assert error is None
+        assert result["label"] == "Austin, TX, USA"
+
+    def test_prefers_the_most_populous_candidate_when_population_is_available(self, distance_command):
+        payload = self._multi_candidate_payload([
+            ("Miami, OK, USA", -94.88, 36.87, "locality", 13570),
+            ("Miami, FL, USA", -80.19, 25.76, "locality", 442241),
+        ])
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result, error = distance_command._geocode("miami")
+
+        assert error is None
+        assert result["label"] == "Miami, FL, USA"
+
+    def test_falls_back_to_first_result_when_no_disambiguating_signal_at_all(self, distance_command):
         payload = {
             "features": [
                 {"geometry": {"coordinates": [1, 2]}, "properties": {"label": "First match"}},
@@ -180,18 +211,23 @@ class TestAmbiguousCityDisambiguation:
         assert result["label"] == "First match"
 
     def test_end_to_end_picks_the_famous_miami(self, distance_command):
+        austin_candidates = self._multi_candidate_payload([
+            ("Austin, TX, USA", -97.74, 30.27, "locality", None),
+            ("Austin, MN, USA", -92.97, 43.67, "locality", None),
+        ])
         miami_candidates = self._multi_candidate_payload([
-            ("Miami, La Guajira, Colombia", -74.78, 10.99, 2000),
-            ("Miami, FL, USA", -80.19, 25.76, 442241),
+            ("Barranquilla, AT, Colombia", -74.78, 10.99, "neighbourhood", None),
+            ("Miami, FL, USA", -80.19, 25.76, "locality", None),
         ])
         responses = [
-            make_response(geocode_payload("Austin, TX, USA", -97.74, 30.27)),
+            make_response(austin_candidates),
             make_response(miami_candidates),
             make_response(directions_payload(2100000, 72000)),
         ]
         with patch.object(distance_command.session, "get", side_effect=responses):
             result = distance_command.execute("Austin,Miami")
 
+        assert "Austin, TX, USA" in result
         assert "Miami, FL, USA" in result
         assert "Colombia" not in result
 
