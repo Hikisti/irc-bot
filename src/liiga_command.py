@@ -14,6 +14,7 @@ class LiigaCommand:
     Usage:
       !liiga start  -> start polling today's games in this channel
       !liiga stop   -> stop polling in this channel
+      !liiga next   -> show the next upcoming gameday's games and times
 
     All network I/O (the initial lookup and every later poll) happens on a
     background thread, never on the caller's thread, so a slow or hanging
@@ -56,7 +57,9 @@ class LiigaCommand:
             return self._start(irc_bot, channel)
         elif arg == "stop":
             return self._stop(channel)
-        return "Usage: !liiga start | !liiga stop"
+        elif arg == "next":
+            return self._next(irc_bot, channel)
+        return "Usage: !liiga start | !liiga stop | !liiga next"
 
     # ---- start / stop -----------------------------------------------
 
@@ -92,6 +95,39 @@ class LiigaCommand:
             return "Not currently tracking Liiga games in this channel."
         entry["stop_event"].set()
         return "Stopped live Liiga tracking."
+
+    def _next(self, irc_bot, channel):
+        if irc_bot is None or channel is None:
+            return "Error: this command needs channel context."
+
+        # A one-shot lookup, not persistent tracking - no need to reserve a
+        # channel slot the way !liiga start does. Still runs on a background
+        # thread so a slow API can't stall the bot.
+        threading.Thread(
+            target=self._run_next,
+            args=(irc_bot, channel),
+            daemon=True,
+        ).start()
+
+        return "Checking the next Liiga gameday..."
+
+    def _run_next(self, irc_bot, channel):
+        try:
+            date_str, games = self._fetch_next_gameday()
+        except Exception as e:
+            print(f"Liiga next-gameday fetch error: {e}")
+            date_str, games = None, None
+
+        if games is None:
+            self._safe_send(irc_bot, channel, "Error: could not reach the Liiga API.")
+            return
+        if not games:
+            self._safe_send(irc_bot, channel, "No upcoming Liiga games found.")
+            return
+
+        label = self._format_date_label(date_str)
+        summary = self._format_games_summary(games.values())
+        self._safe_send(irc_bot, channel, f"Next Liiga gameday ({label}): {summary}")
 
     # ---- background thread entry point --------------------------------
 
@@ -241,6 +277,19 @@ class LiigaCommand:
         order.sort(key=lambda label: (label == "??:??", label))
         return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
 
+    def _format_date_label(self, date_str) -> str:
+        try:
+            target = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return date_str or "unknown date"
+
+        today = datetime.datetime.now(self.HELSINKI_TZ).date()
+        if target == today:
+            return "today"
+        if target == today + datetime.timedelta(days=1):
+            return "tomorrow"
+        return target.strftime("%a %d/%m")
+
     # ---- announcements --------------------------------------------------
 
     def _team_name(self, game, side) -> str:
@@ -324,18 +373,29 @@ class LiigaCommand:
 
     def _fetch_today_games(self):
         """Returns {game_id: game_dict} for today, merged across tournaments.
+        None only if every tournament request failed."""
+        now = datetime.datetime.now(self.HELSINKI_TZ)
+        games, _next_date = self._fetch_games_and_next_date(
+            now.strftime("%Y-%m-%d"), self._current_season(now)
+        )
+        return games
+
+    def _fetch_games_and_next_date(self, date_str, season):
+        """Fetch every tournament's games for one date, merged together.
 
         Each tournament is fetched and error-handled independently, so a
         single failing/slow endpoint doesn't discard data already fetched
-        from the others. Returns None only if every tournament request
-        failed (i.e. we have no idea what's happening today), which the
-        caller treats as "API unreachable".
+        from the others. Returns (games_dict, next_game_date):
+          - games_dict is None only if every tournament request failed
+            (i.e. we have no idea what's happening that day) - callers
+            treat that as "API unreachable".
+          - next_game_date is the earliest "nextGameDate" reported by any
+            tournament for this date (liiga.fi returns this even when a
+            date has no games, pointing at the next date that does), or
+            None if none of them reported one.
         """
-        now = datetime.datetime.now(self.HELSINKI_TZ)
-        season = self._current_season(now)
-        date_str = now.strftime("%Y-%m-%d")
-
         games = {}
+        next_dates = []
         any_success = False
 
         for tournament in self.TOURNAMENTS:
@@ -351,6 +411,9 @@ class LiigaCommand:
                     gid = g.get("id")
                     if gid is not None:
                         games[gid] = g
+                next_game_date = data.get("nextGameDate")
+                if next_game_date:
+                    next_dates.append(next_game_date)
                 any_success = True
             except requests.exceptions.RequestException as e:
                 print(f"Liiga API request failed for tournament={tournament}: {e}")
@@ -358,8 +421,33 @@ class LiigaCommand:
                 print(f"Liiga API returned unexpected data for tournament={tournament}: {e}")
 
         if not any_success:
-            return None
-        return games
+            return None, None
+        return games, (min(next_dates) if next_dates else None)
+
+    def _fetch_next_gameday(self):
+        """Returns (date_str, games_dict) for the closest date (today or
+        later) that has Liiga games, or (None, None) if that can't be
+        determined (API unreachable, or genuinely nothing scheduled)."""
+        now = datetime.datetime.now(self.HELSINKI_TZ)
+        today_str = now.strftime("%Y-%m-%d")
+
+        games, next_date = self._fetch_games_and_next_date(today_str, self._current_season(now))
+        if games is None:
+            return None, None
+        if games:
+            return today_str, games
+        if not next_date:
+            return None, None
+
+        try:
+            next_dt = self.HELSINKI_TZ.localize(datetime.datetime.strptime(next_date, "%Y-%m-%d"))
+        except ValueError:
+            return None, None
+
+        next_games, _ = self._fetch_games_and_next_date(next_date, self._current_season(next_dt))
+        if not next_games:
+            return None, None
+        return next_date, next_games
 
     def _snapshot(self, game) -> dict:
         return {

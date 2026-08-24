@@ -1,3 +1,4 @@
+import datetime
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -412,6 +413,144 @@ class TestFetchTodayGames:
             result = liiga_command._fetch_today_games()
 
         assert result == {7: good_game}
+
+
+class TestNext:
+    def test_next_returns_immediately_without_blocking(self, liiga_command):
+        release_fetch = threading.Event()
+
+        def slow_next():
+            release_fetch.wait(timeout=2)
+            return "2026-08-25", {1: make_game()}
+
+        bot = MagicMock()
+        with patch.object(liiga_command, "_fetch_next_gameday", side_effect=slow_next):
+            start = time.time()
+            result = liiga_command.execute("next", irc_bot=bot, channel="#chan")
+            elapsed = time.time() - start
+
+            assert elapsed < 1, "execute() blocked on the network fetch"
+            assert "Checking" in result
+
+            release_fetch.set()
+            time.sleep(0.2)  # let the one-shot background thread finish
+
+        bot.send_message.assert_called_once()
+
+    def test_next_without_context_errors(self, liiga_command):
+        result = liiga_command.execute("next")
+        assert "Error" in result
+
+    def test_run_next_reports_games_and_date_label(self, liiga_command):
+        bot = MagicMock()
+        with patch.object(
+            liiga_command, "_fetch_next_gameday",
+            return_value=("2026-08-25", {1: make_game(home="TPS", away="Jokerit")}),
+        ), patch.object(liiga_command, "_format_date_label", return_value="tomorrow"):
+            liiga_command._run_next(bot, "#chan")
+
+        message = bot.send_message.call_args[0][1]
+        assert "Next Liiga gameday (tomorrow)" in message
+        assert "TPS-Jokerit" in message
+
+    def test_run_next_no_games_found(self, liiga_command):
+        bot = MagicMock()
+        with patch.object(liiga_command, "_fetch_next_gameday", return_value=(None, {})):
+            liiga_command._run_next(bot, "#chan")
+        bot.send_message.assert_called_once_with("#chan", "No upcoming Liiga games found.")
+
+    def test_run_next_api_unreachable(self, liiga_command):
+        bot = MagicMock()
+        with patch.object(liiga_command, "_fetch_next_gameday", return_value=(None, None)):
+            liiga_command._run_next(bot, "#chan")
+        bot.send_message.assert_called_once_with("#chan", "Error: could not reach the Liiga API.")
+
+    def test_run_next_unexpected_exception_does_not_propagate(self, liiga_command):
+        bot = MagicMock()
+        with patch.object(liiga_command, "_fetch_next_gameday", side_effect=RuntimeError("boom")):
+            liiga_command._run_next(bot, "#chan")  # must not raise
+        bot.send_message.assert_called_once_with("#chan", "Error: could not reach the Liiga API.")
+
+
+class TestFetchNextGameday:
+    def _make_response(self, games=None, next_game_date=None, ok=True):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None if ok else None
+        if not ok:
+            resp.raise_for_status.side_effect = requests.exceptions.HTTPError("boom")
+        resp.json.return_value = {"games": games or [], "nextGameDate": next_game_date}
+        return resp
+
+    def test_returns_today_if_games_already_scheduled_today(self, liiga_command):
+        today_game = make_game(gid=1)
+
+        def fake_get(url, params=None, timeout=None):
+            if params["tournament"] == "runkosarja":
+                return self._make_response(games=[today_game])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert games == {1: today_game}
+        assert date_str is not None
+
+    def test_falls_forward_to_earliest_next_game_date_across_tournaments(self, liiga_command):
+        future_game = make_game(gid=99)
+        calls = []
+
+        def fake_get(url, params=None, timeout=None):
+            calls.append((params["tournament"], params["date"]))
+            # First round (today): no games, differing nextGameDate per tournament.
+            if len(calls) <= len(liiga_command.TOURNAMENTS):
+                next_dates = {
+                    "runkosarja": "2026-09-05",
+                    "playoffs": None,
+                    "playout": None,
+                    "qualifications": None,
+                    "valmistavat_ottelut": "2026-08-25",
+                }
+                return self._make_response(next_game_date=next_dates[params["tournament"]])
+            # Second round (the earliest next date, 2026-08-25): return a game.
+            if params["date"] == "2026-08-25" and params["tournament"] == "valmistavat_ottelut":
+                return self._make_response(games=[future_game])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert date_str == "2026-08-25"
+        assert games == {99: future_game}
+
+    def test_all_requests_failing_returns_none(self, liiga_command):
+        with patch.object(liiga_command.session, "get", side_effect=requests.exceptions.Timeout("slow")):
+            date_str, games = liiga_command._fetch_next_gameday()
+        assert date_str is None
+        assert games is None
+
+    def test_no_next_date_reported_anywhere_returns_none(self, liiga_command):
+        with patch.object(liiga_command.session, "get", side_effect=lambda *a, **k: self._make_response()):
+            date_str, games = liiga_command._fetch_next_gameday()
+        assert date_str is None
+        assert games is None
+
+
+class TestDateLabel:
+    def test_today(self, liiga_command):
+        today = datetime.datetime.now(liiga_command.HELSINKI_TZ).strftime("%Y-%m-%d")
+        assert liiga_command._format_date_label(today) == "today"
+
+    def test_tomorrow(self, liiga_command):
+        tomorrow = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        assert liiga_command._format_date_label(tomorrow) == "tomorrow"
+
+    def test_other_date_shows_weekday_and_date(self, liiga_command):
+        far_future = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=10))
+        label = liiga_command._format_date_label(far_future.strftime("%Y-%m-%d"))
+        assert far_future.strftime("%d/%m") in label
+
+    def test_malformed_date_falls_back_to_raw_string(self, liiga_command):
+        assert liiga_command._format_date_label("not-a-date") == "not-a-date"
 
 
 class TestGamesSummary:
