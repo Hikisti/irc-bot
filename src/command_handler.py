@@ -8,6 +8,7 @@ from time_command import TimeCommand
 from f1_command import F1Command
 from liiga_command import LiigaCommand
 from distance_command import DistanceCommand
+from superpesis_command import SuperpesisCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -23,7 +24,8 @@ class CommandHandler:
             TimeCommand(): {"aliases": ["!time"], "allow_args": True},
             F1Command(): {"aliases": ["!f1"], "allow_args": False},
             LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True},
-            DistanceCommand(): {"aliases": ["!distance"], "allow_args": True}
+            DistanceCommand(): {"aliases": ["!distance"], "allow_args": True},
+            SuperpesisCommand(): {"aliases": ["!superpesis"], "allow_args": True, "channels": ["#pesis.fi"]}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
@@ -39,9 +41,17 @@ class CommandHandler:
                 if command in cmd_data["aliases"]:
                     main_command = cmd_obj
                     allow_args = cmd_data["allow_args"]
+                    allowed_channels = cmd_data.get("channels")
                     break  # Stop searching once we find a match
 
             if main_command:
+                # Some commands are restricted to specific channels (e.g. !superpesis
+                # -> #pesis.fi only). Absent, a command works in every channel the
+                # bot has joined, same as before this existed.
+                if allowed_channels and channel not in allowed_channels:
+                    print(f"Command {command} is not allowed in channel {channel}. Ignoring.")
+                    return  # Ignore command
+
                 # Check if arguments are allowed for this command
                 if not allow_args and args:
                     print(f"Command {command} does not allow arguments. Ignoring.")

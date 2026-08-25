@@ -1,8 +1,9 @@
 # irc-bot
 
 A simple IRC bot (KukistiBot) with a handful of chat commands: weather, stock, crypto,
-electricity price, local time, and F1 schedule lookups. It also auto-fetches and posts
-page titles for links shared in channel.
+electricity price, local time, F1 schedule, driving distance, and live Liiga (ice hockey) and
+Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles for links
+shared in channel.
 
 ## Setup
 
@@ -58,6 +59,7 @@ in `src/irc_bot.py`.
 | F1 schedule | `!f1` | none | `!f1` |
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
+| Superpesis live tracker | `!superpesis` | `start` or `stop` | `!superpesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
 
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
@@ -72,6 +74,17 @@ isn't guaranteed to stay stable.
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
 unless both are a single word, in which case a space works too (`!distance Kokkola Vimpeli`) —
 this avoids silently misreading a multi-word city name as the wrong split.
+
+`!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches
+every 30s and announces runs and final results as they happen, the same way `!liiga start` does
+for hockey — stops automatically once all of today's matches have finished, or on
+`!superpesis stop`. **Only works in `#pesis.fi`** — unlike every other command, it's restricted
+to that one channel (see `"channels"` in `command_handler.py`); typing it elsewhere is silently
+ignored. Uses pesistulokset.fi's unofficial JSON API. Individual run announcements are
+best-effort (pesäpallo's scoring vocabulary wasn't fully catalogued — roughly 85-100% of a
+match's runs get an individual chat line in testing), but the score and final result are always
+accurate since they come from the API's own authoritative live-result summary, never computed
+locally.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).

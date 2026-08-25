@@ -120,6 +120,6 @@ if __name__ == "__main__":
         print("Running in debug mode: Joining only the default channel.")
         bot = IrcBot()  # No channels argument, so it defaults to ["#bottest123"]
     else:
-        bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi"])
+        bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi"])
 
     bot.connect()
