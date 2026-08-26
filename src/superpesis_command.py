@@ -77,8 +77,21 @@ class SuperpesisCommand:
     COLOR_RESET = "\x0F"
     GREEN = "\x0303"
     ORANGE = "\x0307"
+    PURPLE = "\x0306"
     RUN_PREFIX = f"{BOLD}{GREEN}RUN:{COLOR_RESET}"
     FINAL_PREFIX = f"{BOLD}{ORANGE}FINAL:{COLOR_RESET}"
+    PERIOD_END_PREFIX = f"{BOLD}{PURPLE}JAKSO:{COLOR_RESET}"
+
+    # The event feed's "period" field is 0-indexed - confirmed live via a
+    # "Ensimmäinen jakso päättyi" (first period ended) event carrying
+    # period=0, not period=1 as originally (wrongly) assumed. Falls back
+    # to a generic "jakso N" for any value beyond what's been observed.
+    PERIOD_LABELS = {
+        0: "1. jakso",
+        1: "2. jakso",
+        2: "supervuoro",
+        3: "kotiutuslyöntikilpailu",
+    }
 
     def __init__(self):
         self.session = requests.Session()
@@ -341,6 +354,12 @@ class SuperpesisCommand:
                         scorer_name, batter_name,
                     ))
 
+                period_end_text = self._extract_period_end_text(event)
+                if period_end_text:
+                    self._safe_send(irc_bot, channel, self._format_period_end(
+                        period_end_text, home_name, away_name, home_runs, away_runs,
+                    ))
+
         event_count = len(events) if events is not None else prev["event_count"]
 
         # The authoritative score always wins over our running per-run
@@ -436,8 +455,7 @@ class SuperpesisCommand:
     def _format_run(self, event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id,
                      scorer_name, batter_name=None):
         scoring_team = home_name if scoring_team_id == home_id else away_name
-        period = event.get("period")
-        period_str = f" (jakso {period})" if period else ""
+        period_str = self._format_period_suffix(event.get("period"))
         scorer_str = scorer_name or "Unknown"
         # Skip the "lyöjä" clause if it's the same person as the scorer
         # (e.g. a home run) or unresolvable - no point naming "Unknown"
@@ -447,6 +465,41 @@ class SuperpesisCommand:
             f"{self.RUN_PREFIX} {scoring_team} — {scorer_str}{batter_str} | "
             f"{home_name} {home_runs}-{away_runs} {away_name}{period_str}"
         )
+
+    def _format_period_suffix(self, period) -> str:
+        if period is None:
+            return ""
+        label = self.PERIOD_LABELS.get(period, f"jakso {period + 1}")
+        return f" ({label})"
+
+    def _format_period_end(self, text, home_name, away_name, home_runs, away_runs) -> str:
+        return (
+            f"{self.PERIOD_END_PREFIX} {text} | "
+            f"{home_name} {home_runs}-{away_runs} {away_name}"
+        )
+
+    def _extract_period_end_text(self, event):
+        """Returns the human-readable text for a period-ending event (e.g.
+        "Ensimmäinen jakso päättyi", "Supervuoro päättyi"), or None.
+        Detected via a {"type":"stat","periodend":...} marker - confirmed
+        present (and reliable) across every period transition checked
+        live, including into "Supervuoro" - rather than matching the
+        Finnish wording itself, which would be one more guess at a
+        vocabulary this API doesn't document. Distinct from match-end,
+        which uses its own "match-ended" stat key, not "periodend"."""
+        for sub_event in event.get("events") or []:
+            texts = sub_event.get("texts") or []
+            has_periodend = any(
+                isinstance(t, dict) and t.get("type") == "stat" and "periodend" in t
+                for t in texts
+            )
+            if not has_periodend:
+                continue
+            for t in texts:
+                if isinstance(t, dict) and t.get("type") == "event" and t.get("text"):
+                    return t.get("text")
+            return "Jakso päättyi"  # marker present but no text - fallback
+        return None
 
     def _sum_runs(self, live_result, side):
         runs = live_result.get("runs")

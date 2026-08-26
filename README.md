@@ -83,10 +83,13 @@ still something scheduled, otherwise the next date with matches, searched day by
 days ahead) and lists it the same way `!liiga next` does. **Only works in `#pesis.fi`** — unlike
 every other command, it's restricted to that one channel (see `"channels"` in
 `command_handler.py`); typing it elsewhere is silently ignored. Uses pesistulokset.fi's
-unofficial JSON API. Individual run announcements are best-effort (pesäpallo's scoring
-vocabulary wasn't fully catalogued — roughly 85-100% of a match's runs get an individual chat
-line in testing), but the score and final result are always accurate since they come from the
-API's own authoritative live-result summary, never computed locally.
+unofficial JSON API. Each run announcement names both the etenijä (scorer) and, when different,
+the lyöjä (the batter whose hit caused it), e.g. `RUN: Joensuun Maila — Konsta Piironen (lyöjä:
+Joosua Rättö) | ...`; period transitions (jakso 1/2, supervuoro, kotiutuslyöntikilpailu) get
+their own `JAKSO:` announcement. Individual run announcements are best-effort (pesäpallo's
+scoring vocabulary wasn't fully catalogued — roughly 85-100% of a match's runs get an individual
+chat line in testing), but the score and final result are always accurate since they come from
+the API's own authoritative live-result summary, never computed locally.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).

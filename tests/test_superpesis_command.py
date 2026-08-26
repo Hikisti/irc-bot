@@ -610,6 +610,58 @@ class TestFetchMatchRoster:
         assert roster == {16798: {}, 16804: {}}
 
 
+class TestPeriodEndDetection:
+    """periodend detection is built directly against real data - see the
+    commit history this was developed against for exact payloads."""
+
+    def _periodend_sub_event(self, text="Ensimmäinen jakso päättyi"):
+        return {
+            "texts": [{"type": "event", "text": text}, {"type": "stat", "periodend": 1}],
+            "runnersAtBases": [None] * 5,
+        }
+
+    def test_extracts_the_period_end_text(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[self._periodend_sub_event()])
+        assert sc._extract_period_end_text(event) == "Ensimmäinen jakso päättyi"
+
+    def test_second_period_text(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[
+            self._periodend_sub_event("Toinen jakso päättyi"),
+        ])
+        assert sc._extract_period_end_text(event) == "Toinen jakso päättyi"
+
+    def test_supervuoro_text(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[
+            self._periodend_sub_event("Supervuoro päättyi"),
+        ])
+        assert sc._extract_period_end_text(event) == "Supervuoro päättyi"
+
+    def test_match_end_is_not_mistaken_for_period_end(self, sc):
+        # "Ottelu päättyi" uses a different stat key ("match-ended"), not
+        # "periodend" - confirmed live these never overlap.
+        event = match_event(1, team_id=16798, sub_events=[
+            {"texts": [{"type": "event", "text": "Ottelu päättyi"},
+                       {"type": "stat", "match-ended": "2026-08-25T19:33:00+03:00"}]},
+        ])
+        assert sc._extract_period_end_text(event) is None
+
+    def test_regular_run_is_not_mistaken_for_period_end(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[run_sub_event(1, 16798)])
+        assert sc._extract_period_end_text(event) is None
+
+    def test_no_events_returns_none(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[])
+        assert sc._extract_period_end_text(event) is None
+
+
+class TestFormatPeriodEnd:
+    def test_format(self, sc):
+        msg = sc._format_period_end("Ensimmäinen jakso päättyi", "Home", "Away", 4, 2)
+        assert msg.startswith(sc.PERIOD_END_PREFIX)
+        assert "Ensimmäinen jakso päättyi" in msg
+        assert "Home 4-2 Away" in msg
+
+
 class TestSumRuns:
     def test_sums_across_periods(self, sc):
         live = {"runs": [{"home": [2, 0], "away": [1]}, {"home": [3], "away": [0, 1]}]}
@@ -669,12 +721,14 @@ class TestMatchesSummary:
 
 class TestFormatRun:
     def test_includes_team_scorer_and_score(self, sc):
+        # period=1 is the *second* period - the feed is 0-indexed
+        # (confirmed live: "Ensimmäinen jakso päättyi" carries period=0).
         event = {"period": 1}
         msg = sc._format_run(event, "Home", "Away", 3, 1, 16802, 16802, "Santtu Patova")
         assert msg.startswith(sc.RUN_PREFIX)
         assert "Home — Santtu Patova" in msg
         assert "Home 3-1 Away" in msg
-        assert "(jakso 1)" in msg
+        assert "(2. jakso)" in msg
 
     def test_away_team_scoring(self, sc):
         event = {"period": 2}
@@ -686,8 +740,26 @@ class TestFormatRun:
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, None)
         assert "Unknown" in msg
 
-    def test_period_zero_has_no_label(self, sc):
+    def test_period_zero_is_first_period_not_omitted(self, sc):
+        # Regression test: period=0 is a real, meaningful value (1st
+        # period) - must not be treated as "no period" just because it's
+        # falsy in Python.
         event = {"period": 0}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(1. jakso)" in msg
+
+    def test_period_two_is_supervuoro(self, sc):
+        event = {"period": 2}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(supervuoro)" in msg
+
+    def test_period_three_is_kotiutuslyontikilpailu(self, sc):
+        event = {"period": 3}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(kotiutuslyöntikilpailu)" in msg
+
+    def test_missing_period_has_no_label(self, sc):
+        event = {}
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
         assert "jakso" not in msg
 
@@ -769,6 +841,22 @@ class TestProcessMatch:
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
         assert new_state["roster"] == roster
+
+    def test_period_end_is_announced(self, sc):
+        bot = MagicMock()
+        prev = self._prev(event_count=0)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        events = [match_event(1, team_id=16802, period=0, sub_events=[
+            {"texts": [{"type": "event", "text": "Ensimmäinen jakso päättyi"},
+                       {"type": "stat", "periodend": 1}]},
+        ])]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events):
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        message = bot.send_message.call_args[0][1]
+        assert message.startswith(sc.PERIOD_END_PREFIX)
+        assert "Ensimmäinen jakso päättyi" in message
 
     def test_new_run_is_announced_and_scored(self, sc):
         bot = MagicMock()
