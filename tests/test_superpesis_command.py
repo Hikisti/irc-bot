@@ -251,6 +251,59 @@ class TestRun:
         assert "Manse PP-Hyvinkään Tahko" in message
 
 
+class TestSeedMatchExtras:
+    def test_fills_in_event_count_and_roster_for_every_match(self, sc):
+        state = {
+            1: {"event_count": 0, "roster": {}},
+            2: {"event_count": 0, "roster": {}},
+        }
+        rosters = {1: {10802: {1: "A"}}, 2: {10804: {1: "B"}}}
+
+        def fake_events(mid):
+            return [{"id": i} for i in range(mid * 3)]
+
+        def fake_roster(mid):
+            return rosters[mid]
+
+        with patch.object(sc, "_fetch_match_events", side_effect=fake_events), \
+             patch.object(sc, "_fetch_match_roster", side_effect=fake_roster):
+            sc._seed_match_extras(state)
+
+        assert state[1]["event_count"] == 3
+        assert state[2]["event_count"] == 6
+        assert state[1]["roster"] == rosters[1]
+        assert state[2]["roster"] == rosters[2]
+
+    def test_matches_are_fetched_concurrently_not_sequentially(self, sc):
+        # If this ran sequentially, 3 matches x 0.1s each would take
+        # >=0.3s; concurrently it should take roughly one slot's worth.
+        state = {i: {"event_count": 0, "roster": {}} for i in (1, 2, 3)}
+
+        def slow_events(mid):
+            time.sleep(0.1)
+            return []
+
+        with patch.object(sc, "_fetch_match_events", side_effect=slow_events), \
+             patch.object(sc, "_fetch_match_roster", return_value={}):
+            start = time.time()
+            sc._seed_match_extras(state)
+            elapsed = time.time() - start
+
+        assert elapsed < 0.25
+
+    def test_event_fetch_failure_leaves_event_count_untouched(self, sc):
+        state = {1: {"event_count": 5, "roster": {}}}
+
+        with patch.object(sc, "_fetch_match_events", return_value=None), \
+             patch.object(sc, "_fetch_match_roster", return_value={}):
+            sc._seed_match_extras(state)
+
+        assert state[1]["event_count"] == 5  # unchanged, not reset to 0
+
+    def test_empty_state_does_nothing(self, sc):
+        sc._seed_match_extras({})  # must not raise
+
+
 class TestStop:
     def test_stop_without_active_tracking(self, sc):
         assert "Not currently tracking" in sc.execute("stop", irc_bot=MagicMock(), channel="#pesis.fi")
@@ -424,6 +477,33 @@ class TestSeriesResolution:
         resp.json.side_effect = ValueError()
         with patch.object(sc.session, "get", return_value=resp):
             assert sc._resolve_series_id() is None
+
+    def test_uses_current_season_filter(self, sc):
+        # The unfiltered response is ~5.6MB (all historical seasons) vs
+        # ~1MB filtered - confirmed live. Must always ask for the filter.
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
+            sc._resolve_series_id()
+        assert mock_get.call_args.kwargs["params"]["current-season"] == "true"
+
+    def test_result_is_cached_across_calls(self, sc):
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
+            first = sc._resolve_series_id()
+            second = sc._resolve_series_id()
+        assert first == second == 2945
+        mock_get.assert_called_once()  # second call must hit the cache
+
+    def test_cache_expires_after_ttl(self, sc):
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
+            sc._resolve_series_id()
+            with patch("time.monotonic", return_value=time.monotonic() + sc.SERIES_CACHE_TTL_SECONDS + 1):
+                sc._resolve_series_id()
+        assert mock_get.call_count == 2
+
+    def test_failed_lookup_is_not_cached(self, sc):
+        with patch.object(sc.session, "get", side_effect=requests.exceptions.Timeout) as mock_get:
+            sc._resolve_series_id()
+            sc._resolve_series_id()
+        assert mock_get.call_count == 2  # no successful id to cache, so it keeps retrying
 
 
 class TestFetchMatches:

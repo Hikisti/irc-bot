@@ -1,5 +1,7 @@
 import datetime
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytz
 import requests
@@ -52,6 +54,14 @@ class SuperpesisCommand:
         Jersey numbers are resolved against that match's own roster
         (fetched once via /public/match?id=, see _fetch_match_roster())
         instead. See _resolve_scorer_name().
+      - Performance: /public/series-list is large (confirmed live: ~1MB
+        even filtered to the current season via "current-season=true",
+        ~5.6MB unfiltered across 82+ historical seasons) and was the
+        single biggest cost in !superpesis start. Its result is cached
+        (SERIES_CACHE_TTL_SECONDS) since the resolved id only changes
+        around a season boundary. Per-match event/roster seeding also
+        runs concurrently across matches rather than one at a time (see
+        _seed_match_extras()), since they're independent lookups.
     """
 
     needs_irc_context = True
@@ -72,6 +82,14 @@ class SuperpesisCommand:
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
+
+    # /public/series-list is ~1MB even filtered to the current season alone
+    # (5.6MB unfiltered, across 82+ historical seasons) - confirmed live
+    # this was the single biggest cost in !superpesis start. The resolved
+    # id only ever changes around a season boundary, so caching it for a
+    # few hours cuts that cost to (near) zero on every start after the
+    # first, at negligible staleness risk.
+    SERIES_CACHE_TTL_SECONDS = 6 * 3600
 
     BOLD = "\x02"
     COLOR_RESET = "\x0F"
@@ -102,6 +120,7 @@ class SuperpesisCommand:
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", "matches"}
         self._player_cache = {}  # player id -> display name
+        self._series_cache = None  # (series_id, resolved_at_monotonic) or None
 
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
         arg = (args or "").strip().lower()
@@ -223,18 +242,7 @@ class SuperpesisCommand:
             return
 
         state = {mid: self._seed_snapshot(m) for mid, m in matches.items()}
-        for mid, snapshot in state.items():
-            # Seed each match's event baseline from a real fetch, so the
-            # first poll doesn't replay every run already scored today in
-            # a match that was already in progress when !superpesis start
-            # was run (same principle as !liiga's goal-count baseline).
-            events = self._fetch_match_events(mid)
-            if events is not None:
-                snapshot["event_count"] = len(events)
-            # Roster (jersey number -> name), needed to resolve scorer
-            # names for matches whose event feed only gives jersey numbers
-            # rather than global player ids - see _last_player_ref().
-            snapshot["roster"] = self._fetch_match_roster(mid)
+        self._seed_match_extras(state)
 
         with self._lock:
             entry = self._channels.get(channel)
@@ -248,6 +256,27 @@ class SuperpesisCommand:
         )
 
         self._poll_loop(irc_bot, channel, stop_event, series_id)
+
+    def _seed_match_extras(self, state):
+        """Fills in each match's event-count baseline and roster in
+        `state` (mutated in place). One match's events+roster fetch
+        doesn't depend on any other's, so all matches are seeded
+        concurrently rather than one at a time - with 2+ matches tracked
+        (the common case) this roughly halves the time !superpesis start
+        takes to report back."""
+        if not state:
+            return
+
+        def seed_one(mid):
+            events = self._fetch_match_events(mid)
+            roster = self._fetch_match_roster(mid)
+            return mid, events, roster
+
+        with ThreadPoolExecutor(max_workers=len(state)) as executor:
+            for mid, events, roster in executor.map(seed_one, state.keys()):
+                if events is not None:
+                    state[mid]["event_count"] = len(events)
+                state[mid]["roster"] = roster
 
     def _drop_if_current(self, channel, stop_event):
         with self._lock:
@@ -632,11 +661,22 @@ class SuperpesisCommand:
         """Finds the current season's "Miesten Superpesis" seasonSeries id
         by name, so this doesn't need updating every season. Returns None
         on any failure (network error, unexpected shape, or just not
-        found)."""
+        found). Result is cached (SERIES_CACHE_TTL_SECONDS) since the id
+        is stable for an entire season and the underlying request is
+        the single heaviest one this command makes."""
+        if self._series_cache is not None:
+            series_id, resolved_at = self._series_cache
+            if time.monotonic() - resolved_at < self.SERIES_CACHE_TTL_SECONDS:
+                return series_id
+
         try:
             resp = self.session.get(
                 f"{self.BASE_URL}/public/series-list",
-                params={"apikey": self.API_KEY},
+                # Restricts the response to the current season only -
+                # ~1MB instead of ~5.6MB for the unfiltered (all 82+
+                # historical seasons) response. Same param the site's own
+                # frontend uses for this.
+                params={"apikey": self.API_KEY, "current-season": "true"},
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
@@ -656,13 +696,18 @@ class SuperpesisCommand:
             return (s.get("season") or {}).get("season", -1)
 
         latest = max(seasons, key=season_year)
+        series_id = None
         for ss in latest.get("seasonSerieses") or []:
             level_name = (ss.get("level") or {}).get("name")
             series_name = (ss.get("series") or {}).get("name")
             if level_name == self.SERIES_LEVEL_NAME and series_name == self.SERIES_NAME:
                 season_series = ss.get("seasonSeries") or {}
-                return season_series.get("id")
-        return None
+                series_id = season_series.get("id")
+                break
+
+        if series_id is not None:
+            self._series_cache = (series_id, time.monotonic())
+        return series_id
 
     def _fetch_today_matches(self, series_id):
         """Returns {match_id: match_dict} for today, or None on failure."""
