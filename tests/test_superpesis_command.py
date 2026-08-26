@@ -251,6 +251,27 @@ class TestRun:
         assert "Manse PP-Hyvinkään Tahko" in message
 
 
+class TestSeedSnapshot:
+    def test_seeds_from_the_current_period_only(self, sc):
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        match["liveResult"] = {
+            "finished": False,
+            "lastPeriod": 1,
+            "runs": [{"home": [4], "away": [2]}, {"home": [0], "away": [1]}],
+        }
+        snapshot = sc._seed_snapshot(match)
+        assert snapshot["period"] == 1
+        assert snapshot["period_home_runs"] == 0
+        assert snapshot["period_away_runs"] == 1
+
+    def test_defaults_to_period_zero_with_no_live_result(self, sc):
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        snapshot = sc._seed_snapshot(match)
+        assert snapshot["period"] == 0
+        assert snapshot["period_home_runs"] == 0
+        assert snapshot["period_away_runs"] == 0
+
+
 class TestSeedMatchExtras:
     def test_fills_in_event_count_and_roster_for_every_match(self, sc):
         state = {
@@ -755,6 +776,42 @@ class TestSumRuns:
         assert sc._sum_runs({"runs": "not a list"}, "home") is None
 
 
+class TestPeriodRuns:
+    """Regression coverage: pesäpallo scores each jakso independently
+    (confirmed live via the API's own runs_home_first_period/
+    second_period/etc split), so RUN:/JAKSO: must use only the current
+    period's own tally, not a match-wide cumulative sum like _sum_runs()."""
+
+    LIVE = {"runs": [
+        {"home": [0, 0, 2, 0], "away": [0, 1, 1, 0]},   # jakso 1: 2-2
+        {"home": [3, 0, 6, None], "away": [0, 0, None, None]},  # jakso 2 (in progress): 9-0
+    ]}
+
+    def test_scoped_to_a_single_period(self, sc):
+        assert sc._period_runs(self.LIVE, "home", 0) == 2
+        assert sc._period_runs(self.LIVE, "away", 0) == 2
+
+    def test_different_period_gives_a_different_total(self, sc):
+        # This is the actual bug: summing (_sum_runs) would give 11 for
+        # home here (2+9), not jakso 2's own 9.
+        assert sc._period_runs(self.LIVE, "home", 1) == 9
+        assert sc._period_runs(self.LIVE, "away", 1) == 0
+
+    def test_none_values_in_the_period_are_ignored(self, sc):
+        # jakso 2's arrays contain None for innings not yet played.
+        assert sc._period_runs(self.LIVE, "home", 1) == 9
+
+    def test_none_period_index_returns_none(self, sc):
+        assert sc._period_runs(self.LIVE, "home", None) is None
+
+    def test_out_of_range_period_index_returns_none(self, sc):
+        assert sc._period_runs(self.LIVE, "home", 5) is None
+        assert sc._period_runs(self.LIVE, "home", -1) is None
+
+    def test_missing_runs_returns_none(self, sc):
+        assert sc._period_runs({}, "home", 0) is None
+
+
 class TestPlayerResolution:
     def test_resolves_and_caches(self, sc):
         payload = {"name": "Santtu Patova"}
@@ -867,8 +924,9 @@ class TestProcessMatch:
             "away_id": 16796,
             "home_name": "Manse PP",
             "away_name": "Hyvinkään Tahko",
-            "home_runs": 0,
-            "away_runs": 0,
+            "period": 0,
+            "period_home_runs": 0,
+            "period_away_runs": 0,
             "event_count": 0,
             "finished": False,
             "roster": {},
@@ -953,19 +1011,70 @@ class TestProcessMatch:
         assert "RUN:" in message
         assert "Test Player" in message
 
-    def test_score_snaps_to_authoritative_total(self, sc):
+    def test_score_resets_across_a_period_boundary(self, sc):
+        # The actual reported bug: a run in the 2nd period was showing
+        # the match-wide cumulative score (e.g. 4-3, continuing from
+        # jakso 1's 4-2) instead of restarting at 0 for the new period.
         bot = MagicMock()
-        # Our own counting would only get to 1, but the authoritative
-        # liveResult says 3 - the final state must reflect the latter.
-        prev = self._prev(event_count=0, home_runs=0)
-        match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=3, away_runs=0)
-        events = [match_event(1, team_id=16802, sub_events=[run_sub_event(111, 16802)])]
+        prev = self._prev(event_count=0, period=0, period_home_runs=4, period_away_runs=2)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        events = [match_event(1, team_id=16796, period=1, sub_events=[run_sub_event(111, 16796)])]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events), \
+             patch.object(sc, "_resolve_player_name", return_value="Test Player"):
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        message = bot.send_message.call_args[0][1]
+        assert "Manse PP 0-1 Hyvinkään Tahko" in message  # not 4-3
+        assert "(2. jakso)" in message
+
+    def test_period_field_updates_when_the_period_changes(self, sc):
+        bot = MagicMock()
+        prev = self._prev(event_count=0, period=0, period_home_runs=4, period_away_runs=2)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        events = [match_event(1, team_id=16796, period=1, sub_events=[run_sub_event(111, 16796)])]
 
         with patch.object(sc, "_fetch_match_events", return_value=events), \
              patch.object(sc, "_resolve_player_name", return_value="Test Player"):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
-        assert new_state["home_runs"] == 3
+        assert new_state["period"] == 1
+        assert new_state["period_home_runs"] == 0
+        assert new_state["period_away_runs"] == 1
+
+    def test_period_end_uses_the_ending_periods_own_score_not_reset(self, sc):
+        bot = MagicMock()
+        prev = self._prev(event_count=0, period=0, period_home_runs=0, period_away_runs=0)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        events = [
+            match_event(1, team_id=16802, period=0, sub_events=[run_sub_event(111, 16802)]),
+            match_event(2, team_id=16802, period=0, sub_events=[
+                {"texts": [{"type": "event", "text": "Ensimmäinen jakso päättyi"},
+                           {"type": "stat", "periodend": 1}]},
+            ]),
+        ]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events), \
+             patch.object(sc, "_resolve_player_name", return_value="Test Player"):
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        period_end_msg = next(m for m in messages if m.startswith(sc.PERIOD_END_PREFIX))
+        assert "Manse PP 1-0 Hyvinkään Tahko" in period_end_msg
+
+    def test_score_snaps_to_authoritative_total(self, sc):
+        bot = MagicMock()
+        # Our own counting would only get to 1, but the authoritative
+        # liveResult says 3 - the final state must reflect the latter.
+        prev = self._prev(event_count=0, period=0, period_home_runs=0)
+        match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=3, away_runs=0)
+        events = [match_event(1, team_id=16802, period=0, sub_events=[run_sub_event(111, 16802)])]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events), \
+             patch.object(sc, "_resolve_player_name", return_value="Test Player"):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        assert new_state["period_home_runs"] == 3
 
     def test_no_new_events_sends_nothing(self, sc):
         bot = MagicMock()
@@ -979,8 +1088,12 @@ class TestProcessMatch:
 
     def test_finish_transition_sends_final(self, sc):
         bot = MagicMock()
-        prev = self._prev(event_count=0, finished=False, home_runs=2, away_runs=1)
-        match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=2, away_runs=1, finished=True)
+        # FINAL sums across the whole match (unlike RUN/JAKSO, which are
+        # scoped to the current period), so this uses a multi-period
+        # liveResult directly rather than make_match()'s single-period one.
+        prev = self._prev(event_count=0, finished=False)
+        match = make_match(mid=146953, home_id=16802, away_id=16796, finished=True)
+        match["liveResult"]["runs"] = [{"home": [2], "away": [1]}, {"home": [0], "away": [0]}]
 
         with patch.object(sc, "_fetch_match_events", return_value=None):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
@@ -992,7 +1105,7 @@ class TestProcessMatch:
 
     def test_already_finished_does_not_resend_final(self, sc):
         bot = MagicMock()
-        prev = self._prev(finished=True, home_runs=2, away_runs=1)
+        prev = self._prev(finished=True, period_home_runs=2, period_away_runs=1)
         match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=2, away_runs=1, finished=True)
 
         with patch.object(sc, "_fetch_match_events", return_value=None):
@@ -1020,8 +1133,8 @@ class TestProcessMatch:
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
         bot.send_message.assert_not_called()
-        assert new_state["home_runs"] == 0
-        assert new_state["away_runs"] == 0
+        assert new_state["period_home_runs"] == 0
+        assert new_state["period_away_runs"] == 0
 
 
 class TestPollOnce:
@@ -1032,7 +1145,7 @@ class TestPollOnce:
         bot = MagicMock()
         self._seed(sc, "#pesis.fi", {
             146953: {"match_id": 146953, "home_id": 1, "away_id": 2, "home_name": "A", "away_name": "B",
-                     "home_runs": 1, "away_runs": 0, "event_count": 0, "finished": True},
+                     "period": 0, "period_home_runs": 1, "period_away_runs": 0, "event_count": 0, "finished": True},
         })
         match = make_match(mid=146953, home_id=1, away_id=2, finished=True)
 
@@ -1046,7 +1159,7 @@ class TestPollOnce:
         bot = MagicMock()
         self._seed(sc, "#pesis.fi", {
             146953: {"match_id": 146953, "home_id": 1, "away_id": 2, "home_name": "A", "away_name": "B",
-                     "home_runs": 0, "away_runs": 0, "event_count": 0, "finished": False},
+                     "period": 0, "period_home_runs": 0, "period_away_runs": 0, "event_count": 0, "finished": False},
         })
         match = make_match(mid=146953, home_id=1, away_id=2, finished=False)
 
@@ -1068,7 +1181,7 @@ class TestPollOnce:
     def test_match_missing_from_todays_list_is_left_alone(self, sc):
         bot = MagicMock()
         prev_snapshot = {"match_id": 146953, "home_id": 1, "away_id": 2, "home_name": "A", "away_name": "B",
-                          "home_runs": 0, "away_runs": 0, "event_count": 0, "finished": False}
+                          "period": 0, "period_home_runs": 0, "period_away_runs": 0, "event_count": 0, "finished": False}
         self._seed(sc, "#pesis.fi", {146953: prev_snapshot})
 
         with patch.object(sc, "_fetch_today_matches", return_value={}):

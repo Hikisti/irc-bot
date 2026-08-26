@@ -358,15 +358,30 @@ class SuperpesisCommand:
         roster = prev.get("roster") or {}
 
         events = self._fetch_match_events(prev["match_id"])
-        home_runs, away_runs = prev["home_runs"], prev["away_runs"]
+        # Pesäpallo scores each jakso independently, not as a match-long
+        # running total (the API's own result object bears this out: it
+        # has separate runs_home_first_period/second_period/super_inning/
+        # scoring_contest fields, not one cumulative count) - so the score
+        # shown in RUN:/JAKSO: lines tracks only the *current* period,
+        # reset whenever the period changes.
+        current_period = prev.get("period")
+        period_home_runs = prev["period_home_runs"]
+        period_away_runs = prev["period_away_runs"]
 
         if events is not None and len(events) > prev["event_count"]:
             for event in events[prev["event_count"]:]:
+                event_period = event.get("period")
+
                 for player_ref, scoring_team_id, batter in self._extract_runs(event):
+                    if event_period != current_period:
+                        period_home_runs = 0
+                        period_away_runs = 0
+                        current_period = event_period
+
                     if scoring_team_id == home_id:
-                        home_runs += 1
+                        period_home_runs += 1
                     elif scoring_team_id == away_id:
-                        away_runs += 1
+                        period_away_runs += 1
                     else:
                         continue
                     scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
@@ -379,32 +394,43 @@ class SuperpesisCommand:
                         if batter is not None else None
                     )
                     self._safe_send(irc_bot, channel, self._format_run(
-                        event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id,
+                        event, home_name, away_name, period_home_runs, period_away_runs, scoring_team_id, home_id,
                         scorer_name, batter_name,
                     ))
 
                 period_end_text = self._extract_period_end_text(event)
                 if period_end_text:
+                    # Uses the still-unreset tally above: the period-end
+                    # marker carries the *ending* period's own value, so
+                    # this always announces that period's final score
+                    # before the next run (if any) resets the counters.
                     self._safe_send(irc_bot, channel, self._format_period_end(
-                        period_end_text, home_name, away_name, home_runs, away_runs,
+                        period_end_text, home_name, away_name, period_home_runs, period_away_runs,
                     ))
 
         event_count = len(events) if events is not None else prev["event_count"]
 
-        # The authoritative score always wins over our running per-run
-        # count above, so a missed/misparsed event self-corrects on the
-        # very next poll instead of drifting forever.
-        authoritative_home, authoritative_away = self._sum_runs(live, "home"), self._sum_runs(live, "away")
+        # The authoritative per-period total always wins over the running
+        # count above, so a missed/misparsed run (or period transition)
+        # self-corrects on the very next poll instead of drifting forever.
+        authoritative_home = self._period_runs(live, "home", current_period)
+        authoritative_away = self._period_runs(live, "away", current_period)
         if authoritative_home is not None:
-            home_runs = authoritative_home
+            period_home_runs = authoritative_home
         if authoritative_away is not None:
-            away_runs = authoritative_away
+            period_away_runs = authoritative_away
 
         finished = bool(live.get("finished"))
         if finished and not prev.get("finished"):
+            # FINAL is the whole match, unlike RUN/JAKSO - summed across
+            # every period rather than scoped to just the last one.
+            final_home = self._sum_runs(live, "home")
+            final_away = self._sum_runs(live, "away")
+            final_home_str = final_home if final_home is not None else "?"
+            final_away_str = final_away if final_away is not None else "?"
             self._safe_send(
                 irc_bot, channel,
-                f"{self.FINAL_PREFIX} {home_name} {home_runs}-{away_runs} {away_name}",
+                f"{self.FINAL_PREFIX} {home_name} {final_home_str}-{final_away_str} {away_name}",
             )
 
         return {
@@ -413,8 +439,9 @@ class SuperpesisCommand:
             "away_id": away_id,
             "home_name": home_name,
             "away_name": away_name,
-            "home_runs": home_runs,
-            "away_runs": away_runs,
+            "period": current_period,
+            "period_home_runs": period_home_runs,
+            "period_away_runs": period_away_runs,
             "event_count": event_count,
             "finished": finished,
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
@@ -546,6 +573,26 @@ class SuperpesisCommand:
                     found_any = True
         return total if found_any else None
 
+    def _period_runs(self, live_result, side, period_index):
+        """Like _sum_runs(), but scoped to a single period rather than
+        summed across the whole match - used for RUN:/JAKSO:, since
+        pesäpallo scores each jakso independently (see _process_match)."""
+        if period_index is None:
+            return None
+        runs = live_result.get("runs")
+        if not isinstance(runs, list) or not (0 <= period_index < len(runs)):
+            return None
+        values = (runs[period_index] or {}).get(side)
+        if not isinstance(values, list):
+            return None
+        total = 0
+        found_any = False
+        for v in values:
+            if isinstance(v, (int, float)):
+                total += v
+                found_any = True
+        return total if found_any else None
+
     # ---- player name resolution --------------------------------------
 
     def _resolve_player_name(self, player_id):
@@ -642,14 +689,22 @@ class SuperpesisCommand:
 
     def _seed_snapshot(self, match):
         live = match.get("liveResult") or {}
+        # "lastPeriod" is the period currently (or most recently) being
+        # played, confirmed live - e.g. lastPeriod=1 ("2. jakso") with
+        # lastPeriodFinished=False for a match mid-second-period. Falls
+        # back to 0 (1st period) for a match with no liveResult data yet.
+        current_period = live.get("lastPeriod")
+        if current_period is None:
+            current_period = 0
         return {
             "match_id": match.get("id"),
             "home_id": (match.get("home") or {}).get("id"),
             "away_id": (match.get("away") or {}).get("id"),
             "home_name": (match.get("home") or {}).get("name") or "Unknown",
             "away_name": (match.get("away") or {}).get("name") or "Unknown",
-            "home_runs": self._sum_runs(live, "home") or 0,
-            "away_runs": self._sum_runs(live, "away") or 0,
+            "period": current_period,
+            "period_home_runs": self._period_runs(live, "home", current_period) or 0,
+            "period_away_runs": self._period_runs(live, "away", current_period) or 0,
             "event_count": 0,  # seeded from a real fetch below, see _run()
             "finished": bool(live.get("finished")),
             "roster": {},  # seeded from a real fetch below, see _run()
