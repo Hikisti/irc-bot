@@ -357,6 +357,14 @@ class SuperpesisCommand:
         return all_ended
 
     def _process_match(self, irc_bot, channel, match, prev):
+        if prev.get("finished"):
+            # Confirmed live: the event feed can keep appending events
+            # (apparent corrections/re-syncs to a period's tally) well
+            # after "Ottelu päättyi" already fired and FINAL: was sent -
+            # once a match is done, stop touching it entirely rather than
+            # risk more RUN:/JAKSO: lines that contradict the final result.
+            return prev
+
         live = match.get("liveResult") or {}
         home_id, away_id = prev["home_id"], prev["away_id"]
         home_name, away_name = prev["home_name"], prev["away_name"]
@@ -427,15 +435,9 @@ class SuperpesisCommand:
 
         finished = bool(live.get("finished"))
         if finished and not prev.get("finished"):
-            # FINAL is the whole match, unlike RUN/JAKSO - summed across
-            # every period rather than scoped to just the last one.
-            final_home = self._sum_runs(live, "home")
-            final_away = self._sum_runs(live, "away")
-            final_home_str = final_home if final_home is not None else "?"
-            final_away_str = final_away if final_away is not None else "?"
             self._safe_send(
                 irc_bot, channel,
-                f"{self.FINAL_PREFIX} {home_name} {final_home_str}-{final_away_str} {away_name}",
+                f"{self.FINAL_PREFIX} {self._format_final(live, home_name, away_name)}",
             )
 
         return {
@@ -538,6 +540,30 @@ class SuperpesisCommand:
             f"{self.PERIOD_END_PREFIX} {text} | "
             f"{home_name} {home_runs}-{away_runs} {away_name}"
         )
+
+    def _format_final(self, live_result, home_name, away_name) -> str:
+        """Real pesäpallo results are headlined by jaksovoitot (periods
+        won), not total runs - e.g. pesistulokset.fi's own result_string
+        is "1-0k (0-0, 0-0, 0-0, 2-1)". "periods" (confirmed live) gives
+        the jaksovoitot; the parenthetical is each played period's own
+        run tally via _period_runs(), skipping periods that never
+        happened (e.g. a match decided without needing a tie-break)."""
+        periods = live_result.get("periods") or {}
+        home_won, away_won = periods.get("home"), periods.get("away")
+        headline = f"{home_won} - {away_won}" if home_won is not None and away_won is not None else "? - ?"
+
+        breakdown_parts = []
+        runs = live_result.get("runs")
+        if isinstance(runs, list):
+            for index in range(len(runs)):
+                h = self._period_runs(live_result, "home", index)
+                a = self._period_runs(live_result, "away", index)
+                if h is None and a is None:
+                    continue  # period never played (e.g. no tie-break needed)
+                breakdown_parts.append(f"{h if h is not None else 0} - {a if a is not None else 0}")
+        breakdown = f" ({', '.join(breakdown_parts)})" if breakdown_parts else ""
+
+        return f"{home_name} - {away_name} {headline}{breakdown}"
 
     def _extract_period_end_text(self, event):
         """Returns the human-readable text for a period-ending event (e.g.

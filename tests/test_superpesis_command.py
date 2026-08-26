@@ -806,6 +806,56 @@ class TestFormatPeriodEnd:
         assert "Home 4-2 Away" in msg
 
 
+class TestFormatFinal:
+    """Real pesäpallo results are headlined by jaksovoitot (periods won),
+    not total runs - matches pesistulokset.fi's own result_string shape,
+    e.g. "1-0k (0-0, 0-0, 0-0, 2-1)"."""
+
+    def test_matches_the_requested_format(self, sc):
+        live = {
+            "periods": {"home": 1, "away": 0},
+            "runs": [{"home": [4], "away": [2]}, {"home": [2], "away": [2]}],
+        }
+        result = sc._format_final(live, "Joensuun Maila", "Sotkamon Jymy")
+        assert result == "Joensuun Maila - Sotkamon Jymy 1 - 0 (4 - 2, 2 - 2)"
+
+    def test_unplayed_periods_are_omitted_from_the_breakdown(self, sc):
+        live = {
+            "periods": {"home": 1, "away": 0},
+            "runs": [
+                {"home": [4], "away": [2]},
+                {"home": [2], "away": [2]},
+                {"home": [None], "away": [None]},  # supervuoro - never needed
+                {"home": [None], "away": [None]},  # kotiutuslyöntikilpailu - never needed
+            ],
+        }
+        result = sc._format_final(live, "Home", "Away")
+        assert result == "Home - Away 1 - 0 (4 - 2, 2 - 2)"
+
+    def test_includes_a_played_tiebreak(self, sc):
+        live = {
+            "periods": {"home": 1, "away": 0},
+            "runs": [
+                {"home": [0], "away": [0]},
+                {"home": [0], "away": [0]},
+                {"home": [0], "away": [0]},
+                {"home": [2], "away": [1]},  # kotiutuslyöntikilpailu decided it
+            ],
+        }
+        result = sc._format_final(live, "Home", "Away")
+        assert result == "Home - Away 1 - 0 (0 - 0, 0 - 0, 0 - 0, 2 - 1)"
+
+    def test_missing_periods_field_falls_back_gracefully(self, sc):
+        live = {"runs": [{"home": [4], "away": [2]}]}
+        result = sc._format_final(live, "Home", "Away")
+        assert result == "Home - Away ? - ? (4 - 2)"
+
+    def test_no_runs_data_omits_the_breakdown_entirely(self, sc):
+        live = {"periods": {"home": 1, "away": 0}}
+        result = sc._format_final(live, "Home", "Away")
+        assert result == "Home - Away 1 - 0"
+
+
 class TestSumRuns:
     def test_sums_across_periods(self, sc):
         live = {"runs": [{"home": [2, 0], "away": [1]}, {"home": [3], "away": [0, 1]}]}
@@ -1131,12 +1181,13 @@ class TestProcessMatch:
 
     def test_finish_transition_sends_final(self, sc):
         bot = MagicMock()
-        # FINAL sums across the whole match (unlike RUN/JAKSO, which are
-        # scoped to the current period), so this uses a multi-period
-        # liveResult directly rather than make_match()'s single-period one.
+        # FINAL is headlined by jaksovoitot (periods won) with a
+        # per-period run breakdown, unlike RUN/JAKSO which are scoped to
+        # the current period - see TestFormatFinal for the format itself.
         prev = self._prev(event_count=0, finished=False)
         match = make_match(mid=146953, home_id=16802, away_id=16796, finished=True)
         match["liveResult"]["runs"] = [{"home": [2], "away": [1]}, {"home": [0], "away": [0]}]
+        match["liveResult"]["periods"] = {"home": 1, "away": 0}
 
         with patch.object(sc, "_fetch_match_events", return_value=None):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
@@ -1144,7 +1195,7 @@ class TestProcessMatch:
         assert new_state["finished"] is True
         message = bot.send_message.call_args[0][1]
         assert message.startswith(sc.FINAL_PREFIX)
-        assert "Manse PP 2-1 Hyvinkään Tahko" in message
+        assert "Manse PP - Hyvinkään Tahko 1 - 0 (2 - 1, 0 - 0)" in message
 
     def test_already_finished_does_not_resend_final(self, sc):
         bot = MagicMock()
@@ -1155,6 +1206,25 @@ class TestProcessMatch:
             sc._process_match(bot, "#pesis.fi", match, prev)
 
         bot.send_message.assert_not_called()
+
+    def test_already_finished_match_is_never_touched_again(self, sc):
+        # Regression test for a real incident: the event feed kept
+        # appending events (apparent corrections) well after "Ottelu
+        # päättyi" had already fired and FINAL: had already been sent,
+        # producing contradictory RUN:/JAKSO: lines for a finished match.
+        # Once finished, a match must be skipped entirely - not just have
+        # its messages suppressed - so no amount of new "corrected" data
+        # can produce any announcement for it again.
+        bot = MagicMock()
+        prev = self._prev(finished=True, period_home_runs=2, period_away_runs=1)
+        match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=2, away_runs=1, finished=True)
+
+        with patch.object(sc, "_fetch_match_events") as mock_fetch_events:
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        mock_fetch_events.assert_not_called()
+        bot.send_message.assert_not_called()
+        assert new_state is prev
 
     def test_events_fetch_failure_does_not_crash(self, sc):
         bot = MagicMock()

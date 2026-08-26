@@ -87,8 +87,12 @@ unofficial JSON API. Each run announcement names both the etenijä (scorer) and,
 the lyöjä (the batter whose hit caused it), e.g. `RUN: Joensuun Maila — Konsta Piironen (lyöjä:
 Joosua Rättö) | ...`; period transitions (jakso 1/2, supervuoro, kotiutuslyöntikilpailu) get
 their own `JAKSO:` announcement. The score shown in `RUN:`/`JAKSO:` lines is scoped to the
-current jakso only (pesäpallo scores each period independently, not as a running match total) —
-`FINAL:` still reports the whole match. Individual run announcements are best-effort (pesäpallo's
+current jakso only (pesäpallo scores each period independently, not as a running match total).
+`FINAL:` reports the whole match in the real pesäpallo convention — jaksovoitot (periods won) as
+the headline, per-period run breakdown in parens, e.g. `FINAL: Joensuun Maila - Sotkamon Jymy
+1 - 0 (4 - 2, 2 - 2)`. A match stops being touched entirely once it's finished, so a
+provider-side correction to the event feed after the fact can't produce more messages for it.
+Individual run announcements are best-effort (pesäpallo's
 scoring vocabulary wasn't fully catalogued — roughly 85-100% of a match's runs get an individual
 chat line in testing), but the score and final result are always accurate since they come from
 the API's own authoritative live-result summary, never computed locally.
