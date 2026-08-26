@@ -54,6 +54,11 @@ class SuperpesisCommand:
     SERIES_LEVEL_NAME = "Superpesis"
     SERIES_NAME = "Miehet"
 
+    # How far forward !superpesis next searches, day by day, for the next
+    # scheduled matchday - the API has no "next date with matches" hint
+    # like liiga.fi does, so this is a bounded linear search instead.
+    NEXT_SEARCH_MAX_DAYS = 21
+
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
@@ -82,7 +87,9 @@ class SuperpesisCommand:
             return self._start(irc_bot, channel)
         elif arg == "stop":
             return self._stop(channel)
-        return "Usage: !superpesis start | !superpesis stop"
+        elif arg == "next":
+            return self._next(irc_bot, channel)
+        return "Usage: !superpesis start | !superpesis stop | !superpesis next"
 
     # ---- start / stop -----------------------------------------------
 
@@ -116,6 +123,51 @@ class SuperpesisCommand:
             return "Not currently tracking Superpesis matches in this channel."
         entry["stop_event"].set()
         return "Stopped live Superpesis tracking."
+
+    def _next(self, irc_bot, channel):
+        if irc_bot is None or channel is None:
+            return "Error: this command needs channel context."
+
+        # One-shot lookup, no persistent state - still backgrounded so a
+        # slow API can't stall the bot.
+        threading.Thread(
+            target=self._run_next,
+            args=(irc_bot, channel),
+            daemon=True,
+        ).start()
+
+        return "Checking the next Superpesis matchday..."
+
+    def _run_next(self, irc_bot, channel):
+        try:
+            series_id = self._resolve_series_id()
+        except Exception as e:
+            print(f"Superpesis series lookup error: {e}")
+            series_id = None
+
+        if series_id is None:
+            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            return
+
+        try:
+            status, date_str, matches = self._fetch_next_matchday(series_id)
+        except Exception as e:
+            print(f"Superpesis next-matchday fetch error: {e}")
+            status, date_str, matches = "error", None, None
+
+        if status == "error":
+            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            return
+        if status == "not_found":
+            self._safe_send(
+                irc_bot, channel,
+                f"No upcoming Superpesis matches found in the next {self.NEXT_SEARCH_MAX_DAYS} days.",
+            )
+            return
+
+        label = self._format_date_label(date_str)
+        summary = self._format_matches_summary(matches.values())
+        self._safe_send(irc_bot, channel, f"Next Superpesis matchday ({label}): {summary}")
 
     # ---- background thread entry point --------------------------------
 
@@ -429,6 +481,19 @@ class SuperpesisCommand:
         order.sort(key=lambda label: (label == "??:??", label))
         return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
 
+    def _format_date_label(self, date_str) -> str:
+        try:
+            target = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return date_str or "unknown date"
+
+        today = datetime.datetime.now(self.HELSINKI_TZ).date()
+        if target == today:
+            return "today"
+        if target == today + datetime.timedelta(days=1):
+            return "tomorrow"
+        return target.strftime("%a %d/%m")
+
     def _seed_snapshot(self, match):
         live = match.get("liveResult") or {}
         return {
@@ -484,7 +549,11 @@ class SuperpesisCommand:
     def _fetch_today_matches(self, series_id):
         """Returns {match_id: match_dict} for today, or None on failure."""
         now = datetime.datetime.now(self.HELSINKI_TZ)
-        date_str = now.strftime("%Y-%m-%d")
+        return self._fetch_matches_for_date(series_id, now.strftime("%Y-%m-%d"))
+
+    def _fetch_matches_for_date(self, series_id, date_str):
+        """Returns {match_id: match_dict} for a specific date, or None on
+        failure."""
         try:
             resp = self.session.get(
                 f"{self.BASE_URL}/public/matches-list",
@@ -510,6 +579,25 @@ class SuperpesisCommand:
                     if mid is not None:
                         matches[mid] = m
         return matches
+
+    def _fetch_next_matchday(self, series_id):
+        """Searches forward day by day (bounded by NEXT_SEARCH_MAX_DAYS,
+        starting today) for the next date with scheduled matches.
+
+        Returns a ("found", date_str, matches_dict) / ("not_found", None,
+        None) / ("error", None, None) triple - kept distinct from a plain
+        None so the caller can tell "genuinely nothing scheduled soon"
+        apart from "couldn't reach the API" instead of conflating them.
+        """
+        now = datetime.datetime.now(self.HELSINKI_TZ)
+        for offset in range(self.NEXT_SEARCH_MAX_DAYS + 1):
+            date_str = (now + datetime.timedelta(days=offset)).strftime("%Y-%m-%d")
+            matches = self._fetch_matches_for_date(series_id, date_str)
+            if matches is None:
+                return "error", None, None
+            if matches:
+                return "found", date_str, matches
+        return "not_found", None, None
 
     def _fetch_match_events(self, match_id):
         """Returns the full events list for a match, or None on failure."""

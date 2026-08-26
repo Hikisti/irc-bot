@@ -257,6 +257,129 @@ class TestStop:
             release.set()
 
 
+class TestNext:
+    def test_next_returns_immediately_without_blocking(self, sc):
+        release = threading.Event()
+
+        def slow_next():
+            release.wait(timeout=2)
+            return "found", "2026-08-28", {1: make_match(mid=1)}
+
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_next_matchday", side_effect=slow_next):
+            start = time.time()
+            result = sc.execute("next", irc_bot=bot, channel="#pesis.fi")
+            elapsed = time.time() - start
+
+            assert elapsed < 1, "execute() blocked on the network"
+            assert "Checking" in result
+
+            release.set()
+            time.sleep(0.2)  # let the one-shot background thread finish
+
+        bot.send_message.assert_called_once()
+
+    def test_next_without_context_errors(self, sc):
+        assert "Error" in sc.execute("next")
+
+    def test_run_next_reports_matches_and_date_label(self, sc):
+        bot = MagicMock()
+        matches = {1: make_match(mid=1, home="Sotkamon Jymy", away="Joensuun Maila")}
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_next_matchday", return_value=("found", "2026-08-28", matches)), \
+             patch.object(sc, "_format_date_label", return_value="tomorrow"):
+            sc._run_next(bot, "#pesis.fi")
+
+        message = bot.send_message.call_args[0][1]
+        assert "Next Superpesis matchday (tomorrow)" in message
+        assert "Sotkamon Jymy-Joensuun Maila" in message
+
+    def test_run_next_series_lookup_fails(self, sc):
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", return_value=None):
+            sc._run_next(bot, "#pesis.fi")
+        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
+
+    def test_run_next_api_error(self, sc):
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_next_matchday", return_value=("error", None, None)):
+            sc._run_next(bot, "#pesis.fi")
+        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
+
+    def test_run_next_nothing_found(self, sc):
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_next_matchday", return_value=("not_found", None, None)):
+            sc._run_next(bot, "#pesis.fi")
+        message = bot.send_message.call_args[0][1]
+        assert "No upcoming Superpesis matches found" in message
+        assert str(sc.NEXT_SEARCH_MAX_DAYS) in message
+
+    def test_run_next_unexpected_exception_does_not_propagate(self, sc):
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_next_matchday", side_effect=RuntimeError("boom")):
+            sc._run_next(bot, "#pesis.fi")  # must not raise
+        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
+
+
+class TestFetchNextMatchday:
+    def test_finds_the_first_date_with_matches(self, sc):
+        calls = []
+
+        def fake_fetch(series_id, date_str):
+            calls.append(date_str)
+            return {1: make_match(mid=1)} if len(calls) == 3 else {}
+
+        with patch.object(sc, "_fetch_matches_for_date", side_effect=fake_fetch):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+
+        assert status == "found"
+        assert len(calls) == 3
+        assert matches == {1: make_match(mid=1)}
+
+    def test_returns_today_if_matches_already_scheduled_today(self, sc):
+        with patch.object(sc, "_fetch_matches_for_date", return_value={1: make_match(mid=1)}):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+        assert status == "found"
+        assert matches == {1: make_match(mid=1)}
+
+    def test_gives_up_after_max_days_and_reports_not_found(self, sc):
+        with patch.object(sc, "_fetch_matches_for_date", return_value={}):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+        assert status == "not_found"
+        assert date_str is None
+        assert matches is None
+
+    def test_request_failure_reports_error_distinct_from_not_found(self, sc):
+        with patch.object(sc, "_fetch_matches_for_date", return_value=None):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+        assert status == "error"
+
+
+class TestDateLabel:
+    def test_today(self, sc):
+        import datetime
+        today = datetime.datetime.now(sc.HELSINKI_TZ).strftime("%Y-%m-%d")
+        assert sc._format_date_label(today) == "today"
+
+    def test_tomorrow(self, sc):
+        import datetime
+        tomorrow = (datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        assert sc._format_date_label(tomorrow) == "tomorrow"
+
+    def test_other_date_shows_weekday_and_date(self, sc):
+        import datetime
+        far_future = datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(days=10)
+        label = sc._format_date_label(far_future.strftime("%Y-%m-%d"))
+        assert far_future.strftime("%d/%m") in label
+
+    def test_malformed_date_falls_back_to_raw_string(self, sc):
+        assert sc._format_date_label("not-a-date") == "not-a-date"
+
+
 class TestSeriesResolution:
     def test_finds_mens_superpesis_in_latest_season(self, sc):
         with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
