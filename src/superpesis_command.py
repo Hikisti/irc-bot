@@ -1,4 +1,6 @@
 import datetime
+import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -88,8 +90,11 @@ class SuperpesisCommand:
     # this was the single biggest cost in !superpesis start. The resolved
     # id only ever changes around a season boundary, so caching it for a
     # few hours cuts that cost to (near) zero on every start after the
-    # first, at negligible staleness risk.
+    # first, at negligible staleness risk. Persisted to disk (not just
+    # kept in memory) so a bot restart doesn't lose it either - otherwise
+    # every restart pays the full cost again on the very next start.
     SERIES_CACHE_TTL_SECONDS = 6 * 3600
+    SERIES_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superpesis_series_cache.json")
 
     BOLD = "\x02"
     COLOR_RESET = "\x0F"
@@ -120,7 +125,7 @@ class SuperpesisCommand:
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", "matches"}
         self._player_cache = {}  # player id -> display name
-        self._series_cache = None  # (series_id, resolved_at_monotonic) or None
+        self._series_cache = None  # (series_id, resolved_at_epoch_seconds) or None; see _resolve_series_id()
 
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
         arg = (args or "").strip().lower()
@@ -716,12 +721,17 @@ class SuperpesisCommand:
         """Finds the current season's "Miesten Superpesis" seasonSeries id
         by name, so this doesn't need updating every season. Returns None
         on any failure (network error, unexpected shape, or just not
-        found). Result is cached (SERIES_CACHE_TTL_SECONDS) since the id
-        is stable for an entire season and the underlying request is
-        the single heaviest one this command makes."""
+        found). Result is cached (SERIES_CACHE_TTL_SECONDS), both
+        in-memory and on disk, since the id is stable for an entire
+        season and the underlying request is the single heaviest one
+        this command makes - the on-disk copy means a bot restart
+        doesn't lose the cache either."""
+        if self._series_cache is None:
+            self._series_cache = self._load_series_cache()
+
         if self._series_cache is not None:
             series_id, resolved_at = self._series_cache
-            if time.monotonic() - resolved_at < self.SERIES_CACHE_TTL_SECONDS:
+            if time.time() - resolved_at < self.SERIES_CACHE_TTL_SECONDS:
                 return series_id
 
         try:
@@ -761,8 +771,31 @@ class SuperpesisCommand:
                 break
 
         if series_id is not None:
-            self._series_cache = (series_id, time.monotonic())
+            self._series_cache = (series_id, time.time())
+            self._save_series_cache(self._series_cache)
         return series_id
+
+    def _load_series_cache(self):
+        try:
+            with open(self.SERIES_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return (data["series_id"], data["resolved_at"])
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"Superpesis: failed to read series cache file: {e}")
+            return None
+
+    def _save_series_cache(self, cache):
+        series_id, resolved_at = cache
+        try:
+            with open(self.SERIES_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"series_id": series_id, "resolved_at": resolved_at}, f)
+        except OSError as e:
+            # Not fatal - just means this run's cache stays in-memory-only
+            # (per _resolve_series_id's in-memory check) instead of also
+            # surviving a restart.
+            print(f"Superpesis: failed to write series cache file: {e}")
 
     def _fetch_today_matches(self, series_id):
         """Returns {match_id: match_dict} for today, or None on failure."""

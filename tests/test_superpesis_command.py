@@ -131,7 +131,12 @@ def join_channel_thread(sc, channel, timeout=2):
 
 
 @pytest.fixture
-def sc():
+def sc(tmp_path, monkeypatch):
+    # Isolate every test from the real on-disk series-id cache: without
+    # this, a leftover cache file from a real bot run (or another test)
+    # would make _resolve_series_id() skip the mocked session.get() call
+    # entirely, breaking assertions that expect it to be called.
+    monkeypatch.setattr(SuperpesisCommand, "SERIES_CACHE_FILE", str(tmp_path / "series_cache.json"))
     return SuperpesisCommand()
 
 
@@ -516,9 +521,47 @@ class TestSeriesResolution:
     def test_cache_expires_after_ttl(self, sc):
         with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
             sc._resolve_series_id()
-            with patch("time.monotonic", return_value=time.monotonic() + sc.SERIES_CACHE_TTL_SECONDS + 1):
+            with patch("time.time", return_value=time.time() + sc.SERIES_CACHE_TTL_SECONDS + 1):
                 sc._resolve_series_id()
         assert mock_get.call_count == 2
+
+    def test_cache_survives_across_instances_via_disk(self, sc):
+        # The whole point of persisting to disk: a fresh instance (e.g.
+        # after a bot restart) should still hit the cache rather than
+        # refetching, as long as SERIES_CACHE_FILE points at the same
+        # (still-fresh) file.
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
+            sc._resolve_series_id()
+
+        fresh_instance = SuperpesisCommand()
+        with patch.object(fresh_instance.session, "get") as mock_get2:
+            series_id = fresh_instance._resolve_series_id()
+
+        mock_get2.assert_not_called()
+        assert series_id == 2945
+
+    def test_stale_disk_cache_is_not_used(self, sc):
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
+            sc._resolve_series_id()
+
+        stale_time = time.time() - sc.SERIES_CACHE_TTL_SECONDS - 1
+        with open(sc.SERIES_CACHE_FILE, "w") as f:
+            import json
+            json.dump({"series_id": 2945, "resolved_at": stale_time}, f)
+
+        fresh_instance = SuperpesisCommand()
+        with patch.object(fresh_instance.session, "get", return_value=make_response(series_list_payload())) as mock_get2:
+            fresh_instance._resolve_series_id()
+
+        mock_get2.assert_called_once()
+
+    def test_missing_cache_file_is_not_an_error(self, sc):
+        assert sc._load_series_cache() is None  # tmp_path file doesn't exist yet
+
+    def test_corrupt_cache_file_is_ignored(self, sc):
+        with open(sc.SERIES_CACHE_FILE, "w") as f:
+            f.write("not valid json{{{")
+        assert sc._load_series_cache() is None
 
     def test_failed_lookup_is_not_cached(self, sc):
         with patch.object(sc.session, "get", side_effect=requests.exceptions.Timeout) as mock_get:

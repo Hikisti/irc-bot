@@ -127,6 +127,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Runtime caches
+src/.superpesis_series_cache.json
+
 # Environments
 .env
 .venv
