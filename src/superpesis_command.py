@@ -328,8 +328,17 @@ class SuperpesisCommand:
                     else:
                         continue
                     scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
+                    # The batter ("lyöjä") who put the ball in play is a
+                    # separate person from the runner who scored
+                    # ("etenijä") - resolved the same way (roster first,
+                    # since it's just as likely to be a jersey number).
+                    batter_name = (
+                        self._resolve_scorer_name(None, scoring_team_id, batter, roster)
+                        if batter is not None else None
+                    )
                     self._safe_send(irc_bot, channel, self._format_run(
-                        event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id, scorer_name,
+                        event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id,
+                        scorer_name, batter_name,
                     ))
 
         event_count = len(events) if events is not None else prev["event_count"]
@@ -424,13 +433,18 @@ class SuperpesisCommand:
                     ref = {"number": t.get("number")}
         return ref
 
-    def _format_run(self, event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id, scorer_name):
+    def _format_run(self, event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id,
+                     scorer_name, batter_name=None):
         scoring_team = home_name if scoring_team_id == home_id else away_name
         period = event.get("period")
         period_str = f" (jakso {period})" if period else ""
         scorer_str = scorer_name or "Unknown"
+        # Skip the "lyöjä" clause if it's the same person as the scorer
+        # (e.g. a home run) or unresolvable - no point naming "Unknown"
+        # twice or repeating a name for no information gain.
+        batter_str = f" (lyöjä: {batter_name})" if batter_name and batter_name != scorer_name else ""
         return (
-            f"{self.RUN_PREFIX} {scoring_team} — {scorer_str} | "
+            f"{self.RUN_PREFIX} {scoring_team} — {scorer_str}{batter_str} | "
             f"{home_name} {home_runs}-{away_runs} {away_name}{period_str}"
         )
 

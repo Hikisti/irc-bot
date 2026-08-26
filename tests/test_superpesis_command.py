@@ -691,6 +691,21 @@ class TestFormatRun:
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
         assert "jakso" not in msg
 
+    def test_includes_batter_when_different_from_scorer(self, sc):
+        event = {"period": 1}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Konsta Piironen", "Joosua Rättö")
+        assert "Konsta Piironen (lyöjä: Joosua Rättö)" in msg
+
+    def test_omits_batter_when_same_as_scorer(self, sc):
+        event = {"period": 1}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Same Person", "Same Person")
+        assert "lyöjä" not in msg
+
+    def test_omits_batter_when_unresolved(self, sc):
+        event = {"period": 1}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Scorer", None)
+        assert "lyöjä" not in msg
+
 
 class TestProcessMatch:
     def _prev(self, **overrides):
@@ -727,6 +742,22 @@ class TestProcessMatch:
         mock_global_lookup.assert_not_called()  # must never treat "1" as a global id
         message = bot.send_message.call_args[0][1]
         assert "Konsta Piironen" in message
+
+    def test_batter_and_scorer_both_shown_when_different(self, sc):
+        bot = MagicMock()
+        roster = {16798: {1: "Konsta Piironen", 4: "Joosua Rättö"}}
+        prev = self._prev(match_id=146949, home_id=16798, away_id=16804, roster=roster)
+        match = make_match(mid=146949, home_id=16798, away_id=16804)
+        events = [match_event(
+            1, team_id=16798, batter=4,
+            sub_events=[run_sub_event_by_number(1, 16798)],
+        )]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events):
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        message = bot.send_message.call_args[0][1]
+        assert "Konsta Piironen (lyöjä: Joosua Rättö)" in message
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
