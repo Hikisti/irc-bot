@@ -65,10 +65,10 @@ in `src/irc_bot.py`.
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
 all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the next upcoming
-gameday (today if there's still something scheduled, otherwise the next date with games) and
-lists its matchups grouped by start time, e.g. `Next Liiga gameday (tomorrow): 18:30 TPS-Jokerit,
-Pelicans-KooKoo`. Uses the unofficial liiga.fi JSON API, so no key is needed but the endpoint
-isn't guaranteed to stay stable.
+gameday (today if there's still something scheduled and not already finished, otherwise the next
+date with games) and lists its matchups grouped by start time, e.g. `Next Liiga gameday
+(tomorrow): 18:30 TPS-Jokerit, Pelicans-KooKoo`. Uses the unofficial liiga.fi JSON API, so no key
+is needed but the endpoint isn't guaranteed to stay stable.
 
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
@@ -79,8 +79,9 @@ this avoids silently misreading a multi-word city name as the wrong split.
 every 30s and announces runs and final results as they happen, the same way `!liiga start` does
 for hockey — stops automatically once all of today's matches have finished, or on
 `!superpesis stop`. `!superpesis next` looks up the next upcoming matchday (today if there's
-still something scheduled, otherwise the next date with matches, searched day by day up to 21
-days ahead) and lists it the same way `!liiga next` does. **Only works in `#pesis.fi`** — unlike
+still something scheduled and not already finished, otherwise the next date with matches,
+searched day by day up to 21 days ahead) and lists it the same way `!liiga next` does. **Only
+works in `#pesis.fi`** — unlike
 every other command, it's restricted to that one channel (see `"channels"` in
 `command_handler.py`); typing it elsewhere is silently ignored. Uses pesistulokset.fi's
 unofficial JSON API. Each run announcement names both the etenijä (scorer) and, when different,

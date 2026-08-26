@@ -859,7 +859,10 @@ class SuperpesisCommand:
 
     def _fetch_next_matchday(self, series_id):
         """Searches forward day by day (bounded by NEXT_SEARCH_MAX_DAYS,
-        starting today) for the next date with scheduled matches.
+        starting today) for the next date with scheduled matches *that
+        aren't all already finished* - so checking !superpesis next hours
+        after today's matches ended reports the actual next matchday
+        instead of repeating today's now-stale result.
 
         Returns a ("found", date_str, matches_dict) / ("not_found", None,
         None) / ("error", None, None) triple - kept distinct from a plain
@@ -872,9 +875,16 @@ class SuperpesisCommand:
             matches = self._fetch_matches_for_date(series_id, date_str)
             if matches is None:
                 return "error", None, None
-            if matches:
+            # Only today's (offset 0) result needs the "already finished"
+            # check - a future date's matches can't have finished yet.
+            if matches and not (offset == 0 and self._all_matches_finished(matches)):
                 return "found", date_str, matches
         return "not_found", None, None
+
+    def _all_matches_finished(self, matches) -> bool:
+        return bool(matches) and all(
+            bool((m.get("liveResult") or {}).get("finished")) for m in matches.values()
+        )
 
     def _fetch_match_events(self, match_id):
         """Returns the full events list for a match, or None on failure."""

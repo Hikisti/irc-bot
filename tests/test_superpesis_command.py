@@ -1,3 +1,4 @@
+import datetime
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -454,6 +455,51 @@ class TestFetchNextMatchday:
         with patch.object(sc, "_fetch_matches_for_date", return_value=None):
             status, date_str, matches = sc._fetch_next_matchday(2945)
         assert status == "error"
+
+    def test_skips_today_when_all_of_todays_matches_already_finished(self, sc):
+        # Regression test for a real report: checking !superpesis next
+        # hours after today's matches finished repeated today's stale
+        # result instead of finding the actual next matchday.
+        finished_today = make_match(mid=1, finished=True)
+        tomorrow_match = make_match(mid=2, finished=False)
+        today_str = datetime.datetime.now(sc.HELSINKI_TZ).strftime("%Y-%m-%d")
+        tomorrow_str = (datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+        def fake_fetch(series_id, date_str):
+            if date_str == today_str:
+                return {1: finished_today}
+            if date_str == tomorrow_str:
+                return {2: tomorrow_match}
+            return {}
+
+        with patch.object(sc, "_fetch_matches_for_date", side_effect=fake_fetch):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+
+        assert status == "found"
+        assert date_str == tomorrow_str
+        assert matches == {2: tomorrow_match}
+
+    def test_returns_today_if_only_some_of_todays_matches_have_finished(self, sc):
+        finished = make_match(mid=1, finished=True)
+        still_live = make_match(mid=2, finished=False)
+
+        with patch.object(sc, "_fetch_matches_for_date", return_value={1: finished, 2: still_live}):
+            status, date_str, matches = sc._fetch_next_matchday(2945)
+
+        assert status == "found"
+        assert matches == {1: finished, 2: still_live}
+
+
+class TestAllMatchesFinished:
+    def test_true_when_every_match_finished(self, sc):
+        assert sc._all_matches_finished({1: make_match(mid=1, finished=True)}) is True
+
+    def test_false_when_any_match_not_finished(self, sc):
+        matches = {1: make_match(mid=1, finished=True), 2: make_match(mid=2, finished=False)}
+        assert sc._all_matches_finished(matches) is False
+
+    def test_false_for_empty_dict(self, sc):
+        assert sc._all_matches_finished({}) is False
 
 
 class TestDateLabel:

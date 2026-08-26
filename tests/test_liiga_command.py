@@ -534,6 +534,56 @@ class TestFetchNextGameday:
         assert date_str is None
         assert games is None
 
+    def test_skips_today_when_all_of_todays_games_already_ended(self, liiga_command):
+        # Regression test for a real report: checking !liiga next hours
+        # after today's games finished repeated today's stale result
+        # instead of finding the actual next gameday. The API gives no
+        # nextGameDate hint when today's query *did* have games (ended or
+        # not), so this must fall back to the day-by-day search.
+        finished_today = make_game(gid=1, ended=True, finished_type="ENDED_DURING_REGULAR_GAME_TIME")
+        tomorrow_game = make_game(gid=2, ended=False)
+        today_str = datetime.datetime.now(liiga_command.HELSINKI_TZ).strftime("%Y-%m-%d")
+        tomorrow_str = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+        def fake_get(url, params=None, timeout=None):
+            if params["date"] == today_str and params["tournament"] == "runkosarja":
+                return self._make_response(games=[finished_today])
+            if params["date"] == tomorrow_str and params["tournament"] == "runkosarja":
+                return self._make_response(games=[tomorrow_game])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert date_str == tomorrow_str
+        assert games == {2: tomorrow_game}
+
+    def test_returns_today_if_only_some_of_todays_games_have_ended(self, liiga_command):
+        finished = make_game(gid=1, ended=True)
+        still_live = make_game(gid=2, ended=False)
+
+        def fake_get(url, params=None, timeout=None):
+            if params["tournament"] == "runkosarja":
+                return self._make_response(games=[finished, still_live])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert games == {1: finished, 2: still_live}
+
+
+class TestAllGamesEnded:
+    def test_true_when_every_game_ended(self, liiga_command):
+        assert liiga_command._all_games_ended({1: make_game(gid=1, ended=True)}) is True
+
+    def test_false_when_any_game_not_ended(self, liiga_command):
+        games = {1: make_game(gid=1, ended=True), 2: make_game(gid=2, ended=False)}
+        assert liiga_command._all_games_ended(games) is False
+
+    def test_false_for_empty_dict(self, liiga_command):
+        assert liiga_command._all_games_ended({}) is False
+
 
 class TestDateLabel:
     def test_today(self, liiga_command):

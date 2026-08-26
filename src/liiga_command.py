@@ -30,6 +30,12 @@ class LiigaCommand:
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
 
+    # Fallback bound for !liiga next's day-by-day search when today had
+    # games but they're all already finished (so the API's own
+    # "nextGameDate" hint isn't available - it's only given when a date
+    # has no games at all, see _fetch_next_gameday()).
+    NEXT_SEARCH_MAX_DAYS = 21
+
     PERIOD_LABELS = {1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO"}
 
     # mIRC formatting codes. Bold + a mid-saturation color so the prefix
@@ -426,28 +432,47 @@ class LiigaCommand:
 
     def _fetch_next_gameday(self):
         """Returns (date_str, games_dict) for the closest date (today or
-        later) that has Liiga games, or (None, None) if that can't be
-        determined (API unreachable, or genuinely nothing scheduled)."""
+        later) that has games *not all already finished*, or (None, None)
+        if that can't be determined (API unreachable, or genuinely
+        nothing scheduled)."""
         now = datetime.datetime.now(self.HELSINKI_TZ)
         today_str = now.strftime("%Y-%m-%d")
 
         games, next_date = self._fetch_games_and_next_date(today_str, self._current_season(now))
         if games is None:
             return None, None
-        if games:
+        if games and not self._all_games_ended(games):
             return today_str, games
-        if not next_date:
-            return None, None
 
-        try:
-            next_dt = self.HELSINKI_TZ.localize(datetime.datetime.strptime(next_date, "%Y-%m-%d"))
-        except ValueError:
-            return None, None
+        # Today has no games, or only ones that have already finished
+        # (e.g. checking !liiga next hours after today's games ended) -
+        # look forward. Prefer the API's own "nextGameDate" hint when
+        # available - it's only given when today's query had no games at
+        # all, but can jump weeks ahead (e.g. across an off-season gap),
+        # farther than the bounded day-by-day fallback below would reach.
+        if next_date:
+            try:
+                next_dt = self.HELSINKI_TZ.localize(datetime.datetime.strptime(next_date, "%Y-%m-%d"))
+                hinted_games, _ = self._fetch_games_and_next_date(next_date, self._current_season(next_dt))
+                if hinted_games:
+                    return next_date, hinted_games
+            except ValueError:
+                pass
 
-        next_games, _ = self._fetch_games_and_next_date(next_date, self._current_season(next_dt))
-        if not next_games:
-            return None, None
-        return next_date, next_games
+        # No hint (today did have games, just all finished already), or
+        # the hinted date turned out empty - fall back to a bounded
+        # day-by-day search.
+        for offset in range(1, self.NEXT_SEARCH_MAX_DAYS + 1):
+            date = now + datetime.timedelta(days=offset)
+            date_str = date.strftime("%Y-%m-%d")
+            candidate_games, _ = self._fetch_games_and_next_date(date_str, self._current_season(date))
+            if candidate_games:
+                return date_str, candidate_games
+
+        return None, None
+
+    def _all_games_ended(self, games) -> bool:
+        return bool(games) and all(bool(g.get("ended")) for g in games.values())
 
     def _snapshot(self, game) -> dict:
         return {
