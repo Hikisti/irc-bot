@@ -14,6 +14,7 @@ class IrcBot:
         self.channels = channels if channels else ["#bottest123"]  # Default channel
         self.running = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._send_lock = threading.Lock()  # serializes socket writes across threads
         self.command_handler = CommandHandler()  # Initialize command handler
         self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
 
@@ -75,7 +76,14 @@ class IrcBot:
         """Send a raw command to the IRC server."""
         print(f"> {message}")  # Debugging
         try:
-            self.sock.send((message + "\r\n").encode("utf-8"))
+            # sendall() (rather than send()) guarantees the whole line goes
+            # out in one go rather than potentially partial-writing; the
+            # lock then serializes that across threads (multiple command
+            # background pollers, e.g. !liiga and !superpesis, plus the
+            # listener thread, can all call this concurrently) so two
+            # messages can never interleave mid-line on the wire.
+            with self._send_lock:
+                self.sock.sendall((message + "\r\n").encode("utf-8"))
         except Exception as e:
             print(f"Failed to send message: {e}")
 
