@@ -16,6 +16,7 @@ class SuperpesisCommand:
     Usage:
       !superpesis start  -> start polling today's matches in this channel
       !superpesis stop   -> stop polling in this channel
+      !superpesis next   -> show the next upcoming matchday and its times
 
     Restricted to the #pesis.fi channel (see CommandHandler's "channels"
     config), unlike most other commands.
@@ -39,9 +40,18 @@ class SuperpesisCommand:
         roughly 85-100% of each match's actual run total as individual
         "RUN:" announcements - the remainder isn't itemized as a
         recognizable event in the feed at all (e.g. bulk scoring-contest
-        totals). This is a real, disclosed gap in the play-by-play, not a
-        rounding error to "fix" later; the final/authoritative score is
-        never affected by it either way (see _process_match).
+        totals, "vapaataival" free-base scores). This is a real,
+        disclosed gap in the play-by-play, not a rounding error to "fix"
+        later; the final/authoritative score is never affected by it
+        either way (see _process_match).
+      - Scorer identification: a player reference in the event feed is
+        either a global {"id": N} (resolved via /public/player/{id}) or a
+        per-match jersey {"number": N} - confirmed live that some matches
+        only give the latter, and that treating a jersey number as a
+        global id resolves to a real but completely unrelated player.
+        Jersey numbers are resolved against that match's own roster
+        (fetched once via /public/match?id=, see _fetch_match_roster())
+        instead. See _resolve_scorer_name().
     """
 
     needs_irc_context = True
@@ -208,6 +218,10 @@ class SuperpesisCommand:
             events = self._fetch_match_events(mid)
             if events is not None:
                 snapshot["event_count"] = len(events)
+            # Roster (jersey number -> name), needed to resolve scorer
+            # names for matches whose event feed only gives jersey numbers
+            # rather than global player ids - see _last_player_ref().
+            snapshot["roster"] = self._fetch_match_roster(mid)
 
         with self._lock:
             entry = self._channels.get(channel)
@@ -299,20 +313,21 @@ class SuperpesisCommand:
         live = match.get("liveResult") or {}
         home_id, away_id = prev["home_id"], prev["away_id"]
         home_name, away_name = prev["home_name"], prev["away_name"]
+        roster = prev.get("roster") or {}
 
         events = self._fetch_match_events(prev["match_id"])
         home_runs, away_runs = prev["home_runs"], prev["away_runs"]
 
         if events is not None and len(events) > prev["event_count"]:
             for event in events[prev["event_count"]:]:
-                for scorer_id, scoring_team_id in self._extract_runs(event):
+                for player_ref, scoring_team_id, batter in self._extract_runs(event):
                     if scoring_team_id == home_id:
                         home_runs += 1
                     elif scoring_team_id == away_id:
                         away_runs += 1
                     else:
                         continue
-                    scorer_name = self._resolve_player_name(scorer_id) if scorer_id else None
+                    scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
                     self._safe_send(irc_bot, channel, self._format_run(
                         event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id, scorer_name,
                     ))
@@ -345,14 +360,17 @@ class SuperpesisCommand:
             "away_runs": away_runs,
             "event_count": event_count,
             "finished": finished,
+            "roster": roster,  # rosters don't change mid-match, carry forward unchanged
         }
 
     # ---- event parsing --------------------------------------------------
 
     def _extract_runs(self, event):
-        """Yields (scorer_player_id_or_None, scoring_team_id) for every run
-        scored within this event - a single event can contain more than
-        one (e.g. a hit that scores multiple runners already on base).
+        """Yields (player_ref, scoring_team_id, batter_fallback) for every
+        run scored within this event - a single event can contain more
+        than one (e.g. a hit that scores multiple runners already on
+        base). player_ref is {"id": N}, {"number": N}, or None - see
+        _resolve_scorer_name() for why there are two shapes.
 
         Best-effort against real data, not a guarantee: pesäpallo's event
         feed has a rich Finnish scoring vocabulary that a handful of real
@@ -367,10 +385,8 @@ class SuperpesisCommand:
         for sub_event in event.get("events") or []:
             texts = sub_event.get("texts") or []
             if self._is_run_sub_event(texts):
-                player_id = self._last_player_id(texts)
-                if player_id is None:
-                    player_id = event.get("batter")
-                yield player_id, team_id
+                player_ref = self._last_player_ref(texts)
+                yield player_ref, team_id, event.get("batter")
 
     def _is_run_sub_event(self, texts) -> bool:
         # Two confirmed ways pesäpallo's event feed records a run reaching
@@ -391,12 +407,22 @@ class SuperpesisCommand:
                 return True
         return False
 
-    def _last_player_id(self, texts):
-        player_id = None
+    def _last_player_ref(self, texts):
+        """Two confirmed formats a player reference in the event feed can
+        take, apparently varying by match/data source: some matches embed
+        a global player "id" directly (used with _resolve_player_name());
+        others only give a per-match jersey "number" - confirmed live
+        that treating the latter as a global id resolves to a real but
+        completely unrelated player, so it must instead be looked up
+        against that match's own roster (see _resolve_scorer_name())."""
+        ref = None
         for t in texts:
-            if isinstance(t, dict) and t.get("type") == "player" and t.get("id") is not None:
-                player_id = t.get("id")
-        return player_id
+            if isinstance(t, dict) and t.get("type") == "player":
+                if t.get("id") is not None:
+                    ref = {"id": t.get("id")}
+                elif t.get("number") is not None:
+                    ref = {"number": t.get("number")}
+        return ref
 
     def _format_run(self, event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id, scorer_name):
         scoring_team = home_name if scoring_team_id == home_id else away_name
@@ -453,6 +479,30 @@ class SuperpesisCommand:
         self._player_cache[player_id] = name
         return name
 
+    def _resolve_scorer_name(self, player_ref, team_id, batter_fallback, roster):
+        """Resolves a scorer's display name from whatever reference the
+        event feed actually gave us - see _last_player_ref() for why
+        there are two shapes, and _fetch_match_roster() for the
+        number->name mapping."""
+        if player_ref:
+            if "id" in player_ref:
+                return self._resolve_player_name(player_ref["id"])
+            if "number" in player_ref:
+                name = (roster.get(team_id) or {}).get(player_ref["number"])
+                if name:
+                    return name
+
+        if batter_fallback is not None:
+            # Try the roster first (batter is usually a jersey number in
+            # the same matches that use "number"-style player refs);
+            # only treat it as a global id if that comes up empty.
+            name = (roster.get(team_id) or {}).get(batter_fallback)
+            if name:
+                return name
+            return self._resolve_player_name(batter_fallback)
+
+        return None
+
     # ---- match summary (start message) ---------------------------------
 
     def _match_start_label(self, match):
@@ -506,6 +556,7 @@ class SuperpesisCommand:
             "away_runs": self._sum_runs(live, "away") or 0,
             "event_count": 0,  # seeded from a real fetch below, see _run()
             "finished": bool(live.get("finished")),
+            "roster": {},  # seeded from a real fetch below, see _run()
         }
 
     # ---- data fetching --------------------------------------------------
@@ -618,3 +669,44 @@ class SuperpesisCommand:
 
         events = data.get("events") if isinstance(data, dict) else None
         return events if isinstance(events, list) else None
+
+    def _fetch_match_roster(self, match_id):
+        """Returns {team_id: {jersey_number: player_name}} for a match, or
+        an empty dict on any failure (jersey-number-only player refs then
+        fall back to a placeholder name rather than crashing or - worse -
+        resolving to a real but unrelated player, which is the bug this
+        exists to fix; see _last_player_ref())."""
+        try:
+            resp = self.session.get(
+                f"{self.BASE_URL}/public/match",
+                params={"apikey": self.API_KEY, "id": match_id},
+                timeout=self.REQUEST_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Superpesis match-detail request failed for {match_id}: {e}")
+            return {}
+        except ValueError:
+            print(f"Superpesis match-detail returned invalid JSON for {match_id}")
+            return {}
+
+        if not isinstance(data, dict):
+            return {}
+
+        roster = {}
+        for side in ("home", "away"):
+            team = data.get(side) or {}
+            team_id = team.get("id")
+            if team_id is None:
+                continue
+            by_number = {}
+            for p in (team.get("players") or []):
+                if not isinstance(p, dict):
+                    continue
+                number = p.get("number")
+                name = p.get("name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+                if number is not None and name:
+                    by_number[number] = name
+            roster[team_id] = by_number
+        return roster

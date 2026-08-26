@@ -84,6 +84,21 @@ def run_sub_event(player_id, team_id, pattern="eteni_koti"):
     return {"texts": texts, "runnersAtBases": [None] * 5}
 
 
+def run_sub_event_by_number(jersey_number, team_id):
+    """Same as run_sub_event(pattern="eteni_koti") but using a jersey
+    "number" reference instead of a global "id" - the format confirmed
+    live for some matches (see _last_player_ref())."""
+    return {
+        "texts": [
+            {"team": team_id, "type": "player", "number": jersey_number},
+            {"type": "event", "text": "eteni"},
+            "kotipesään",
+            {"type": "stat", "score": 1},
+        ],
+        "runnersAtBases": [None] * 5,
+    }
+
+
 def out_at_home_sub_event(player_id, team_id):
     """"paloi" (put out) at home - must NOT be counted as a run."""
     return {
@@ -221,13 +236,16 @@ class TestRun:
         sc._channels["#pesis.fi"] = {"stop_event": stop_event, "thread": None, "matches": {}}
         match = make_match()
 
+        roster = {16802: {1: "A"}}
         with patch.object(sc, "_resolve_series_id", return_value=2945), \
              patch.object(sc, "_fetch_today_matches", return_value={146953: match}), \
              patch.object(sc, "_fetch_match_events", return_value=[{"id": 1}, {"id": 2}]), \
+             patch.object(sc, "_fetch_match_roster", return_value=roster), \
              patch.object(sc, "_poll_loop"):
             sc._run(bot, "#pesis.fi", stop_event)
 
         assert sc._channels["#pesis.fi"]["matches"][146953]["event_count"] == 2
+        assert sc._channels["#pesis.fi"]["matches"][146953]["roster"] == roster
         message = bot.send_message.call_args[0][1]
         assert "Tracking 1 Superpesis match" in message
         assert "Manse PP-Hyvinkään Tahko" in message
@@ -474,20 +492,122 @@ class TestRunDetection:
             run_sub_event(9904, 16803, pattern="eteni_koti"),
         ])
         runs = list(sc._extract_runs(event))
-        assert runs == [(9986, 16803), (9904, 16803)]
+        assert runs == [({"id": 9986}, 16803, None), ({"id": 9904}, 16803, None)]
 
-    def test_extract_runs_falls_back_to_batter_when_no_player_ref(self, sc):
+    def test_extract_runs_with_number_based_player_ref(self, sc):
+        event = match_event(1, team_id=16798, sub_events=[
+            run_sub_event_by_number(1, 16798),
+        ])
+        runs = list(sc._extract_runs(event))
+        assert runs == [({"number": 1}, 16798, None)]
+
+    def test_extract_runs_no_player_ref_carries_batter_through(self, sc):
         event = match_event(1, team_id=16802, batter=555, sub_events=[
             {"texts": [{"type": "event", "text": "juoksu"}]},
         ])
         runs = list(sc._extract_runs(event))
-        assert runs == [(555, 16802)]
+        assert runs == [(None, 16802, 555)]
 
     def test_extract_runs_empty_for_non_scoring_event(self, sc):
         event = match_event(1, team_id=16802, sub_events=[
             {"texts": ["1. lyönti", {"type": "hit", "hit": None}]},
         ])
         assert list(sc._extract_runs(event)) == []
+
+
+class TestLastPlayerRef:
+    def test_prefers_id_when_present(self, sc):
+        texts = [{"team": 1, "type": "player", "id": 42}]
+        assert sc._last_player_ref(texts) == {"id": 42}
+
+    def test_falls_back_to_number(self, sc):
+        texts = [{"team": 1, "type": "player", "number": 7}]
+        assert sc._last_player_ref(texts) == {"number": 7}
+
+    def test_no_player_entry_returns_none(self, sc):
+        assert sc._last_player_ref([{"type": "event", "text": "eteni"}]) is None
+
+    def test_takes_the_last_player_entry(self, sc):
+        texts = [
+            {"team": 1, "type": "player", "id": 1},
+            {"type": "event", "text": "eteni"},
+            {"team": 1, "type": "player", "id": 2, "hide": True},
+        ]
+        assert sc._last_player_ref(texts) == {"id": 2}
+
+
+class TestResolveScorerName:
+    def test_id_ref_uses_global_lookup(self, sc):
+        with patch.object(sc, "_resolve_player_name", return_value="Global Player") as mock_resolve:
+            name = sc._resolve_scorer_name({"id": 42}, 16798, None, {})
+        mock_resolve.assert_called_once_with(42)
+        assert name == "Global Player"
+
+    def test_number_ref_uses_roster(self, sc):
+        roster = {16798: {1: "Konsta Piironen"}}
+        name = sc._resolve_scorer_name({"number": 1}, 16798, None, roster)
+        assert name == "Konsta Piironen"
+
+    def test_number_ref_missing_from_roster_falls_through_to_batter(self, sc):
+        roster = {16798: {1: "Konsta Piironen"}}
+        with patch.object(sc, "_resolve_player_name", return_value="Fallback"):
+            name = sc._resolve_scorer_name({"number": 99}, 16798, 5, roster)
+        # number 99 isn't in the roster - must not silently invent a name.
+        assert name == "Fallback"
+        assert name != "Konsta Piironen"
+
+    def test_batter_fallback_prefers_roster_lookup_over_global_id(self, sc):
+        # Confirms the actual bug fix: a small "batter" number must NOT
+        # be resolved as if it were a global player id when the roster
+        # has an entry for it.
+        roster = {16798: {1: "Konsta Piironen"}}
+        with patch.object(sc, "_resolve_player_name") as mock_resolve:
+            name = sc._resolve_scorer_name(None, 16798, 1, roster)
+        mock_resolve.assert_not_called()
+        assert name == "Konsta Piironen"
+
+    def test_batter_fallback_uses_global_lookup_when_not_in_roster(self, sc):
+        with patch.object(sc, "_resolve_player_name", return_value="Santtu Patova") as mock_resolve:
+            name = sc._resolve_scorer_name(None, 16802, 7911, {})
+        mock_resolve.assert_called_once_with(7911)
+        assert name == "Santtu Patova"
+
+    def test_no_ref_and_no_batter_returns_none(self, sc):
+        assert sc._resolve_scorer_name(None, 16802, None, {}) is None
+
+
+class TestFetchMatchRoster:
+    def test_builds_number_to_name_mapping_for_both_teams(self, sc):
+        payload = {
+            "home": {"id": 16798, "players": [
+                {"id": 7723, "number": 1, "name": "Konsta Piironen"},
+                {"id": 11974, "number": 2, "first_name": "Niko", "last_name": "Korhonen"},
+            ]},
+            "away": {"id": 16804, "players": [
+                {"id": 9471, "number": 1, "name": "Elmeri Purmonen"},
+            ]},
+        }
+        with patch.object(sc.session, "get", return_value=make_response(payload)):
+            roster = sc._fetch_match_roster(146949)
+
+        assert roster == {
+            16798: {1: "Konsta Piironen", 2: "Niko Korhonen"},
+            16804: {1: "Elmeri Purmonen"},
+        }
+
+    def test_request_failure_returns_empty_dict(self, sc):
+        with patch.object(sc.session, "get", side_effect=requests.exceptions.Timeout):
+            assert sc._fetch_match_roster(146949) == {}
+
+    def test_malformed_response_returns_empty_dict(self, sc):
+        with patch.object(sc.session, "get", return_value=make_response(["not", "a", "dict"])):
+            assert sc._fetch_match_roster(146949) == {}
+
+    def test_missing_players_key_returns_empty_roster_for_that_team(self, sc):
+        payload = {"home": {"id": 16798}, "away": {"id": 16804, "players": []}}
+        with patch.object(sc.session, "get", return_value=make_response(payload)):
+            roster = sc._fetch_match_roster(146949)
+        assert roster == {16798: {}, 16804: {}}
 
 
 class TestSumRuns:
@@ -584,9 +704,40 @@ class TestProcessMatch:
             "away_runs": 0,
             "event_count": 0,
             "finished": False,
+            "roster": {},
         }
         prev.update(overrides)
         return prev
+
+    def test_number_based_scorer_is_resolved_via_roster(self, sc):
+        # Regression test for the real bug: a jersey-number-only player
+        # ref must resolve through the match's roster, not get treated
+        # as a global player id (which resolved to a real but completely
+        # unrelated person in production).
+        bot = MagicMock()
+        roster = {16798: {1: "Konsta Piironen"}}
+        prev = self._prev(match_id=146949, home_id=16798, away_id=16804, roster=roster)
+        match = make_match(mid=146949, home_id=16798, away_id=16804)
+        events = [match_event(1, team_id=16798, sub_events=[run_sub_event_by_number(1, 16798)])]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events), \
+             patch.object(sc, "_resolve_player_name") as mock_global_lookup:
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        mock_global_lookup.assert_not_called()  # must never treat "1" as a global id
+        message = bot.send_message.call_args[0][1]
+        assert "Konsta Piironen" in message
+
+    def test_roster_is_carried_forward_unchanged(self, sc):
+        bot = MagicMock()
+        roster = {16802: {1: "A"}, 16796: {1: "B"}}
+        prev = self._prev(roster=roster)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+
+        with patch.object(sc, "_fetch_match_events", return_value=None):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        assert new_state["roster"] == roster
 
     def test_new_run_is_announced_and_scored(self, sc):
         bot = MagicMock()
