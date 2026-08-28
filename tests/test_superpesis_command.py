@@ -1405,6 +1405,58 @@ class TestProcessMatch:
 
         assert new_state["event_count"] == prev["event_count"]
 
+    def test_event_count_baseline_never_regresses(self, sc):
+        # Regression test for a real incident: a transiently shorter
+        # events array on one poll (e.g. a flaky/incomplete API response)
+        # must not lower the stored baseline - otherwise a later poll,
+        # once the array recovers, re-slices already-announced events as
+        # "new" and re-sends them. Observed live as an exact duplicate
+        # RUN: message with the score inflated for every play after it,
+        # until the next period-end self-correction.
+        bot = MagicMock()
+        prev = self._prev(event_count=10)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+
+        # A poll that (for whatever reason) sees fewer events than the
+        # stored baseline - must not shrink event_count below 10.
+        with patch.object(sc, "_fetch_match_events", return_value=[{"id": i} for i in range(3)]):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        assert new_state["event_count"] == 10
+        bot.send_message.assert_not_called()
+
+    def test_run_not_reannounced_after_a_transient_array_shrink(self, sc):
+        # Full reproduction of the reported sequence: poll 1 processes a
+        # run; poll 2 (transiently) sees a shorter array than poll 1 did;
+        # poll 3 sees the array back to its full (or longer) length.
+        # Without the monotonic guard, poll 3 would re-slice and
+        # re-announce the run poll 1 already sent.
+        bot = MagicMock()
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        run_event = match_event(1, team_id=16802, period=0, sub_events=[run_sub_event(111, 16802)])
+
+        prev = self._prev(event_count=0, period=0)
+        with patch.object(sc, "_fetch_match_events", return_value=[run_event]), \
+             patch.object(sc, "_resolve_player_name", return_value="Test Player"):
+            prev = sc._process_match(bot, "#pesis.fi", match, prev)
+        assert prev["event_count"] == 1
+        assert bot.send_message.call_count == 1
+
+        # Poll 2: transiently shorter (e.g. flaky response) - must not
+        # crash or lower the baseline, and must not re-announce anything.
+        with patch.object(sc, "_fetch_match_events", return_value=[]):
+            prev = sc._process_match(bot, "#pesis.fi", match, prev)
+        assert prev["event_count"] == 1
+        assert bot.send_message.call_count == 1  # unchanged
+
+        # Poll 3: array "recovers" to the same single event again - must
+        # not be re-sliced as new since the baseline never regressed.
+        with patch.object(sc, "_fetch_match_events", return_value=[run_event]), \
+             patch.object(sc, "_resolve_player_name", return_value="Test Player"):
+            prev = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        assert bot.send_message.call_count == 1  # still just the one real send
+
     def test_run_by_scoring_team_not_home_or_away_is_ignored(self, sc):
         bot = MagicMock()
         prev = self._prev(event_count=0)

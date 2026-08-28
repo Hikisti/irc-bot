@@ -424,7 +424,15 @@ class SuperpesisCommand:
                         period_end_text, home_name, away_name, period_home_runs, period_away_runs,
                     ))
 
-        event_count = len(events) if events is not None else prev["event_count"]
+        # Never let the stored baseline regress: if the API ever returns a
+        # transiently shorter array than a previous poll saw (a flaky/
+        # incomplete response, not something ruled out for this API), a
+        # plain overwrite here would let already-announced events get
+        # re-sliced as "new" on a later poll once the array recovers -
+        # confirmed live this produced an exact duplicate RUN: message
+        # and inflated every score after it until the next period-end
+        # self-correction. max() makes the baseline monotonic instead.
+        event_count = max(prev["event_count"], len(events)) if events is not None else prev["event_count"]
 
         # The authoritative per-period total always wins over the running
         # count above, so a missed/misparsed run (or period transition)
