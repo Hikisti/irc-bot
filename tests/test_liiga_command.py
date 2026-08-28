@@ -495,7 +495,38 @@ class TestFetchNextGameday:
         assert games == {1: today_game}
         assert date_str is not None
 
+    def test_ignores_a_backward_pointing_next_game_date(self, liiga_command):
+        # Regression test for a real incident: once valmistavat_ottelut
+        # (preseason)'s own schedule was exhausted, liiga.fi's API didn't
+        # return a null nextGameDate for it - it wrapped back to that
+        # tournament's very first date, weeks in the past relative to
+        # what was actually queried. Confirmed live: runkosarja's real
+        # "2026-09-01" got beaten by valmistavat_ottelut's stale
+        # "2026-08-07" under plain min() - the stale one must be
+        # discarded instead of competing with a real one.
+        now = datetime.datetime.now(liiga_command.HELSINKI_TZ)
+        today_str = now.strftime("%Y-%m-%d")
+        real_next_date = (now + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+        stale_wraparound_date = (now - datetime.timedelta(days=21)).strftime("%Y-%m-%d")
+
+        def fake_get(url, params=None, timeout=None):
+            if params["tournament"] == "runkosarja":
+                return self._make_response(next_game_date=real_next_date)
+            if params["tournament"] == "valmistavat_ottelut":
+                return self._make_response(next_game_date=stale_wraparound_date)
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            games, next_date = liiga_command._fetch_games_and_next_date(today_str, 2027)
+
+        assert next_date == real_next_date
+
     def test_falls_forward_to_earliest_next_game_date_across_tournaments(self, liiga_command):
+        # Relative to "now" (not hardcoded absolute dates) so this doesn't
+        # bit-rot into a false failure as real time passes.
+        now = datetime.datetime.now(liiga_command.HELSINKI_TZ)
+        nearer_date = (now + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+        farther_date = (now + datetime.timedelta(days=8)).strftime("%Y-%m-%d")
         future_game = make_game(gid=99)
         calls = []
 
@@ -504,22 +535,22 @@ class TestFetchNextGameday:
             # First round (today): no games, differing nextGameDate per tournament.
             if len(calls) <= len(liiga_command.TOURNAMENTS):
                 next_dates = {
-                    "runkosarja": "2026-09-05",
+                    "runkosarja": farther_date,
                     "playoffs": None,
                     "playout": None,
                     "qualifications": None,
-                    "valmistavat_ottelut": "2026-08-25",
+                    "valmistavat_ottelut": nearer_date,
                 }
                 return self._make_response(next_game_date=next_dates[params["tournament"]])
-            # Second round (the earliest next date, 2026-08-25): return a game.
-            if params["date"] == "2026-08-25" and params["tournament"] == "valmistavat_ottelut":
+            # Second round (the earliest next date): return a game.
+            if params["date"] == nearer_date and params["tournament"] == "valmistavat_ottelut":
                 return self._make_response(games=[future_game])
             return self._make_response()
 
         with patch.object(liiga_command.session, "get", side_effect=fake_get):
             date_str, games = liiga_command._fetch_next_gameday()
 
-        assert date_str == "2026-08-25"
+        assert date_str == nearer_date
         assert games == {99: future_game}
 
     def test_all_requests_failing_returns_none(self, liiga_command):

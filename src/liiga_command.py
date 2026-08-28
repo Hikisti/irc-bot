@@ -399,6 +399,15 @@ class LiigaCommand:
             tournament for this date (liiga.fi returns this even when a
             date has no games, pointing at the next date that does), or
             None if none of them reported one.
+
+        Confirmed live: once a tournament's own schedule is exhausted
+        (e.g. valmistavat_ottelut/preseason ends and runkosarja takes
+        over), its "nextGameDate" doesn't go null - it wraps back to
+        that tournament's very first date, which can be weeks in the
+        past relative to what was actually queried. A hint that isn't
+        later than the queried date is exactly that wraparound, not a
+        real "next date", so it's discarded rather than fed into
+        min(next_dates) alongside a different tournament's real one.
         """
         games = {}
         next_dates = []
@@ -418,7 +427,7 @@ class LiigaCommand:
                     if gid is not None:
                         games[gid] = g
                 next_game_date = data.get("nextGameDate")
-                if next_game_date:
+                if next_game_date and next_game_date > date_str:
                     next_dates.append(next_game_date)
                 any_success = True
             except requests.exceptions.RequestException as e:
