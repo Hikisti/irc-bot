@@ -37,17 +37,20 @@ class SuperpesisCommand:
         feed - the event feed is only used for *which* player scored, and
         a per-poll running score is snapped back to the authoritative
         total after each cycle so it can't silently drift.
-      - Only runs are surfaced (via two confirmed patterns - see
-        _extract_runs()); the richer play-by-play (individual hits,
-        defensive positioning, outs, etc.) is intentionally not parsed.
-        Checked against several real, finished matches: this captures
-        roughly 85-100% of each match's actual run total as individual
-        "RUN:" announcements - the remainder isn't itemized as a
-        recognizable event in the feed at all (e.g. bulk scoring-contest
-        totals, "vapaataival" free-base scores). This is a real,
-        disclosed gap in the play-by-play, not a rounding error to "fix"
-        later; the final/authoritative score is never affected by it
-        either way (see _process_match).
+      - Only runs are surfaced (via the confirmed patterns in
+        _is_run_sub_event(): "eteni"/"eteni harhaheitolla" (wild throw)
+        reaching "kotipesään", "löi kunnarin!" (home run), and "juoksu"
+        for a scoring-contest tie-break); the richer play-by-play
+        (individual hits, defensive positioning, outs, etc.) is
+        intentionally not parsed. Checked against several real, finished
+        matches: this still isn't guaranteed to be the complete pesäpallo
+        scoring vocabulary (each addition so far came from a real report
+        of a missed run, most recently "löi kunnarin!" and "eteni
+        harhaheitolla"), so a genuinely new pattern could still be missed
+        as an individual "RUN:" announcement. This is a disclosed gap in
+        the play-by-play, not a rounding error to "fix" preemptively; the
+        final/authoritative score is never affected by it either way
+        (see _process_match).
       - Scorer identification: a player reference in the event feed is
         either a global {"id": N} (resolved via /public/player/{id}) or a
         per-match jersey {"number": N} - confirmed live that some matches
@@ -477,26 +480,48 @@ class SuperpesisCommand:
             texts = sub_event.get("texts") or []
             if self._is_run_sub_event(texts):
                 player_ref = self._last_player_ref(texts)
-                yield player_ref, team_id, event.get("batter")
+                if self._is_error_driven_run(texts):
+                    # A run caused by a wild throw isn't attributable to a
+                    # batter's own hit at all - confirmed live that the
+                    # parent event's "batter" field for one of these
+                    # pointed at a completely unrelated player's earlier
+                    # at-bat, and pesistulokset.fi's own site shows
+                    # literally "Harhaheitto" instead of a name for these.
+                    batter = "Harhaheitto"
+                else:
+                    batter = event.get("batter")
+                yield player_ref, team_id, batter
 
     def _is_run_sub_event(self, texts) -> bool:
-        # Two confirmed ways pesäpallo's event feed records a run reaching
+        # Confirmed ways pesäpallo's event feed records a run reaching
         # home plate:
-        #  - regular play: an "eteni" (advanced) event whose destination is
-        #    the string "kotipesään" (home base) - crucially NOT "paloi"
-        #    (put out) reaching home, which uses the same destination
-        #    string for a runner who was retired instead of scoring.
+        #  - regular play: an "eteni..." (advanced) event - "eteni" alone,
+        #    or with a suffix like "eteni harhaheitolla" (wild throw) -
+        #    whose destination is the string "kotipesään" (home base).
+        #    Crucially NOT "paloi" (put out) reaching home, which uses the
+        #    same destination string for a runner who was retired instead
+        #    of scoring.
+        #  - a home run: "löi kunnarin!" - doesn't pair with a "kotipesään"
+        #    destination string like regular advancement does.
         #  - a scoring-contest / tie-break decider: a "juoksu" (run) event.
-        event_texts = {
-            t.get("text") for t in texts if isinstance(t, dict) and t.get("type") == "event"
-        }
-        if "juoksu" in event_texts:
+        event_texts = [
+            t.get("text") for t in texts
+            if isinstance(t, dict) and t.get("type") == "event" and isinstance(t.get("text"), str)
+        ]
+        if "juoksu" in event_texts or "löi kunnarin!" in event_texts:
             return True
-        if "eteni" in event_texts:
+        if any(text.startswith("eteni") for text in event_texts):
             plain_texts = {t for t in texts if isinstance(t, str)}
             if "kotipesään" in plain_texts:
                 return True
         return False
+
+    def _is_error_driven_run(self, texts) -> bool:
+        return any(
+            isinstance(t, dict) and t.get("type") == "event"
+            and isinstance(t.get("text"), str) and "harhaheitolla" in t.get("text")
+            for t in texts
+        )
 
     def _last_player_ref(self, texts):
         """Two confirmed formats a player reference in the event feed can
@@ -657,7 +682,9 @@ class SuperpesisCommand:
         """Resolves a scorer's display name from whatever reference the
         event feed actually gave us - see _last_player_ref() for why
         there are two shapes, and _fetch_match_roster() for the
-        number->name mapping."""
+        number->name mapping. batter_fallback may also be the literal
+        string "Harhaheitto" (see _extract_runs) rather than a jersey
+        number/id - returned as-is, never treated as something to look up."""
         if player_ref:
             if "id" in player_ref:
                 return self._resolve_player_name(player_ref["id"])
@@ -667,6 +694,8 @@ class SuperpesisCommand:
                     return name
 
         if batter_fallback is not None:
+            if isinstance(batter_fallback, str):
+                return batter_fallback
             # Try the roster first (batter is usually a jersey number in
             # the same matches that use "number"-style player refs);
             # only treat it as a global id if that comes up empty.

@@ -93,10 +93,10 @@ current jakso only (pesäpallo scores each period independently, not as a runnin
 the headline, per-period run breakdown in parens, e.g. `FINAL: Joensuun Maila - Sotkamon Jymy
 1 - 0 (4 - 2, 2 - 2)`. A match stops being touched entirely once it's finished, so a
 provider-side correction to the event feed after the fact can't produce more messages for it.
-Individual run announcements are best-effort (pesäpallo's
-scoring vocabulary wasn't fully catalogued — roughly 85-100% of a match's runs get an individual
-chat line in testing), but the score and final result are always accurate since they come from
-the API's own authoritative live-result summary, never computed locally.
+Individual run announcements are best-effort (pesäpallo's scoring vocabulary — regular hits, wild
+throws, home runs, tie-break rounds — wasn't necessarily fully catalogued, so an unseen pattern
+could still be missed as a chat line), but the score and final result are always accurate since
+they come from the API's own authoritative live-result summary, never computed locally.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).

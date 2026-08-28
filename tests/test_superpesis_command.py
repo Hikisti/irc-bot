@@ -675,6 +675,41 @@ class TestRunDetection:
         }
         assert sc._is_run_sub_event(sub["texts"]) is False
 
+    def test_kunnari_is_a_run(self, sc):
+        # Home run - confirmed live it doesn't pair with a "kotipesään"
+        # destination string like regular advancement does.
+        sub = {
+            "texts": [
+                {"team": 16804, "type": "player", "number": 1},
+                {"type": "event", "text": "löi kunnarin!", "base": 2},
+                {"type": "stat", "homerun": 2},
+            ],
+        }
+        assert sc._is_run_sub_event(sub["texts"]) is True
+
+    def test_eteni_harhaheitolla_kotipesaan_is_a_run(self, sc):
+        # A suffixed "eteni..." variant (wild throw) - was being missed
+        # entirely by an exact "eteni" match before this was reported.
+        sub = {
+            "texts": [
+                {"team": 16804, "type": "player", "number": 11},
+                {"type": "event", "text": "eteni harhaheitolla", "base": 3},
+                "kotipesään",
+                {"type": "stat", "wtscore": 3},
+            ],
+        }
+        assert sc._is_run_sub_event(sub["texts"]) is True
+
+    def test_eteni_harhaheitolla_to_a_regular_base_is_not_a_run(self, sc):
+        sub = {
+            "texts": [
+                {"team": 16804, "type": "player", "number": 7},
+                {"type": "event", "text": "eteni harhaheitolla", "base": 0},
+                "ykköspesälle",
+            ],
+        }
+        assert sc._is_run_sub_event(sub["texts"]) is False
+
     def test_extract_runs_yields_multiple_scores_in_one_event(self, sc):
         event = match_event(1, team_id=16803, sub_events=[
             run_sub_event(9986, 16803, pattern="eteni_koti"),
@@ -703,6 +738,43 @@ class TestRunDetection:
             {"texts": ["1. lyönti", {"type": "hit", "hit": None}]},
         ])
         assert list(sc._extract_runs(event)) == []
+
+    def test_extract_runs_uses_harhaheitto_label_not_the_parent_batter(self, sc):
+        # Regression test for a real incident: the parent event's own
+        # "batter" field pointed at a completely unrelated player for a
+        # wild-throw-caused run - must be replaced with the literal
+        # "Harhaheitto" label instead of misattributing it.
+        event = match_event(1, team_id=16804, batter=7, sub_events=[
+            {"texts": [
+                {"team": 16804, "type": "player", "number": 11},
+                {"type": "event", "text": "eteni harhaheitolla", "base": 3},
+                "kotipesään",
+                {"type": "stat", "wtscore": 3},
+            ]},
+        ])
+        runs = list(sc._extract_runs(event))
+        assert runs == [({"number": 11}, 16804, "Harhaheitto")]
+
+    def test_extract_runs_regular_run_still_uses_parent_batter(self, sc):
+        event = match_event(1, team_id=16804, batter=10, sub_events=[
+            run_sub_event_by_number(3, 16804),
+        ])
+        runs = list(sc._extract_runs(event))
+        assert runs == [({"number": 3}, 16804, 10)]
+
+
+class TestIsErrorDrivenRun:
+    def test_true_for_harhaheitolla_suffix(self, sc):
+        texts = [{"type": "event", "text": "eteni harhaheitolla"}]
+        assert sc._is_error_driven_run(texts) is True
+
+    def test_false_for_plain_eteni(self, sc):
+        texts = [{"type": "event", "text": "eteni"}]
+        assert sc._is_error_driven_run(texts) is False
+
+    def test_false_for_kunnari(self, sc):
+        texts = [{"type": "event", "text": "löi kunnarin!"}]
+        assert sc._is_error_driven_run(texts) is False
 
 
 class TestLastPlayerRef:
@@ -764,6 +836,15 @@ class TestResolveScorerName:
 
     def test_no_ref_and_no_batter_returns_none(self, sc):
         assert sc._resolve_scorer_name(None, 16802, None, {}) is None
+
+    def test_string_batter_fallback_is_returned_as_is(self, sc):
+        # "Harhaheitto" (see _extract_runs/_is_error_driven_run) is a
+        # literal label, not a jersey number or global id to look up -
+        # must never reach the roster or the player-lookup API.
+        with patch.object(sc, "_resolve_player_name") as mock_resolve:
+            name = sc._resolve_scorer_name(None, 16802, "Harhaheitto", {16802: {1: "X"}})
+        mock_resolve.assert_not_called()
+        assert name == "Harhaheitto"
 
 
 class TestFetchMatchRoster:
@@ -1107,6 +1188,48 @@ class TestProcessMatch:
 
         message = bot.send_message.call_args[0][1]
         assert "Konsta Piironen (lyöjä: Joosua Rättö)" in message
+
+    def test_real_match_146950_reproduces_all_three_reported_runs(self, sc):
+        # End-to-end regression test built directly from the real incident
+        # report: three runs from pesistulokset.fi's own match page
+        # (kunnari, regular hit, wild throw), only the middle one detected
+        # (and with the wrong score) before this fix.
+        bot = MagicMock()
+        roster = {16804: {1: "Iivari Vihanto", 3: "Kalle Kuosmanen", 10: "Roope Korhonen", 11: "Elmeri Purmonen"}}
+        prev = self._prev(match_id=146950, home_id=16804, away_id=16798,
+                           home_name="Sotkamon Jymy", away_name="Joensuun Maila", roster=roster)
+        match = make_match(mid=146950, home_id=16804, away_id=16798,
+                            home="Sotkamon Jymy", away="Joensuun Maila")
+        events = [
+            match_event(1, team_id=16804, batter=1, sub_events=[
+                {"texts": [{"team": 16804, "type": "player", "number": 1}, "jätettiin välistä"]},
+                {"texts": [{"team": 16804, "type": "player", "number": 1},
+                           {"type": "event", "text": "eteni", "base": 0}, "ykköspesälle"]},
+                {"texts": [{"team": 16804, "type": "player", "number": 1},
+                           {"type": "event", "text": "eteni", "base": 1}, "kakkospesälle"]},
+                {"texts": [{"team": 16804, "type": "player", "number": 1},
+                           {"type": "event", "text": "löi kunnarin!", "base": 2},
+                           {"type": "stat", "homerun": 2}]},
+            ]),
+            match_event(2, team_id=16804, batter=10, sub_events=[
+                run_sub_event_by_number(3, 16804),
+            ]),
+            match_event(3, team_id=16804, batter=7, sub_events=[
+                {"texts": [{"team": 16804, "type": "player", "number": 11},
+                           {"type": "event", "text": "eteni harhaheitolla", "base": 3},
+                           "kotipesään", {"type": "stat", "wtscore": 3}]},
+            ]),
+        ]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events):
+            sc._process_match(bot, "#pesis.fi", match, prev)
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        assert len(messages) == 3
+        assert "Iivari Vihanto | Sotkamon Jymy 1-0 Joensuun Maila" in messages[0]
+        assert "lyöjä" not in messages[0]  # batter == scorer for the kunnari
+        assert "Kalle Kuosmanen (lyöjä: Roope Korhonen) | Sotkamon Jymy 2-0 Joensuun Maila" in messages[1]
+        assert "Elmeri Purmonen (lyöjä: Harhaheitto) | Sotkamon Jymy 3-0 Joensuun Maila" in messages[2]
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
