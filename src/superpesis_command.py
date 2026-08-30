@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 import pytz
@@ -314,7 +315,12 @@ class SuperpesisCommand:
             try:
                 all_ended = self._poll_once(irc_bot, channel, series_id)
             except Exception as e:
-                print(f"Superpesis poll error: {e}")
+                # This is the last line of defense against anything not
+                # anticipated by a narrower handler below - print the
+                # traceback too, not just str(e), since by definition
+                # nothing more specific caught this one.
+                print(f"Superpesis poll error in {channel}: {e}")
+                traceback.print_exc()
                 all_ended = False
 
             if all_ended:
@@ -355,7 +361,12 @@ class SuperpesisCommand:
             try:
                 new_state[mid] = self._process_match(irc_bot, channel, match, prev)
             except Exception as e:
-                print(f"Superpesis: failed to process match {mid}: {e}")
+                # _process_match is the biggest, most-changed method in
+                # this file and every real bug found so far broke inside
+                # it - the traceback is what actually pinpoints the line,
+                # str(e) alone often isn't enough (e.g. a bare KeyError).
+                print(f"Superpesis: failed to process match {mid} in {channel}: {e}")
+                traceback.print_exc()
                 new_state[mid] = prev
 
             if not new_state[mid].get("finished"):

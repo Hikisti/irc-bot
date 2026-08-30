@@ -1553,9 +1553,45 @@ class TestProcessMatch:
         assert new_state["period_away_runs"] == 0
 
 
+class TestPollLoop:
+    def test_unexpected_poll_once_failure_logs_a_traceback_and_continues(self, sc):
+        bot = MagicMock()
+        stop_event = threading.Event()
+
+        def fail_once(*args, **kwargs):
+            stop_event.set()  # let the loop exit after this one iteration
+            raise RuntimeError("boom")
+
+        with patch.object(sc, "_poll_once", side_effect=fail_once), \
+             patch("traceback.print_exc") as mock_print_exc:
+            sc._poll_loop(bot, "#pesis.fi", stop_event, 2945)  # must not raise
+
+        mock_print_exc.assert_called_once()
+
+
 class TestPollOnce:
     def _seed(self, sc, channel, matches_state):
         sc._channels[channel] = {"stop_event": MagicMock(), "thread": None, "matches": matches_state}
+
+    def test_unexpected_process_match_failure_logs_a_traceback(self, sc):
+        # The catch-all around _process_match is the last line of defense
+        # against anything not anticipated by a narrower handler - it
+        # must print a full traceback, not just str(e), since that's
+        # often the only way to pinpoint where a genuinely new bug broke.
+        bot = MagicMock()
+        self._seed(sc, "#pesis.fi", {
+            146953: {"match_id": 146953, "home_id": 1, "away_id": 2, "home_name": "A", "away_name": "B",
+                     "period": 0, "period_home_runs": 0, "period_away_runs": 0, "event_count": 0, "finished": False},
+        })
+        match = make_match(mid=146953, home_id=1, away_id=2, finished=False)
+
+        with patch.object(sc, "_fetch_today_matches", return_value={146953: match}), \
+             patch.object(sc, "_process_match", side_effect=KeyError("boom")), \
+             patch("traceback.print_exc") as mock_print_exc:
+            result = sc._poll_once(bot, "#pesis.fi", 2945)  # must not raise
+
+        assert result is False
+        mock_print_exc.assert_called_once()
 
     def test_all_finished_returns_true(self, sc):
         bot = MagicMock()

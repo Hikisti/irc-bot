@@ -1,5 +1,6 @@
 import datetime
 import threading
+import traceback
 
 import pytz
 import requests
@@ -188,7 +189,11 @@ class LiigaCommand:
             try:
                 all_ended = self._poll_once(irc_bot, channel)
             except Exception as e:
-                print(f"Liiga poll error: {e}")
+                # Last line of defense against anything not anticipated by
+                # a narrower handler below - print the traceback too, not
+                # just str(e), since nothing more specific caught this one.
+                print(f"Liiga poll error in {channel}: {e}")
+                traceback.print_exc()
                 all_ended = False
 
             if all_ended:
@@ -241,8 +246,11 @@ class LiigaCommand:
             except Exception as e:
                 # Don't let one malformed game entry take down the whole poll
                 # cycle (or the ones after it) - keep the previous state for
-                # this game and try again next cycle.
-                print(f"Liiga: failed to process game {gid}: {e}")
+                # this game and try again next cycle. Traceback included
+                # since str(e) alone often isn't enough to pinpoint where
+                # in the processing this actually broke.
+                print(f"Liiga: failed to process game {gid} in {channel}: {e}")
+                traceback.print_exc()
                 new_state[gid] = prev_state.get(gid) or self._snapshot(game)
                 all_ended = False
 

@@ -201,6 +201,22 @@ class TestStop:
             release_fetch.set()  # let the orphaned thread finish so it doesn't leak into other tests
 
 
+class TestPollLoop:
+    def test_unexpected_poll_once_failure_logs_a_traceback_and_continues(self, liiga_command):
+        bot = MagicMock()
+        stop_event = threading.Event()
+
+        def fail_once(*args, **kwargs):
+            stop_event.set()  # let the loop exit after this one iteration
+            raise RuntimeError("boom")
+
+        with patch.object(liiga_command, "_poll_once", side_effect=fail_once), \
+             patch("traceback.print_exc") as mock_print_exc:
+            liiga_command._poll_loop(bot, "#chan", stop_event)  # must not raise
+
+        mock_print_exc.assert_called_once()
+
+
 class TestPollOnce:
     def _seed(self, liiga_command, channel, games):
         liiga_command._channels[channel] = {
@@ -360,6 +376,21 @@ class TestPollOnce:
         assert result is False
         messages = [c[0][1] for c in bot.send_message.call_args_list]
         assert any("GOAL" in m for m in messages)
+
+    def test_unexpected_game_processing_failure_logs_a_traceback(self, liiga_command):
+        # The catch-all around processing one game is the last line of
+        # defense against anything a narrower handler didn't anticipate -
+        # it must print a full traceback, not just str(e), since that's
+        # often the only way to pinpoint where a genuinely new bug broke.
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(gid=1, home_goals=[])})
+
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: make_game(gid=1)}), \
+             patch.object(liiga_command, "_announce_new_goals", side_effect=RuntimeError("boom")), \
+             patch("traceback.print_exc") as mock_print_exc:
+            liiga_command._poll_once(bot, "#chan")  # must not raise
+
+        mock_print_exc.assert_called_once()
 
     def test_send_message_failure_does_not_crash_poll(self, liiga_command):
         bot = MagicMock()
