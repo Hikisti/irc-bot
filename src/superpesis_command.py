@@ -72,11 +72,22 @@ class SuperpesisCommand:
         contain a whole segment of already-seen plays re-appended later
         in the array at different positions (confirmed live: re-fetching
         the full array in one request reproduced identical sub-event
-        content at two far-apart indices - not a fetch-side glitch).
-        Positional (event-count) diffing alone can't detect that, so
-        every matched run also gets a content signature (see
-        _run_signature()) and a per-match "seen" set to catch a real
-        play showing up twice before it's counted or announced twice.
+        content at two far-apart indices - not a fetch-side glitch), AND
+        a single outer event's own "events" sub-array can grow in place
+        after that outer event already sits at a fixed array position (a
+        batter's turn starts as just the hit, then runner advances/scores
+        get appended to that same event over several polls - confirmed
+        live via its own "updated" timestamp changing while its array
+        index didn't). Positional (event-count) diffing can't detect
+        either case reliably - the first makes it double-count, the
+        second makes it silently drop runs appended after their event was
+        already marked "seen". So _process_match() rescans the *entire*
+        events array every poll (event_count is kept only as an
+        informational high-water mark, not used to gate the scan) and
+        relies entirely on a content signature per matched run/period-end
+        (see _run_signature()) plus a per-match "seen" set - both seeded
+        from the match's existing history when tracking starts
+        (_seed_match_extras()) so starting mid-match doesn't replay it.
     """
 
     needs_irc_context = True
@@ -276,12 +287,16 @@ class SuperpesisCommand:
         self._poll_loop(irc_bot, channel, stop_event, series_id)
 
     def _seed_match_extras(self, state):
-        """Fills in each match's event-count baseline and roster in
-        `state` (mutated in place). One match's events+roster fetch
-        doesn't depend on any other's, so all matches are seeded
-        concurrently rather than one at a time - with 2+ matches tracked
-        (the common case) this roughly halves the time !superpesis start
-        takes to report back."""
+        """Fills in each match's event-count baseline, roster, and
+        already-seen run/period-end signatures in `state` (mutated in
+        place). The signature sets are what actually gates re-announcing
+        a play (see _process_match) - seeded from every run/period-end
+        already in the match's history so `!superpesis start` on a match
+        already in progress doesn't replay its whole history as fresh
+        RUN:/JAKSO: lines. One match's events+roster fetch doesn't depend
+        on any other's, so all matches are seeded concurrently rather than
+        one at a time - with 2+ matches tracked (the common case) this
+        roughly halves the time !superpesis start takes to report back."""
         if not state:
             return
 
@@ -294,6 +309,16 @@ class SuperpesisCommand:
             for mid, events, roster in executor.map(seed_one, state.keys()):
                 if events is not None:
                     state[mid]["event_count"] = len(events)
+                    seen_runs = set()
+                    seen_period_ends = set()
+                    for event in events:
+                        for *_, signature in self._extract_runs(event):
+                            seen_runs.add(signature)
+                        _, period_end_signature = self._extract_period_end(event)
+                        if period_end_signature:
+                            seen_period_ends.add(period_end_signature)
+                    state[mid]["seen_run_signatures"] = seen_runs
+                    state[mid]["seen_period_end_signatures"] = seen_period_ends
                 state[mid]["roster"] = roster
 
     def _drop_if_current(self, channel, stop_event):
@@ -403,19 +428,38 @@ class SuperpesisCommand:
         current_period = prev.get("period")
         period_home_runs = prev["period_home_runs"]
         period_away_runs = prev["period_away_runs"]
-        # Content-based dedup on top of the positional event-count diffing
-        # below - confirmed live the events array can contain a whole
-        # segment of already-counted plays re-appended later at new array
-        # positions, which position-based diffing alone can't detect.
+        # Content-based dedup, not positional event-count diffing: confirmed
+        # live that a single outer event's own "events" sub-array can grow
+        # in place after it's already at a fixed array position (a batter's
+        # turn starts with just the hit, then runner advances/scores get
+        # appended to that same event over several polls, "updated"
+        # timestamp changing while its array index doesn't) - so slicing
+        # events[prev_count:] permanently skipped any run appended to an
+        # event that had already crossed that boundary once, even with
+        # zero runs in it at the time. Confirmed live via match 147206:
+        # three real runs inside one growing event (a batter driving home
+        # two runners then himself via "löi kunnarin!") were silently
+        # dropped this way, and the next genuinely-new run's local counter
+        # then double-counted on top of an authoritative-score snap that
+        # had already silently absorbed the growth - producing a real
+        # "6-0" chat line for what pesistulokset.fi's own page showed as
+        # "5-0". The events array can also contain a whole segment of
+        # already-counted plays re-appended later at new positions, which
+        # position-based diffing alone can't detect either. Rescanning the
+        # full array every poll and relying purely on this signature set
+        # sidesteps both failure modes; event_count below is kept only as
+        # an informational high-water mark, no longer used to gate the
+        # scan.
         seen_run_signatures = set(prev.get("seen_run_signatures") or ())
+        seen_period_end_signatures = set(prev.get("seen_period_end_signatures") or ())
 
-        if events is not None and len(events) > prev["event_count"]:
-            for event in events[prev["event_count"]:]:
+        if events is not None:
+            for event in events:
                 event_period = event.get("period")
 
                 for player_ref, scoring_team_id, batter, signature in self._extract_runs(event):
                     if signature in seen_run_signatures:
-                        continue  # the same real play, re-seen at a new array position
+                        continue  # the same real play, already announced
                     seen_run_signatures.add(signature)
 
                     if event_period != current_period:
@@ -443,8 +487,9 @@ class SuperpesisCommand:
                         scorer_name, batter_name,
                     ))
 
-                period_end_text = self._extract_period_end_text(event)
-                if period_end_text:
+                period_end_text, period_end_signature = self._extract_period_end(event)
+                if period_end_text and period_end_signature not in seen_period_end_signatures:
+                    seen_period_end_signatures.add(period_end_signature)
                     # Uses the still-unreset tally above: the period-end
                     # marker carries the *ending* period's own value, so
                     # this always announces that period's final score
@@ -453,14 +498,10 @@ class SuperpesisCommand:
                         period_end_text, home_name, away_name, period_home_runs, period_away_runs,
                     ))
 
-        # Never let the stored baseline regress: if the API ever returns a
-        # transiently shorter array than a previous poll saw (a flaky/
-        # incomplete response, not something ruled out for this API), a
-        # plain overwrite here would let already-announced events get
-        # re-sliced as "new" on a later poll once the array recovers -
-        # confirmed live this produced an exact duplicate RUN: message
-        # and inflated every score after it until the next period-end
-        # self-correction. max() makes the baseline monotonic instead.
+        # No longer used to gate the scan above (see the comment on
+        # seen_run_signatures) - kept as an informational high-water mark
+        # only, monotonic so a transiently shorter API response can't
+        # shrink it.
         event_count = max(prev["event_count"], len(events)) if events is not None else prev["event_count"]
 
         # The authoritative per-period total always wins over the running
@@ -506,6 +547,7 @@ class SuperpesisCommand:
             "finished": finished,
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
             "seen_run_signatures": seen_run_signatures,
+            "seen_period_end_signatures": seen_period_end_signatures,
         }
 
     # ---- event parsing --------------------------------------------------
@@ -661,13 +703,26 @@ class SuperpesisCommand:
 
     def _extract_period_end_text(self, event):
         """Returns the human-readable text for a period-ending event (e.g.
-        "Ensimmäinen jakso päättyi", "Supervuoro päättyi"), or None.
-        Detected via a {"type":"stat","periodend":...} marker - confirmed
-        present (and reliable) across every period transition checked
-        live, including into "Supervuoro" - rather than matching the
-        Finnish wording itself, which would be one more guess at a
-        vocabulary this API doesn't document. Distinct from match-end,
-        which uses its own "match-ended" stat key, not "periodend"."""
+        "Ensimmäinen jakso päättyi", "Supervuoro päättyi"), or None. See
+        _extract_period_end() - this just discards its signature half,
+        kept as a thin wrapper since existing callers/tests only want the
+        text."""
+        text, _ = self._extract_period_end(event)
+        return text
+
+    def _extract_period_end(self, event):
+        """Returns (text, signature) for a period-ending event, or
+        (None, None). Detected via a {"type":"stat","periodend":...}
+        marker - confirmed present (and reliable) across every period
+        transition checked live, including into "Supervuoro" - rather
+        than matching the Finnish wording itself, which would be one more
+        guess at a vocabulary this API doesn't document. Distinct from
+        match-end, which uses its own "match-ended" stat key, not
+        "periodend". signature is a content fingerprint of the matched
+        sub-event (see _run_signature()) - needed because _process_match
+        now rescans the whole events array every poll (not just the
+        newly-appended tail, see the comment on that rescan) so a
+        periodend marker already announced once must not fire again."""
         for sub_event in event.get("events") or []:
             texts = sub_event.get("texts") or []
             has_periodend = any(
@@ -676,11 +731,12 @@ class SuperpesisCommand:
             )
             if not has_periodend:
                 continue
+            signature = self._run_signature(sub_event)
             for t in texts:
                 if isinstance(t, dict) and t.get("type") == "event" and t.get("text"):
-                    return t.get("text")
-            return "Jakso päättyi"  # marker present but no text - fallback
-        return None
+                    return t.get("text"), signature
+            return "Jakso päättyi", signature  # marker present but no text - fallback
+        return None, None
 
     def _sum_runs(self, live_result, side):
         runs = live_result.get("runs")
@@ -837,7 +893,14 @@ class SuperpesisCommand:
             "event_count": 0,  # seeded from a real fetch below, see _run()
             "finished": bool(live.get("finished")),
             "roster": {},  # seeded from a real fetch below, see _run()
+            # Both seeded from a real fetch below too (_seed_match_extras)
+            # with every run/period-end already in the match's history up
+            # to now, so starting mid-match doesn't replay old plays as
+            # fresh RUN:/JAKSO: announcements - _process_match rescans the
+            # full events array every poll and relies entirely on these
+            # sets for "already announced", not array position.
             "seen_run_signatures": set(),
+            "seen_period_end_signatures": set(),
         }
 
     # ---- data fetching --------------------------------------------------

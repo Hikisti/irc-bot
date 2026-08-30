@@ -1313,6 +1313,86 @@ class TestProcessMatch:
         assert "Sotkamon Jymy 3-1 Kouvolan Pallonlyöjät" in messages[0]  # not 4-1
         assert new_state["period_home_runs"] == 3
 
+    def test_real_match_147206_runs_appended_to_an_already_seen_event_are_not_dropped(self, sc):
+        # Regression test for a real incident (pesistulokset.fi match
+        # 147206, "2. jakso"): a batter's whole turn is ONE outer event at
+        # a fixed array position, but its own "events" sub-array grows in
+        # place over several polls as the play develops (confirmed live:
+        # the same object's "updated" timestamp kept changing while its
+        # array index didn't). The old event_count-based slicing marked
+        # that position "seen" the first time it crossed the boundary -
+        # even with zero runs in it yet - so three later-appended runs
+        # (two runners driven in, then the batter's own "löi kunnarin!")
+        # were silently dropped, and the next real run's local counter
+        # ended up one too high (announced "6-0" for what
+        # pesistulokset.fi's own page showed as "5-0") because an
+        # authoritative-score snap had already silently absorbed the
+        # missing growth. _process_match must now rescan the full events
+        # array every poll (relying on seen_run_signatures, not position)
+        # so growth appended to an already-"seen" event still gets picked
+        # up.
+        bot = MagicMock()
+        roster = {16804: {2: "Jere Vikström", 3: "Kalle Kuosmanen", 4: "Hannes Pekkinen", 10: "Roope Korhonen",
+                           11: "Elmeri Purmonen"}}
+        # One real batter's turn (id=14 in the actual feed): three
+        # separate runners reach "kotipesään" inside it - #2, #3, then
+        # #4 (the batter himself) via "löi kunnarin!" - interleaved with
+        # non-scoring "eteni ... kolmospesälle/kakkospesälle" advances,
+        # exactly as pesistulokset.fi's own play-by-play recorded it.
+        growing_event = match_event(14, team_id=16804, batter=4, period=1, sub_events=[
+            {"texts": ["3. lyönti", {"type": "hit", "hit": {"out": False}}]},
+        ])
+        # First poll: this event has only just started (no runs in it
+        # yet) - the old code would mark this array position "seen" here.
+        prev = self._prev(match_id=147206, home_id=16804, away_id=16801,
+                           home_name="Sotkamon Jymy", away_name="Kouvolan Pallonlyöjät",
+                           roster=roster, period=1, period_home_runs=1, period_away_runs=0)
+        with patch.object(sc, "_fetch_match_events", return_value=[growing_event]):
+            prev = sc._process_match(bot, "#pesis.fi", match_placeholder := make_match(
+                mid=147206, home_id=16804, away_id=16801,
+                home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät",
+            ), prev)
+        assert bot.send_message.call_count == 0  # no runs yet, nothing to announce
+
+        # Second poll: the SAME event (same array position) has grown to
+        # include all three runs, and a genuinely new event (Roope
+        # Korhonen driving in Elmeri Purmonen) has also appeared.
+        grown_event = match_event(14, team_id=16804, batter=4, period=1, sub_events=[
+            {"texts": ["3. lyönti", {"type": "hit", "hit": {"out": False}}]},
+            {"texts": [{"team": 16804, "type": "player", "number": 2},
+                       {"type": "event", "text": "eteni", "base": 2}, "kolmospesälle"]},
+            {"texts": [{"team": 16804, "type": "player", "number": 2},
+                       {"type": "event", "text": "eteni", "base": 3}, "kotipesään",
+                       {"type": "stat", "score": 3}]},
+            {"texts": [{"team": 16804, "type": "player", "number": 3},
+                       {"type": "event", "text": "eteni", "base": 2}, "kolmospesälle"]},
+            {"texts": [{"team": 16804, "type": "player", "number": 3},
+                       {"type": "event", "text": "eteni", "base": 3}, "kotipesään",
+                       {"type": "stat", "score": 3}]},
+            {"texts": [{"team": 16804, "type": "player", "number": 4},
+                       {"type": "event", "text": "löi kunnarin!", "base": 2},
+                       {"type": "stat", "homerun": 2}]},
+        ])
+        roope_event = match_event(15, team_id=16804, batter=10, period=1, sub_events=[
+            run_sub_event_by_number(11, 16804),
+        ])
+        match = make_match(mid=147206, home_id=16804, away_id=16801,
+                            home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät")
+
+        with patch.object(sc, "_fetch_match_events", return_value=[grown_event, roope_event]):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        assert len(messages) == 4  # Jere Vikström, Kalle Kuosmanen, Hannes Pekkinen's kunnari, Roope->Elmeri
+        assert "Hannes Pekkinen → Jere Vikström | Sotkamon Jymy 2-0" in messages[0]
+        assert "Hannes Pekkinen → Kalle Kuosmanen | Sotkamon Jymy 3-0" in messages[1]
+        assert "Hannes Pekkinen | Sotkamon Jymy 4-0" in messages[2]  # kunnari: batter == scorer
+        # The real incident report: this line showed "6-0" before this
+        # fix (double-counted on top of a snap that had silently absorbed
+        # the three dropped runs above) instead of the real "5-0".
+        assert "Sotkamon Jymy 5-0 Kouvolan Pallonlyöjät" in messages[3]
+        assert new_state["period_home_runs"] == 5
+
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
         roster = {16802: {1: "A"}, 16796: {1: "B"}}
