@@ -439,9 +439,22 @@ class SuperpesisCommand:
         # self-corrects on the very next poll instead of drifting forever.
         authoritative_home = self._period_runs(live, "home", current_period)
         authoritative_away = self._period_runs(live, "away", current_period)
-        if authoritative_home is not None:
+        if authoritative_home is not None and authoritative_home != period_home_runs:
+            # Diagnostic for a reported case where the displayed score
+            # didn't match pesistulokset.fi's own play-by-play - couldn't
+            # reproduce it after the fact (the authoritative source had
+            # already settled back to the correct value), so this is here
+            # to capture hard evidence if it recurs rather than guessing.
+            print(
+                f"Superpesis: home score snap for match {prev['match_id']} period {current_period}: "
+                f"{period_home_runs} -> {authoritative_home}; raw runs={live.get('runs')}"
+            )
             period_home_runs = authoritative_home
-        if authoritative_away is not None:
+        if authoritative_away is not None and authoritative_away != period_away_runs:
+            print(
+                f"Superpesis: away score snap for match {prev['match_id']} period {current_period}: "
+                f"{period_away_runs} -> {authoritative_away}; raw runs={live.get('runs')}"
+            )
             period_away_runs = authoritative_away
 
         finished = bool(live.get("finished"))
@@ -553,12 +566,13 @@ class SuperpesisCommand:
         scoring_team = home_name if scoring_team_id == home_id else away_name
         period_str = self._format_period_suffix(event.get("period"))
         scorer_str = scorer_name or "Unknown"
-        # Skip the "lyöjä" clause if it's the same person as the scorer
-        # (e.g. a home run) or unresolvable - no point naming "Unknown"
-        # twice or repeating a name for no information gain.
-        batter_str = f" (lyöjä: {batter_name})" if batter_name and batter_name != scorer_name else ""
+        # Lyöjä (batter) before etenijä (scorer), matching pesistulokset.fi's
+        # own column order. Skipped entirely if it's the same person as the
+        # scorer (e.g. a home run) or unresolvable - no point naming
+        # "Unknown" twice or repeating a name for no information gain.
+        namestr = f"{batter_name} → {scorer_str}" if batter_name and batter_name != scorer_name else scorer_str
         return (
-            f"{self.RUN_PREFIX} {scoring_team} — {scorer_str}{batter_str} | "
+            f"{self.RUN_PREFIX} {scoring_team} — {namestr} | "
             f"{home_name} {home_runs}-{away_runs} {away_name}{period_str}"
         )
 

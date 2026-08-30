@@ -1121,9 +1121,11 @@ class TestFormatRun:
         assert "jakso" not in msg
 
     def test_includes_batter_when_different_from_scorer(self, sc):
+        # Lyöjä (batter) before etenijä (scorer), matching pesistulokset.fi's
+        # own column order.
         event = {"period": 1}
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Konsta Piironen", "Joosua Rättö")
-        assert "Konsta Piironen (lyöjä: Joosua Rättö)" in msg
+        assert "Joosua Rättö → Konsta Piironen" in msg
 
     def test_omits_batter_when_same_as_scorer(self, sc):
         event = {"period": 1}
@@ -1187,7 +1189,7 @@ class TestProcessMatch:
             sc._process_match(bot, "#pesis.fi", match, prev)
 
         message = bot.send_message.call_args[0][1]
-        assert "Konsta Piironen (lyöjä: Joosua Rättö)" in message
+        assert "Joosua Rättö → Konsta Piironen" in message
 
     def test_real_match_146950_reproduces_all_three_reported_runs(self, sc):
         # End-to-end regression test built directly from the real incident
@@ -1228,8 +1230,8 @@ class TestProcessMatch:
         assert len(messages) == 3
         assert "Iivari Vihanto | Sotkamon Jymy 1-0 Joensuun Maila" in messages[0]
         assert "lyöjä" not in messages[0]  # batter == scorer for the kunnari
-        assert "Kalle Kuosmanen (lyöjä: Roope Korhonen) | Sotkamon Jymy 2-0 Joensuun Maila" in messages[1]
-        assert "Elmeri Purmonen (lyöjä: Harhaheitto) | Sotkamon Jymy 3-0 Joensuun Maila" in messages[2]
+        assert "Roope Korhonen → Kalle Kuosmanen | Sotkamon Jymy 2-0 Joensuun Maila" in messages[1]
+        assert "Harhaheitto → Elmeri Purmonen | Sotkamon Jymy 3-0 Joensuun Maila" in messages[2]
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
