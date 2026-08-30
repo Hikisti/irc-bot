@@ -277,6 +277,11 @@ class TestSeedSnapshot:
         assert snapshot["period_home_runs"] == 0
         assert snapshot["period_away_runs"] == 0
 
+    def test_seeds_an_empty_signature_set(self, sc):
+        match = make_match(mid=146953, home_id=16802, away_id=16796)
+        snapshot = sc._seed_snapshot(match)
+        assert snapshot["seen_run_signatures"] == set()
+
 
 class TestSeedMatchExtras:
     def test_fills_in_event_count_and_roster_for_every_match(self, sc):
@@ -710,27 +715,33 @@ class TestRunDetection:
         }
         assert sc._is_run_sub_event(sub["texts"]) is False
 
+    def _without_signature(self, runs):
+        """_extract_runs() also yields a content signature (see
+        _run_signature) - strip it for tests that only care about who/what
+        scored, not the exact fingerprint string."""
+        return [r[:3] for r in runs]
+
     def test_extract_runs_yields_multiple_scores_in_one_event(self, sc):
         event = match_event(1, team_id=16803, sub_events=[
             run_sub_event(9986, 16803, pattern="eteni_koti"),
             {"texts": [{"type": "event", "text": "eteni"}, "kolmospesälle"]},  # not a run
             run_sub_event(9904, 16803, pattern="eteni_koti"),
         ])
-        runs = list(sc._extract_runs(event))
+        runs = self._without_signature(sc._extract_runs(event))
         assert runs == [({"id": 9986}, 16803, None), ({"id": 9904}, 16803, None)]
 
     def test_extract_runs_with_number_based_player_ref(self, sc):
         event = match_event(1, team_id=16798, sub_events=[
             run_sub_event_by_number(1, 16798),
         ])
-        runs = list(sc._extract_runs(event))
+        runs = self._without_signature(sc._extract_runs(event))
         assert runs == [({"number": 1}, 16798, None)]
 
     def test_extract_runs_no_player_ref_carries_batter_through(self, sc):
         event = match_event(1, team_id=16802, batter=555, sub_events=[
             {"texts": [{"type": "event", "text": "juoksu"}]},
         ])
-        runs = list(sc._extract_runs(event))
+        runs = self._without_signature(sc._extract_runs(event))
         assert runs == [(None, 16802, 555)]
 
     def test_extract_runs_empty_for_non_scoring_event(self, sc):
@@ -752,15 +763,27 @@ class TestRunDetection:
                 {"type": "stat", "wtscore": 3},
             ]},
         ])
-        runs = list(sc._extract_runs(event))
+        runs = self._without_signature(sc._extract_runs(event))
         assert runs == [({"number": 11}, 16804, "Harhaheitto")]
 
     def test_extract_runs_regular_run_still_uses_parent_batter(self, sc):
         event = match_event(1, team_id=16804, batter=10, sub_events=[
             run_sub_event_by_number(3, 16804),
         ])
-        runs = list(sc._extract_runs(event))
+        runs = self._without_signature(sc._extract_runs(event))
         assert runs == [({"number": 3}, 16804, 10)]
+
+    def test_extract_runs_two_identical_sub_events_get_different_signatures_only_if_content_differs(self, sc):
+        # Same player/base/score twice in one event (distinct plays, e.g.
+        # unlikely but not impossible) still get compared on full content -
+        # this just documents that the signature is deterministic per
+        # sub-event content, not e.g. randomized or positional.
+        event = match_event(1, team_id=16803, sub_events=[
+            run_sub_event(9986, 16803, pattern="eteni_koti"),
+        ])
+        sig_a = list(sc._extract_runs(event))[0][3]
+        sig_b = list(sc._extract_runs(event))[0][3]
+        assert sig_a == sig_b
 
 
 class TestIsErrorDrivenRun:
@@ -775,6 +798,22 @@ class TestIsErrorDrivenRun:
     def test_false_for_kunnari(self, sc):
         texts = [{"type": "event", "text": "löi kunnarin!"}]
         assert sc._is_error_driven_run(texts) is False
+
+
+class TestRunSignature:
+    def test_deterministic_for_identical_content(self, sc):
+        sub_event = run_sub_event(9986, 16803, pattern="eteni_koti")
+        assert sc._run_signature(sub_event) == sc._run_signature(sub_event)
+
+    def test_differs_for_different_content(self, sc):
+        a = run_sub_event(9986, 16803, pattern="eteni_koti")
+        b = run_sub_event(9904, 16803, pattern="eteni_koti")
+        assert sc._run_signature(a) != sc._run_signature(b)
+
+    def test_key_order_does_not_matter(self, sc):
+        a = {"texts": ["x"], "runnersAtBases": [1, 2]}
+        b = {"runnersAtBases": [1, 2], "texts": ["x"]}
+        assert sc._run_signature(a) == sc._run_signature(b)
 
 
 class TestLastPlayerRef:
@@ -1232,6 +1271,47 @@ class TestProcessMatch:
         assert "lyöjä" not in messages[0]  # batter == scorer for the kunnari
         assert "Roope Korhonen → Kalle Kuosmanen | Sotkamon Jymy 2-0 Joensuun Maila" in messages[1]
         assert "Harhaheitto → Elmeri Purmonen | Sotkamon Jymy 3-0 Joensuun Maila" in messages[2]
+
+    def test_real_match_147206_duplicated_segment_is_not_double_counted(self, sc):
+        # Regression test for a real incident, confirmed via a diagnostic
+        # log line ("home score snap ... 4 -> 3") and independently by
+        # re-fetching the match's actual event feed: a whole segment of
+        # already-counted plays was re-appended later in the events array
+        # at different positions, and one of those got counted a second
+        # time - a real run scored 3 times over showed up as 4.
+        bot = MagicMock()
+        roster = {16804: {1: "Iivari Vihanto", 4: "Hannes Pekkinen"}}
+        prev = self._prev(match_id=147206, home_id=16804, away_id=16801,
+                           home_name="Sotkamon Jymy", away_name="Kouvolan Pallonlyöjät",
+                           roster=roster, period_home_runs=2, period_away_runs=1)
+        match = make_match(mid=147206, home_id=16804, away_id=16801,
+                            home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät")
+
+        # The real run: Hannes Pekkinen (batter) -> Iivari Vihanto (scorer).
+        real_run_sub_event = {
+            "texts": [{"team": 16804, "type": "player", "number": 1},
+                      {"type": "event", "text": "eteni", "base": 3}, "kotipesään",
+                      {"type": "stat", "score": 3}],
+            "runnersAtBases": [None, None, None, None, 1],
+        }
+        # Same events array the whole match sees in one poll: the real
+        # play, then (much later, different array position, but byte-
+        # identical content) the server re-appending that same play.
+        events = [
+            match_event(1, team_id=16804, batter=4, period=0, sub_events=[real_run_sub_event]),
+            match_event(2, team_id=16804, batter=99, period=0, sub_events=[  # unrelated in between
+                {"texts": ["1. lyönti", {"type": "hit", "hit": None}]},
+            ]),
+            match_event(3, team_id=16804, batter=4, period=0, sub_events=[real_run_sub_event]),  # re-appended
+        ]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        assert len(messages) == 1  # not 2
+        assert "Sotkamon Jymy 3-1 Kouvolan Pallonlyöjät" in messages[0]  # not 4-1
+        assert new_state["period_home_runs"] == 3
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()

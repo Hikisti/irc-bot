@@ -67,6 +67,15 @@ class SuperpesisCommand:
         around a season boundary. Per-match event/roster seeding also
         runs concurrently across matches rather than one at a time (see
         _seed_match_extras()), since they're independent lookups.
+      - Event feed reliability: /online/{id}/events has been observed to
+        contain a whole segment of already-seen plays re-appended later
+        in the array at different positions (confirmed live: re-fetching
+        the full array in one request reproduced identical sub-event
+        content at two far-apart indices - not a fetch-side glitch).
+        Positional (event-count) diffing alone can't detect that, so
+        every matched run also gets a content signature (see
+        _run_signature()) and a per-match "seen" set to catch a real
+        play showing up twice before it's counted or announced twice.
     """
 
     needs_irc_context = True
@@ -383,12 +392,21 @@ class SuperpesisCommand:
         current_period = prev.get("period")
         period_home_runs = prev["period_home_runs"]
         period_away_runs = prev["period_away_runs"]
+        # Content-based dedup on top of the positional event-count diffing
+        # below - confirmed live the events array can contain a whole
+        # segment of already-counted plays re-appended later at new array
+        # positions, which position-based diffing alone can't detect.
+        seen_run_signatures = set(prev.get("seen_run_signatures") or ())
 
         if events is not None and len(events) > prev["event_count"]:
             for event in events[prev["event_count"]:]:
                 event_period = event.get("period")
 
-                for player_ref, scoring_team_id, batter in self._extract_runs(event):
+                for player_ref, scoring_team_id, batter, signature in self._extract_runs(event):
+                    if signature in seen_run_signatures:
+                        continue  # the same real play, re-seen at a new array position
+                    seen_run_signatures.add(signature)
+
                     if event_period != current_period:
                         period_home_runs = 0
                         period_away_runs = 0
@@ -476,25 +494,27 @@ class SuperpesisCommand:
             "event_count": event_count,
             "finished": finished,
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
+            "seen_run_signatures": seen_run_signatures,
         }
 
     # ---- event parsing --------------------------------------------------
 
     def _extract_runs(self, event):
-        """Yields (player_ref, scoring_team_id, batter_fallback) for every
-        run scored within this event - a single event can contain more
-        than one (e.g. a hit that scores multiple runners already on
-        base). player_ref is {"id": N}, {"number": N}, or None - see
-        _resolve_scorer_name() for why there are two shapes.
+        """Yields (player_ref, scoring_team_id, batter_fallback, signature)
+        for every run scored within this event - a single event can
+        contain more than one (e.g. a hit that scores multiple runners
+        already on base). player_ref is {"id": N}, {"number": N}, or
+        None - see _resolve_scorer_name() for why there are two shapes.
+        signature is a content fingerprint of the matched sub-event - see
+        _run_signature() for why it's needed on top of positional
+        (event-count) diffing.
 
         Best-effort against real data, not a guarantee: pesäpallo's event
         feed has a rich Finnish scoring vocabulary that a handful of real
-        matches couldn't fully catalog (~85-100% of a match's authoritative
-        run total was captured by these two patterns across samples
-        checked). Any run this misses still shows up correctly in the
-        final/authoritative score (see _process_match) - only the
-        individual "RUN:" chat announcement for that specific play could
-        be missing, not the score itself.
+        matches couldn't fully catalog. Any run this misses still shows
+        up correctly in the final/authoritative score (see
+        _process_match) - only the individual "RUN:" chat announcement
+        for that specific play could be missing, not the score itself.
         """
         team_id = event.get("team") if event.get("team") is not None else event.get("hTeam")
         for sub_event in event.get("events") or []:
@@ -511,7 +531,23 @@ class SuperpesisCommand:
                     batter = "Harhaheitto"
                 else:
                     batter = event.get("batter")
-                yield player_ref, team_id, batter
+                yield player_ref, team_id, batter, self._run_signature(sub_event)
+
+    def _run_signature(self, sub_event) -> str:
+        """A content fingerprint for a matched run sub-event, used to
+        detect the *same real play* showing up more than once - confirmed
+        live that the /online/{id}/events array can contain a whole
+        segment of already-seen events re-appended later at different
+        array positions (not a client-side fetch inconsistency: refetching
+        the full array in one request reproduced it), which plain
+        event-count-based diffing has no way to catch since it only looks
+        at *new positions*, not whether the content there is actually new.
+        Hashing the full matched sub-event (not just a couple of fields)
+        means a genuine second real play by the same player is
+        vanishingly unlikely to collide, since real game state
+        (runnersAtBases, cumulative stat counters) differs between any
+        two distinct plays."""
+        return json.dumps(sub_event, sort_keys=True, ensure_ascii=False)
 
     def _is_run_sub_event(self, texts) -> bool:
         # Confirmed ways pesäpallo's event feed records a run reaching
@@ -790,6 +826,7 @@ class SuperpesisCommand:
             "event_count": 0,  # seeded from a real fetch below, see _run()
             "finished": bool(live.get("finished")),
             "roster": {},  # seeded from a real fetch below, see _run()
+            "seen_run_signatures": set(),
         }
 
     # ---- data fetching --------------------------------------------------
