@@ -23,7 +23,7 @@ class CommandHandler:
             AijaMattoCommand(): {"aliases": ["!bjorck"], "allow_args": False},
             TimeCommand(): {"aliases": ["!time"], "allow_args": True},
             F1Command(): {"aliases": ["!f1"], "allow_args": False},
-            LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True},
+            LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True, "channels": ["#smliiga"]},
             DistanceCommand(): {"aliases": ["!distance"], "allow_args": True},
             SuperpesisCommand(): {"aliases": ["!superpesis"], "allow_args": True, "channels": ["#pesis.fi"]}
         }

@@ -404,6 +404,106 @@ class TestPollOnce:
         assert result is False
 
 
+class TestAnnounceEnd:
+    def _game_with_periods(self, finished_type, periods):
+        game = make_game(gid=2701280, home="Sport", away="Jokerit",
+                          home_goals=[goal_event()] * 5, away_goals=[goal_event()] * 4,
+                          ended=True, finished_type=finished_type)
+        game["periods"] = periods
+        return game
+
+    def test_regulation_final_has_no_suffix(self, liiga_command):
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_REGULAR_GAME_TIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 1},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 1},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit"
+
+    def test_overtime_final_gets_ot_suffix(self, liiga_command):
+        # Regression test built from the real payload for Liiga game
+        # 2701280 (Sport-Jokerit, 2026-09-01): a decisive overtime period
+        # in "periods" pairs with an "ENDED_DURING_..." finishedType that
+        # mentions "OVERTIME".
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_OVERTIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (OT)"
+
+    def test_shootout_final_gets_so_suffix(self, liiga_command):
+        # Regression test built from the real payload for Liiga game
+        # 2701280 (Sport-Jokerit, 2026-09-01, finishedType
+        # "ENDED_DURING_WINNING_SHOT_COMPETITION") - confirmed live this
+        # exact game actually went to a shootout.
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_WINNING_SHOT_COMPETITION", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 0, "awayTeamGoals": 0},
+            {"index": 5, "category": "WINNING_SHOT_COMPETITION", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (SO)"
+
+    def test_finishedtype_and_periods_disagreement_is_logged(self, liiga_command, capsys):
+        # A stale/generic finishedType at the exact "ended" transition
+        # (a plausible eventual-consistency gap, not reproduced after the
+        # fact - see the real incident this is a diagnostic for) must not
+        # be silently swallowed: it should still be logged so a recurrence
+        # leaves hard evidence instead of another unexplained missing
+        # suffix.
+        bot = MagicMock()
+        game = self._game_with_periods("ACTIVE_OR_NOT_STARTED", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 0, "awayTeamGoals": 0},
+            {"index": 5, "category": "WINNING_SHOT_COMPETITION", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (SO)"  # periods still wins
+        captured = capsys.readouterr()
+        assert "end-suffix mismatch" in captured.out
+        assert "2701280" in captured.out
+
+    def test_scoreless_overtime_period_entry_is_not_mistaken_for_a_played_one(self, liiga_command):
+        # A period category can apparently appear in the list even when
+        # nothing happened in it (e.g. scheduling metadata) - only count
+        # it if it actually has goals recorded.
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_REGULAR_GAME_TIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 1},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 1},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 0, "awayTeamGoals": 0},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit"
+
+
 class TestFetchTodayGames:
     def _make_response(self, status_ok=True, payload=None):
         resp = MagicMock()

@@ -368,11 +368,41 @@ class LiigaCommand:
 
         finished = game.get("finishedType") or ""
         if "SHOOTOUT" in finished or "WINNING_SHOT" in finished:
-            suffix = " (SO)"
+            suffix_from_type = " (SO)"
         elif "OVERTIME" in finished:
-            suffix = " (OT)"
+            suffix_from_type = " (OT)"
         else:
-            suffix = ""
+            suffix_from_type = ""
+
+        # Corroborating source, independent of finishedType's exact enum
+        # wording: the periods list itself carries a "category" per
+        # period, confirmed live (2701280, Sport-Jokerit,
+        # 2026-09-01) to include "OVERTIME"/"WINNING_SHOT_COMPETITION"
+        # entries. Checked in addition to finishedType (not instead of)
+        # since a decided-but-scoreless overtime period can still appear
+        # in the list even when nothing happened in it.
+        suffix_from_periods = ""
+        for period in game.get("periods") or []:
+            category = period.get("category") or ""
+            goals = (period.get("homeTeamGoals") or 0) + (period.get("awayTeamGoals") or 0)
+            if category == "WINNING_SHOT_COMPETITION" and goals:
+                suffix_from_periods = " (SO)"
+                break
+            if category == "OVERTIME" and goals:
+                suffix_from_periods = " (OT)"
+
+        suffix = suffix_from_type or suffix_from_periods
+        if suffix_from_type != suffix_from_periods:
+            # Diagnostic for a reported case where a real shootout final
+            # was announced with no suffix at all - couldn't reproduce
+            # the exact stale snapshot after the fact (by the time this
+            # was investigated, a fresh fetch of that same game already
+            # had a correct/consistent finishedType), so this is here to
+            # capture hard evidence if it recurs rather than guessing.
+            print(
+                f"Liiga: end-suffix mismatch for game {game.get('id')} in {channel}: "
+                f"finishedType={finished!r} (-> {suffix_from_type!r}) vs periods (-> {suffix_from_periods!r})"
+            )
 
         self._safe_send(
             irc_bot, channel, f"{self.FINAL_PREFIX} {home} {home_goals}-{away_goals} {away}{suffix}"
