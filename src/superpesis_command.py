@@ -88,6 +88,19 @@ class SuperpesisCommand:
         (see _run_signature()) plus a per-match "seen" set - both seeded
         from the match's existing history when tracking starts
         (_seed_match_extras()) so starting mid-match doesn't replay it.
+        A further wrinkle confirmed live (match 147201): the same real
+        point can apparently get retracted and reissued mid-game with
+        different content entirely (e.g. correcting who was actually at
+        bat), which produces a brand-new content signature no dedup set
+        can recognize. Since pesistulokset.fi's own authoritative
+        per-period total is always eventually correct (confirmed against
+        that match's real final result), _process_match() never lets the
+        locally-incremented count for a side exceed it - a run that would
+        push past it is logged and silently dropped rather than shown as
+        an impossible score, and its signature is deliberately left
+        unmarked so a later poll can still pick it up if the "authoritative
+        total lagging a poll behind" explanation turns out to be the
+        real one instead.
     """
 
     needs_irc_context = True
@@ -452,6 +465,11 @@ class SuperpesisCommand:
         # scan.
         seen_run_signatures = set(prev.get("seen_run_signatures") or ())
         seen_period_end_signatures = set(prev.get("seen_period_end_signatures") or ())
+        # Per-period authoritative totals, used below as a hard ceiling on
+        # the locally-incremented count - recomputed whenever the period
+        # changes (see the reset just below). None (unknown) never caps.
+        authoritative_home = self._period_runs(live, "home", current_period)
+        authoritative_away = self._period_runs(live, "away", current_period)
 
         if events is not None:
             for event in events:
@@ -460,19 +478,49 @@ class SuperpesisCommand:
                 for player_ref, scoring_team_id, batter, signature in self._extract_runs(event):
                     if signature in seen_run_signatures:
                         continue  # the same real play, already announced
-                    seen_run_signatures.add(signature)
 
                     if event_period != current_period:
                         period_home_runs = 0
                         period_away_runs = 0
                         current_period = event_period
+                        authoritative_home = self._period_runs(live, "home", current_period)
+                        authoritative_away = self._period_runs(live, "away", current_period)
+
+                    if scoring_team_id == home_id:
+                        team_runs, authoritative = period_home_runs, authoritative_home
+                    elif scoring_team_id == away_id:
+                        team_runs, authoritative = period_away_runs, authoritative_away
+                    else:
+                        continue
+                    if authoritative is not None and team_runs >= authoritative:
+                        # Confirmed live (match 147201): the event feed can
+                        # apparently retract-and-reissue a play mid-game
+                        # (e.g. correcting who was actually at bat),
+                        # producing a brand-new content signature for what
+                        # is really the same real run - which would
+                        # otherwise show an impossible score (past
+                        # pesistulokset.fi's own authoritative period
+                        # total, confirmed correct against this same
+                        # match's real final result) or a phantom duplicate
+                        # RUN: line. Deliberately NOT added to
+                        # seen_run_signatures: if this is instead just the
+                        # authoritative source lagging a poll behind a
+                        # genuinely new run, leaving it unseen lets a later
+                        # poll (once authoritative catches up) count it
+                        # instead of losing it forever.
+                        print(
+                            f"Superpesis: suppressed a would-be run for match {prev['match_id']} "
+                            f"period {current_period} ({'home' if scoring_team_id == home_id else 'away'}) "
+                            f"- local count {team_runs} already at/above authoritative {authoritative}; "
+                            f"signature={signature}"
+                        )
+                        continue
+                    seen_run_signatures.add(signature)
 
                     if scoring_team_id == home_id:
                         period_home_runs += 1
-                    elif scoring_team_id == away_id:
-                        period_away_runs += 1
                     else:
-                        continue
+                        period_away_runs += 1
                     scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
                     # The batter ("lyöjä") who put the ball in play is a
                     # separate person from the runner who scored

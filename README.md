@@ -99,8 +99,11 @@ the headline, per-period run breakdown in parens, e.g. `FINAL: Joensuun Maila - 
 provider-side correction to the event feed after the fact can't produce more messages for it.
 Individual run announcements are best-effort (pesäpallo's scoring vocabulary — regular hits, wild
 throws, home runs, tie-break rounds — wasn't necessarily fully catalogued, so an unseen pattern
-could still be missed as a chat line), but the score and final result are always accurate since
-they come from the API's own authoritative live-result summary, never computed locally.
+could still be missed as a chat line, and the provider has been observed retracting and
+reissuing a play mid-game with different details — that never produces a wrong score, just an
+occasional missing chat line for that one play), but the score and final result are always
+accurate since they come from the API's own authoritative live-result summary, never computed
+locally.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).

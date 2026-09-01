@@ -1393,6 +1393,77 @@ class TestProcessMatch:
         assert "Sotkamon Jymy 5-0 Kouvolan Pallonlyöjät" in messages[3]
         assert new_state["period_home_runs"] == 5
 
+    def test_real_match_147201_a_run_that_would_exceed_the_authoritative_total_is_suppressed(self, sc):
+        # Regression test for a real incident (pesistulokset.fi match
+        # 147201, "1. jakso" and "2. jakso" both affected): pesistulokset.fi
+        # apparently retracts and reissues a play mid-game (confirmed live:
+        # the real "4. lopettava" run ended up announced twice, first as
+        # "Perttu Ruuska -> Aapo Komulainen" then, minutes later, as the
+        # actually-correct "Jukka-Pekka Vainionpää -> Aapo Komulainen" -
+        # same real point, two different batters), which produces a new
+        # content signature our dedup can't recognize as "already seen".
+        # Without a cap, that shows an impossible score (higher than
+        # pesistulokset.fi's own authoritative period total - the real
+        # period ended 6-5, but the bot announced "6-6"). The authoritative
+        # total is always eventually correct (confirmed against this same
+        # match's real final result: "6 - 5, 6 - 5"), so once the local
+        # count already matches it, one more detected run for that side
+        # must be suppressed rather than shown.
+        bot = MagicMock()
+        roster = {16802: {10: "Perttu Ruuska", 11: "Jukka-Pekka Vainionpää", 5: "Aapo Komulainen"}}
+        # Local count is already at the real, authoritative period total
+        # (5) after the first ten real runs - matches the true incident
+        # timeline (the ghost run was the eleventh and last of the period).
+        prev = self._prev(match_id=147201, home_id=16805, away_id=16802,
+                           home_name="Vimpelin Veto", away_name="Manse PP, Tampere",
+                           roster=roster, period=0, period_home_runs=6, period_away_runs=4)
+        match = make_match(mid=147201, home_id=16805, away_id=16802,
+                            home="Vimpelin Veto", away="Manse PP, Tampere")
+        match["liveResult"]["runs"] = [{"home": [6], "away": [4]}]  # authoritative: still 6-4
+
+        ghost_run = match_event(50, team_id=16802, batter=10, period=0, sub_events=[
+            run_sub_event_by_number(5, 16802),
+        ])
+
+        with patch.object(sc, "_fetch_match_events", return_value=[ghost_run]), \
+             patch("builtins.print") as mock_print:
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        bot.send_message.assert_not_called()  # no RUN: line for the ghost
+        assert new_state["period_away_runs"] == 4  # not bumped to 5
+        assert any("suppressed" in str(c.args[0]) for c in mock_print.call_args_list)
+
+    def test_suppressed_run_is_retried_once_authoritative_catches_up(self, sc):
+        # A suppressed signature is deliberately NOT marked "seen" - if
+        # the suppression was instead just the authoritative source
+        # lagging a poll behind a genuinely new run, the next poll (once
+        # authoritative rises to match) must still count and announce it,
+        # not lose it forever.
+        bot = MagicMock()
+        roster = {16802: {10: "Perttu Ruuska", 5: "Aapo Komulainen"}}
+        run_event = match_event(50, team_id=16802, batter=10, period=0, sub_events=[
+            run_sub_event_by_number(5, 16802),
+        ])
+
+        # First poll: authoritative hasn't caught up yet - suppressed.
+        prev = self._prev(match_id=147201, home_id=16805, away_id=16802,
+                           roster=roster, period=0, period_home_runs=0, period_away_runs=4)
+        match = make_match(mid=147201, home_id=16805, away_id=16802)
+        match["liveResult"]["runs"] = [{"home": [0], "away": [4]}]
+        with patch.object(sc, "_fetch_match_events", return_value=[run_event]):
+            prev = sc._process_match(bot, "#pesis.fi", match, prev)
+        assert bot.send_message.call_count == 0
+        assert prev["period_away_runs"] == 4
+
+        # Second poll: authoritative has now risen to 5 - the exact same
+        # signature (still present in the events array) must be picked up.
+        match["liveResult"]["runs"] = [{"home": [0], "away": [5]}]
+        with patch.object(sc, "_fetch_match_events", return_value=[run_event]):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        bot.send_message.assert_called_once()
+        assert new_state["period_away_runs"] == 5
+
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
         roster = {16802: {1: "A"}, 16796: {1: "B"}}
