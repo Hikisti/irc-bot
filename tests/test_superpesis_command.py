@@ -815,6 +815,24 @@ class TestRunSignature:
         b = {"runnersAtBases": [1, 2], "texts": ["x"]}
         assert sc._run_signature(a) == sc._run_signature(b)
 
+    def test_differs_across_periods_for_identical_sub_event_content(self, sc):
+        # Regression test for a real incident (pesistulokset.fi match
+        # 147207): the exact same two players and exact same bases-
+        # occupied state produced a byte-identical sub-event in jakso 1
+        # and again in jakso 2 - a real coincidence, not corrupt data
+        # (confirmed live: both were genuine, distinct real runs on
+        # pesistulokset.fi's own page). Without the period folded in
+        # here, the second one collided with the first's signature and
+        # was silently dropped as a false-positive duplicate.
+        sub_event = run_sub_event(8119, 16801, pattern="eteni_koti")
+        assert sc._run_signature(sub_event, period=0) != sc._run_signature(sub_event, period=1)
+
+    def test_no_period_given_still_works(self, sc):
+        # Callers that don't have a period (or don't care) keep working -
+        # period defaults to None and still participates consistently.
+        sub_event = run_sub_event(9986, 16803, pattern="eteni_koti")
+        assert sc._run_signature(sub_event) == sc._run_signature(sub_event, period=None)
+
 
 class TestLastPlayerRef:
     def test_prefers_id_when_present(self, sc):
@@ -1463,6 +1481,45 @@ class TestProcessMatch:
 
         bot.send_message.assert_called_once()
         assert new_state["period_away_runs"] == 5
+
+    def test_real_match_147207_a_late_run_for_an_earlier_period_does_not_reset_the_active_tally(self, sc):
+        # Regression test for a real incident (pesistulokset.fi match
+        # 147207): a run event tagged period=0 (jakso 1) showed up in the
+        # feed well after jakso 1's own JAKSO: end had already been
+        # announced and jakso 2 was already in progress - a correction
+        # appended out of period order (confirmed live: the settled
+        # events array itself is cleanly period-ordered, so this only
+        # shows up mid-poll, not in a post-game fetch). The old behavior
+        # reset the active tally to 0 whenever a scanned event's period
+        # differed from the current one, wiping out jakso 2's real
+        # running score and restarting it from 0 instead of only ever
+        # advancing it.
+        bot = MagicMock()
+        roster = {16804: {2: "Aapo Hiltunen", 3: "Iivari Vihanto"}}
+        prev = self._prev(match_id=147207, home_id=16801, away_id=16804,
+                           home_name="Kouvolan Pallonlyöjät", away_name="Sotkamon Jymy",
+                           roster=roster, period=1, period_home_runs=1, period_away_runs=1)
+        match = make_match(mid=147207, home_id=16801, away_id=16804,
+                            home="Kouvolan Pallonlyöjät", away="Sotkamon Jymy")
+        match["liveResult"]["runs"] = [{"home": [2], "away": [2]}, {"home": [1], "away": [1]}]
+
+        late_jakso1_run = match_event(99, team_id=16804, batter=2, period=0, sub_events=[
+            run_sub_event_by_number(3, 16804),
+        ])
+
+        with patch.object(sc, "_fetch_match_events", return_value=[late_jakso1_run]):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        message = bot.send_message.call_args[0][1]
+        assert "(1. jakso)" in message  # labeled with its own real period
+        # Scoped to jakso 1's own (previously-untouched) tally, not
+        # jakso 2's running score.
+        assert "Kouvolan Pallonlyöjät 0-1 Sotkamon Jymy" in message
+        # jakso 2 (the active period) is completely untouched.
+        assert new_state["period"] == 1
+        assert new_state["period_home_runs"] == 1
+        assert new_state["period_away_runs"] == 1
+        assert new_state["past_period_runs"] == {0: {"home": 0, "away": 1}}
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()

@@ -101,6 +101,28 @@ class SuperpesisCommand:
         unmarked so a later poll can still pick it up if the "authoritative
         total lagging a poll behind" explanation turns out to be the
         real one instead.
+      - Two more wrinkles confirmed live (match 147207), both in how
+        "period" is used:
+        1) A run event tagged with an *earlier* period than the one
+           already being tracked can appear in the array well after that
+           period's own JAKSO: end was already announced (e.g. a
+           correction to a jakso 1 play surfacing partway through jakso
+           2) - even though the fully-settled, post-game array is
+           cleanly period-ordered, so this is only visible mid-poll, not
+           from a later fetch. Resetting the active tally whenever a
+           scanned event's period differs from the current one (the old
+           behavior) mistook this for "back to jakso 1", wiping out the
+           real, active period's running score. _process_match() now
+           only resets on a genuine forward advance; a late run for an
+           earlier period is tallied separately per period instead (see
+           active_tally/past_period_runs and _apply_run()), never
+           touching the active period's count.
+        2) The same two players and exact same bases-occupied state can
+           coincidentally produce a byte-identical sub-event in two
+           different periods (both real, distinct plays on
+           pesistulokset.fi's own page) - which collided under the same
+           signature and silently dropped the second one, before `period`
+           was folded into _run_signature()'s hash.
     """
 
     needs_irc_context = True
@@ -437,10 +459,22 @@ class SuperpesisCommand:
         # has separate runs_home_first_period/second_period/super_inning/
         # scoring_contest fields, not one cumulative count) - so the score
         # shown in RUN:/JAKSO: lines tracks only the *current* period,
-        # reset whenever the period changes.
+        # reset whenever the period genuinely advances.
         current_period = prev.get("period")
-        period_home_runs = prev["period_home_runs"]
-        period_away_runs = prev["period_away_runs"]
+        active_tally = {"home": prev["period_home_runs"], "away": prev["period_away_runs"]}
+        # Confirmed live (match 147207): a run for an *earlier* period can
+        # appear in the events array after play (and this code) has
+        # already moved on to a later one - e.g. a correction to a jakso 1
+        # play showing up well into jakso 2, after jakso 1's own JAKSO:
+        # end was already announced. Naively resetting active_tally to 0
+        # whenever a scanned event's period differs from current_period
+        # (the old behavior) treated that as "back to jakso 1", wiping out
+        # jakso 2's real running tally and restarting it from 0 - visible
+        # live as scores that suddenly dropped mid-period instead of only
+        # ever climbing. A late run like that is now tallied separately
+        # per period here instead, never touching active_tally/
+        # current_period at all.
+        past_period_runs = {int(k): dict(v) for k, v in (prev.get("past_period_runs") or {}).items()}
         # Content-based dedup, not positional event-count diffing: confirmed
         # live that a single outer event's own "events" sub-array can grow
         # in place after it's already at a fixed array position (a batter's
@@ -465,12 +499,6 @@ class SuperpesisCommand:
         # scan.
         seen_run_signatures = set(prev.get("seen_run_signatures") or ())
         seen_period_end_signatures = set(prev.get("seen_period_end_signatures") or ())
-        # Per-period authoritative totals, used below as a hard ceiling on
-        # the locally-incremented count - recomputed whenever the period
-        # changes (see the reset just below). None (unknown) never caps.
-        authoritative_home = self._period_runs(live, "home", current_period)
-        authoritative_away = self._period_runs(live, "away", current_period)
-
         if events is not None:
             for event in events:
                 event_period = event.get("period")
@@ -479,72 +507,37 @@ class SuperpesisCommand:
                     if signature in seen_run_signatures:
                         continue  # the same real play, already announced
 
-                    if event_period != current_period:
-                        period_home_runs = 0
-                        period_away_runs = 0
-                        current_period = event_period
-                        authoritative_home = self._period_runs(live, "home", current_period)
-                        authoritative_away = self._period_runs(live, "away", current_period)
-
-                    if scoring_team_id == home_id:
-                        team_runs, authoritative = period_home_runs, authoritative_home
-                    elif scoring_team_id == away_id:
-                        team_runs, authoritative = period_away_runs, authoritative_away
+                    if (event_period is not None and current_period is not None
+                            and event_period < current_period):
+                        tally = past_period_runs.setdefault(event_period, {"home": 0, "away": 0})
                     else:
-                        continue
-                    if authoritative is not None and team_runs >= authoritative:
-                        # Confirmed live (match 147201): the event feed can
-                        # apparently retract-and-reissue a play mid-game
-                        # (e.g. correcting who was actually at bat),
-                        # producing a brand-new content signature for what
-                        # is really the same real run - which would
-                        # otherwise show an impossible score (past
-                        # pesistulokset.fi's own authoritative period
-                        # total, confirmed correct against this same
-                        # match's real final result) or a phantom duplicate
-                        # RUN: line. Deliberately NOT added to
-                        # seen_run_signatures: if this is instead just the
-                        # authoritative source lagging a poll behind a
-                        # genuinely new run, leaving it unseen lets a later
-                        # poll (once authoritative catches up) count it
-                        # instead of losing it forever.
-                        print(
-                            f"Superpesis: suppressed a would-be run for match {prev['match_id']} "
-                            f"period {current_period} ({'home' if scoring_team_id == home_id else 'away'}) "
-                            f"- local count {team_runs} already at/above authoritative {authoritative}; "
-                            f"signature={signature}"
-                        )
-                        continue
-                    seen_run_signatures.add(signature)
+                        if event_period != current_period:
+                            active_tally["home"] = 0
+                            active_tally["away"] = 0
+                            current_period = event_period
+                        tally = active_tally
 
-                    if scoring_team_id == home_id:
-                        period_home_runs += 1
-                    else:
-                        period_away_runs += 1
-                    scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
-                    # The batter ("lyöjä") who put the ball in play is a
-                    # separate person from the runner who scored
-                    # ("etenijä") - resolved the same way (roster first,
-                    # since it's just as likely to be a jersey number).
-                    batter_name = (
-                        self._resolve_scorer_name(None, scoring_team_id, batter, roster)
-                        if batter is not None else None
-                    )
-                    self._safe_send(irc_bot, channel, self._format_run(
-                        event, home_name, away_name, period_home_runs, period_away_runs, scoring_team_id, home_id,
-                        scorer_name, batter_name,
-                    ))
+                    if self._apply_run(irc_bot, channel, event, player_ref, scoring_team_id, batter,
+                                        signature, home_id, away_id, home_name, away_name, roster,
+                                        tally, live, prev["match_id"]):
+                        seen_run_signatures.add(signature)
 
                 period_end_text, period_end_signature = self._extract_period_end(event)
                 if period_end_text and period_end_signature not in seen_period_end_signatures:
                     seen_period_end_signatures.add(period_end_signature)
-                    # Uses the still-unreset tally above: the period-end
-                    # marker carries the *ending* period's own value, so
-                    # this always announces that period's final score
-                    # before the next run (if any) resets the counters.
+                    # The ending period's own tally, whether that's the
+                    # still-active one (the common case - not yet reset by
+                    # anything past it) or one already tucked away in
+                    # past_period_runs (a period-end marker arriving late,
+                    # the same way a late run can - see active_tally above).
+                    end_tally = active_tally if event_period == current_period else (
+                        past_period_runs.get(event_period) or {"home": 0, "away": 0}
+                    )
                     self._safe_send(irc_bot, channel, self._format_period_end(
-                        period_end_text, home_name, away_name, period_home_runs, period_away_runs,
+                        period_end_text, home_name, away_name, end_tally["home"], end_tally["away"],
                     ))
+
+        period_home_runs, period_away_runs = active_tally["home"], active_tally["away"]
 
         # No longer used to gate the scan above (see the comment on
         # seen_run_signatures) - kept as an informational high-water mark
@@ -596,7 +589,60 @@ class SuperpesisCommand:
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
             "seen_run_signatures": seen_run_signatures,
             "seen_period_end_signatures": seen_period_end_signatures,
+            "past_period_runs": past_period_runs,
         }
+
+    def _apply_run(self, irc_bot, channel, event, player_ref, scoring_team_id, batter, signature,
+                    home_id, away_id, home_name, away_name, roster, tally, live, match_id):
+        """Applies one newly-detected run to `tally` (a mutable
+        {"home": int, "away": int} dict for whichever period it belongs
+        to - see _process_match) and announces it, unless the authoritative
+        total for that side/period says it shouldn't count (see the cap
+        comment below). Returns True if it was counted and announced,
+        False if it was suppressed."""
+        if scoring_team_id == home_id:
+            side = "home"
+        elif scoring_team_id == away_id:
+            side = "away"
+        else:
+            return False
+
+        authoritative = self._period_runs(live, side, event.get("period"))
+        if authoritative is not None and tally[side] >= authoritative:
+            # Confirmed live (match 147201): the event feed can apparently
+            # retract-and-reissue a play mid-game (e.g. correcting who was
+            # actually at bat), producing a brand-new content signature
+            # for what is really the same real run - which would
+            # otherwise show an impossible score (past pesistulokset.fi's
+            # own authoritative period total, confirmed correct against
+            # that match's real final result) or a phantom duplicate RUN:
+            # line. Deliberately not marked "seen" by the caller: if this
+            # is instead just the authoritative source lagging a poll
+            # behind a genuinely new run, leaving it unseen lets a later
+            # poll (once authoritative catches up) count it instead of
+            # losing it forever.
+            print(
+                f"Superpesis: suppressed a would-be run for match {match_id} period {event.get('period')} "
+                f"({side}) - local count {tally[side]} already at/above authoritative {authoritative}; "
+                f"signature={signature}"
+            )
+            return False
+
+        tally[side] += 1
+        scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
+        # The batter ("lyöjä") who put the ball in play is a separate
+        # person from the runner who scored ("etenijä") - resolved the
+        # same way (roster first, since it's just as likely to be a
+        # jersey number).
+        batter_name = (
+            self._resolve_scorer_name(None, scoring_team_id, batter, roster)
+            if batter is not None else None
+        )
+        self._safe_send(irc_bot, channel, self._format_run(
+            event, home_name, away_name, tally["home"], tally["away"], scoring_team_id, home_id,
+            scorer_name, batter_name,
+        ))
+        return True
 
     # ---- event parsing --------------------------------------------------
 
@@ -632,9 +678,9 @@ class SuperpesisCommand:
                     batter = "Harhaheitto"
                 else:
                     batter = event.get("batter")
-                yield player_ref, team_id, batter, self._run_signature(sub_event)
+                yield player_ref, team_id, batter, self._run_signature(sub_event, event.get("period"))
 
-    def _run_signature(self, sub_event) -> str:
+    def _run_signature(self, sub_event, period=None) -> str:
         """A content fingerprint for a matched run sub-event, used to
         detect the *same real play* showing up more than once - confirmed
         live that the /online/{id}/events array can contain a whole
@@ -647,8 +693,13 @@ class SuperpesisCommand:
         means a genuine second real play by the same player is
         vanishingly unlikely to collide, since real game state
         (runnersAtBases, cumulative stat counters) differs between any
-        two distinct plays."""
-        return json.dumps(sub_event, sort_keys=True, ensure_ascii=False)
+        two distinct plays *within the same period* - confirmed live
+        (match 147207) that it's NOT unlikely across two different
+        periods: the same two players, same bases-occupied state,
+        produced two byte-identical sub-events in jakso 1 and jakso 2,
+        which silently dropped the second (real) run as a false-positive
+        duplicate before `period` was folded into the hash here."""
+        return json.dumps({"period": period, "sub_event": sub_event}, sort_keys=True, ensure_ascii=False)
 
     def _is_run_sub_event(self, texts) -> bool:
         # Confirmed ways pesäpallo's event feed records a run reaching
@@ -779,7 +830,7 @@ class SuperpesisCommand:
             )
             if not has_periodend:
                 continue
-            signature = self._run_signature(sub_event)
+            signature = self._run_signature(sub_event, event.get("period"))
             for t in texts:
                 if isinstance(t, dict) and t.get("type") == "event" and t.get("text"):
                     return t.get("text"), signature
@@ -949,6 +1000,14 @@ class SuperpesisCommand:
             # sets for "already announced", not array position.
             "seen_run_signatures": set(),
             "seen_period_end_signatures": set(),
+            # Local tallies for runs belonging to an earlier period than
+            # the active one, seen late (see _process_match). Nothing to
+            # seed here even mid-match: any such run already in the
+            # match's history by now is *within* whichever period it
+            # belongs to, not literally out of order in the array, so
+            # _seed_match_extras()'s signature seeding (not this) is what
+            # prevents replaying it.
+            "past_period_runs": {},
         }
 
     # ---- data fetching --------------------------------------------------
