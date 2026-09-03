@@ -88,9 +88,10 @@ works in `#pesis.fi`** — unlike
 every other command, it's restricted to that one channel (see `"channels"` in
 `command_handler.py`); typing it elsewhere is silently ignored. Uses pesistulokset.fi's
 unofficial JSON API. Each run announcement names the lyöjä (batter) and etenijä (scorer), in
-that order matching pesistulokset.fi's own column order, when they're different people, e.g.
-`RUN: Joensuun Maila — Joosua Rättö → Konsta Piironen | ...`; period transitions (jakso 1/2,
-supervuoro, kotiutuslyöntikilpailu) get
+that order matching pesistulokset.fi's own column order, when they're different people, plus the
+jakso and vuoropari (batting turn, e.g. "3. lopettava") it happened in, e.g.
+`RUN: Joensuun Maila — Joosua Rättö → Konsta Piironen | Joensuun Maila 3-2 Sotkamon Jymy (2.
+jakso, 3. lopettava)`; period transitions (jakso 1/2, supervuoro, kotiutuslyöntikilpailu) get
 their own `JAKSO:` announcement. The score shown in `RUN:`/`JAKSO:` lines is scoped to the
 current jakso only (pesäpallo scores each period independently, not as a running match total).
 `FINAL:` reports the whole match in the real pesäpallo convention — jaksovoitot (periods won) as

@@ -113,11 +113,12 @@ def out_at_home_sub_event(player_id, team_id):
     }
 
 
-def match_event(event_id, team_id, period=1, sub_events=None, batter=None):
+def match_event(event_id, team_id, period=1, sub_events=None, batter=None, inning=0, bat_turn=None):
     return {
         "id": event_id,
         "period": period,
-        "inning": 0,
+        "inning": inning,
+        "batTurn": bat_turn,
         "team": team_id,
         "hTeam": team_id,
         "batter": batter,
@@ -1178,6 +1179,32 @@ class TestFormatRun:
         event = {"period": 1}
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Scorer", None)
         assert "lyöjä" not in msg
+
+    def test_includes_vuoropari_alongside_the_period(self, sc):
+        # Regression coverage built directly from real matches (147202,
+        # 147207): "inning" (0-indexed) + "batTurn" (0 = the side that
+        # bats first in that inning - "aloittava"; 1 = the side that
+        # bats second - "lopettava") together give pesistulokset.fi's own
+        # "Vuoropari" column, e.g. "3. lopettava".
+        event = {"period": 0, "inning": 2, "batTurn": 1}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(1. jakso, 3. lopettava)" in msg
+
+    def test_vuoropari_aloittava_is_bat_turn_zero(self, sc):
+        event = {"period": 0, "inning": 0, "batTurn": 0}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(1. jakso, 1. aloittava)" in msg
+
+    def test_missing_inning_or_bat_turn_falls_back_to_period_only(self, sc):
+        event = {"period": 0, "inning": None, "batTurn": None}
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(1. jakso)" in msg
+        assert "aloittava" not in msg and "lopettava" not in msg
+
+    def test_vuoropari_without_a_period_has_no_leading_comma(self, sc):
+        event = {"inning": 0, "batTurn": 0}  # no "period" key at all
+        msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "X")
+        assert "(1. aloittava)" in msg
 
 
 class TestProcessMatch:

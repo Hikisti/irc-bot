@@ -707,7 +707,7 @@ class SuperpesisCommand:
     def _format_run(self, event, home_name, away_name, home_runs, away_runs, scoring_team_id, home_id,
                      scorer_name, batter_name=None):
         scoring_team = home_name if scoring_team_id == home_id else away_name
-        period_str = self._format_period_suffix(event.get("period"))
+        suffix = self._format_run_suffix(event)
         scorer_str = scorer_name or "Unknown"
         # Lyöjä (batter) before etenijä (scorer), matching pesistulokset.fi's
         # own column order. Skipped entirely if it's the same person as the
@@ -716,14 +716,34 @@ class SuperpesisCommand:
         namestr = f"{batter_name} → {scorer_str}" if batter_name and batter_name != scorer_name else scorer_str
         return (
             f"{self.RUN_PREFIX} {scoring_team} — {namestr} | "
-            f"{home_name} {home_runs}-{away_runs} {away_name}{period_str}"
+            f"{home_name} {home_runs}-{away_runs} {away_name}{suffix}"
         )
 
-    def _format_period_suffix(self, period) -> str:
+    def _format_run_suffix(self, event) -> str:
+        """" (2. jakso, 3. lopettava)" - the period label plus the
+        vuoropari (batting turn) pesistulokset.fi's own page shows this
+        exact play under, e.g. "3. lopettava" for the second (away) side
+        of the match's 3rd inning. Built from "inning" (0-indexed, so
+        +1) and "batTurn" (0 = "aloittava", the side that bats first in
+        that inning, 1 = "lopettava", the side that bats second) -
+        confirmed live against several real matches' own play-by-play
+        pages that this pairing (not e.g. home/away) is what the Finnish
+        "aloittava"/"lopettava" labels track. Falls back to just the
+        period label if either field is missing (older/incomplete event
+        data)."""
+        period_label = self._format_period_suffix(event.get("period"), parens=False)
+        inning, bat_turn = event.get("inning"), event.get("batTurn")
+        if inning is None or bat_turn not in (0, 1):
+            return f" ({period_label})" if period_label else ""
+        vuoropari = f"{inning + 1}. {'aloittava' if bat_turn == 0 else 'lopettava'}"
+        parts = [p for p in (period_label, vuoropari) if p]
+        return f" ({', '.join(parts)})" if parts else ""
+
+    def _format_period_suffix(self, period, parens=True) -> str:
         if period is None:
             return ""
         label = self.PERIOD_LABELS.get(period, f"jakso {period + 1}")
-        return f" ({label})"
+        return f" ({label})" if parens else label
 
     def _format_period_end(self, text, home_name, away_name, home_runs, away_runs) -> str:
         return (
