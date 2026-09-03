@@ -68,61 +68,48 @@ class SuperpesisCommand:
         around a season boundary. Per-match event/roster seeding also
         runs concurrently across matches rather than one at a time (see
         _seed_match_extras()), since they're independent lookups.
-      - Event feed reliability: /online/{id}/events has been observed to
-        contain a whole segment of already-seen plays re-appended later
-        in the array at different positions (confirmed live: re-fetching
-        the full array in one request reproduced identical sub-event
-        content at two far-apart indices - not a fetch-side glitch), AND
-        a single outer event's own "events" sub-array can grow in place
-        after that outer event already sits at a fixed array position (a
-        batter's turn starts as just the hit, then runner advances/scores
-        get appended to that same event over several polls - confirmed
-        live via its own "updated" timestamp changing while its array
-        index didn't). Positional (event-count) diffing can't detect
-        either case reliably - the first makes it double-count, the
-        second makes it silently drop runs appended after their event was
-        already marked "seen". So _process_match() rescans the *entire*
-        events array every poll (event_count is kept only as an
-        informational high-water mark, not used to gate the scan) and
-        relies entirely on a content signature per matched run/period-end
-        (see _run_signature()) plus a per-match "seen" set - both seeded
-        from the match's existing history when tracking starts
-        (_seed_match_extras()) so starting mid-match doesn't replay it.
-        A further wrinkle confirmed live (match 147201): the same real
-        point can apparently get retracted and reissued mid-game with
-        different content entirely (e.g. correcting who was actually at
-        bat), which produces a brand-new content signature no dedup set
-        can recognize. Since pesistulokset.fi's own authoritative
-        per-period total is always eventually correct (confirmed against
-        that match's real final result), _process_match() never lets the
-        locally-incremented count for a side exceed it - a run that would
-        push past it is logged and silently dropped rather than shown as
-        an impossible score, and its signature is deliberately left
-        unmarked so a later poll can still pick it up if the "authoritative
-        total lagging a poll behind" explanation turns out to be the
-        real one instead.
-      - Two more wrinkles confirmed live (match 147207), both in how
-        "period" is used:
-        1) A run event tagged with an *earlier* period than the one
-           already being tracked can appear in the array well after that
-           period's own JAKSO: end was already announced (e.g. a
-           correction to a jakso 1 play surfacing partway through jakso
-           2) - even though the fully-settled, post-game array is
-           cleanly period-ordered, so this is only visible mid-poll, not
-           from a later fetch. Resetting the active tally whenever a
-           scanned event's period differs from the current one (the old
-           behavior) mistook this for "back to jakso 1", wiping out the
-           real, active period's running score. _process_match() now
-           only resets on a genuine forward advance; a late run for an
-           earlier period is tallied separately per period instead (see
-           active_tally/past_period_runs and _apply_run()), never
-           touching the active period's count.
-        2) The same two players and exact same bases-occupied state can
-           coincidentally produce a byte-identical sub-event in two
-           different periods (both real, distinct plays on
-           pesistulokset.fi's own page) - which collided under the same
-           signature and silently dropped the second one, before `period`
-           was folded into _run_signature()'s hash.
+      - Event feed reliability: /online/{id}/events has been confirmed
+        live to change shape between polls in ways a naive "diff what's
+        new" approach can't handle, across three separate real-match
+        incidents:
+          1) (match 147206) the array can contain a whole segment of
+             already-seen plays re-appended later at different positions,
+             AND a single outer event's own "events" sub-array can grow
+             in place after that outer event already sits at a fixed
+             array position (a batter's turn starts as just the hit, then
+             runner advances/scores get appended to that same event over
+             several polls).
+          2) (match 147201) the same real point can apparently get
+             retracted and reissued mid-game with entirely different
+             content (e.g. correcting who was actually at bat).
+          3) (match 147207) a run for an *earlier* period can appear in
+             the array well after that period's own JAKSO: end was
+             already announced (e.g. a correction to a jakso 1 play
+             surfacing partway through jakso 2), even though the
+             fully-settled, post-game array is always cleanly
+             period-ordered.
+        Two earlier designs tried here - slicing by event-count position,
+        then a full rescan relying on a content-hash "seen" set - each
+        fixed one or two of these but not all three (a content hash, for
+        instance, is defeated equally by (1)'s in-place mutation and
+        (2)'s deliberate re-issue, in opposite directions: one needs the
+        hash to stay stable, the other guarantees it won't). The design
+        that actually holds up against all three at once, used by
+        _process_match() and _group_runs_and_period_ends(): full rescan
+        every poll (unavoidable - it's the only way to see (1)'s growth),
+        grouped into an independent list per (period, side), with only a
+        plain *count* of how many of that list have already been
+        announced as state - not which specific ones, not their content.
+        A play's bytes changing between polls is irrelevant to a count;
+        (3) needs no special-casing since every (period, side) is its own
+        independent bucket regardless of when it's encountered while
+        scanning. The count per (period, side) is also capped at
+        pesistulokset.fi's own authoritative per-period total (always
+        eventually correct, confirmed against real final results) as a
+        last-resort safety net against ever displaying a score that
+        total doesn't confirm - both seeded from the match's existing
+        history when tracking starts (_seed_match_extras()) so starting
+        mid-match doesn't replay it.
     """
 
     needs_irc_context = True
@@ -323,15 +310,16 @@ class SuperpesisCommand:
 
     def _seed_match_extras(self, state):
         """Fills in each match's event-count baseline, roster, and
-        already-seen run/period-end signatures in `state` (mutated in
-        place). The signature sets are what actually gates re-announcing
-        a play (see _process_match) - seeded from every run/period-end
-        already in the match's history so `!superpesis start` on a match
-        already in progress doesn't replay its whole history as fresh
-        RUN:/JAKSO: lines. One match's events+roster fetch doesn't depend
-        on any other's, so all matches are seeded concurrently rather than
-        one at a time - with 2+ matches tracked (the common case) this
-        roughly halves the time !superpesis start takes to report back."""
+        already-announced run/period-end counts in `state` (mutated in
+        place). The "announced"/"ended_periods" counts are what actually
+        gate re-announcing a play (see _process_match) - seeded from
+        every run/period-end already in the match's history so
+        `!superpesis start` on a match already in progress doesn't replay
+        its whole history as fresh RUN:/JAKSO: lines. One match's
+        events+roster fetch doesn't depend on any other's, so all matches
+        are seeded concurrently rather than one at a time - with 2+
+        matches tracked (the common case) this roughly halves the time
+        !superpesis start takes to report back."""
         if not state:
             return
 
@@ -344,16 +332,11 @@ class SuperpesisCommand:
             for mid, events, roster in executor.map(seed_one, state.keys()):
                 if events is not None:
                     state[mid]["event_count"] = len(events)
-                    seen_runs = set()
-                    seen_period_ends = set()
-                    for event in events:
-                        for *_, signature in self._extract_runs(event):
-                            seen_runs.add(signature)
-                        _, period_end_signature = self._extract_period_end(event)
-                        if period_end_signature:
-                            seen_period_ends.add(period_end_signature)
-                    state[mid]["seen_run_signatures"] = seen_runs
-                    state[mid]["seen_period_end_signatures"] = seen_period_ends
+                    runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
+                        events, state[mid]["home_id"], state[mid]["away_id"],
+                    )
+                    state[mid]["announced"] = {key: len(items) for key, items in runs_by_period_side.items()}
+                    state[mid]["ended_periods"] = set(period_end_by_period.keys())
                 state[mid]["roster"] = roster
 
     def _drop_if_current(self, channel, stop_event):
@@ -454,119 +437,102 @@ class SuperpesisCommand:
         roster = prev.get("roster") or {}
 
         events = self._fetch_match_events(prev["match_id"])
-        # Pesäpallo scores each jakso independently, not as a match-long
-        # running total (the API's own result object bears this out: it
-        # has separate runs_home_first_period/second_period/super_inning/
-        # scoring_contest fields, not one cumulative count) - so the score
-        # shown in RUN:/JAKSO: lines tracks only the *current* period,
-        # reset whenever the period genuinely advances.
-        current_period = prev.get("period")
-        active_tally = {"home": prev["period_home_runs"], "away": prev["period_away_runs"]}
-        # Confirmed live (match 147207): a run for an *earlier* period can
-        # appear in the events array after play (and this code) has
-        # already moved on to a later one - e.g. a correction to a jakso 1
-        # play showing up well into jakso 2, after jakso 1's own JAKSO:
-        # end was already announced. Naively resetting active_tally to 0
-        # whenever a scanned event's period differs from current_period
-        # (the old behavior) treated that as "back to jakso 1", wiping out
-        # jakso 2's real running tally and restarting it from 0 - visible
-        # live as scores that suddenly dropped mid-period instead of only
-        # ever climbing. A late run like that is now tallied separately
-        # per period here instead, never touching active_tally/
-        # current_period at all.
-        past_period_runs = {int(k): dict(v) for k, v in (prev.get("past_period_runs") or {}).items()}
-        # Content-based dedup, not positional event-count diffing: confirmed
-        # live that a single outer event's own "events" sub-array can grow
-        # in place after it's already at a fixed array position (a batter's
-        # turn starts with just the hit, then runner advances/scores get
-        # appended to that same event over several polls, "updated"
-        # timestamp changing while its array index doesn't) - so slicing
-        # events[prev_count:] permanently skipped any run appended to an
-        # event that had already crossed that boundary once, even with
-        # zero runs in it at the time. Confirmed live via match 147206:
-        # three real runs inside one growing event (a batter driving home
-        # two runners then himself via "löi kunnarin!") were silently
-        # dropped this way, and the next genuinely-new run's local counter
-        # then double-counted on top of an authoritative-score snap that
-        # had already silently absorbed the growth - producing a real
-        # "6-0" chat line for what pesistulokset.fi's own page showed as
-        # "5-0". The events array can also contain a whole segment of
-        # already-counted plays re-appended later at new positions, which
-        # position-based diffing alone can't detect either. Rescanning the
-        # full array every poll and relying purely on this signature set
-        # sidesteps both failure modes; event_count below is kept only as
-        # an informational high-water mark, no longer used to gate the
-        # scan.
-        seen_run_signatures = set(prev.get("seen_run_signatures") or ())
-        seen_period_end_signatures = set(prev.get("seen_period_end_signatures") or ())
+        # {(period, side): count of runs already announced for that
+        # period+side} - the only state driving what still needs
+        # announcing. See _group_runs_and_period_ends() for why this is
+        # count-based rather than content-signature based.
+        announced = dict(prev.get("announced") or {})
+        ended_periods = set(prev.get("ended_periods") or ())
+
         if events is not None:
-            for event in events:
-                event_period = event.get("period")
+            runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
+                events, home_id, away_id,
+            )
 
-                for player_ref, scoring_team_id, batter, signature in self._extract_runs(event):
-                    if signature in seen_run_signatures:
-                        continue  # the same real play, already announced
-
-                    if (event_period is not None and current_period is not None
-                            and event_period < current_period):
-                        tally = past_period_runs.setdefault(event_period, {"home": 0, "away": 0})
-                    else:
-                        if event_period != current_period:
-                            active_tally["home"] = 0
-                            active_tally["away"] = 0
-                            current_period = event_period
-                        tally = active_tally
-
-                    if self._apply_run(irc_bot, channel, event, player_ref, scoring_team_id, batter,
-                                        signature, home_id, away_id, home_name, away_name, roster,
-                                        tally, live, prev["match_id"]):
-                        seen_run_signatures.add(signature)
-
-                period_end_text, period_end_signature = self._extract_period_end(event)
-                if period_end_text and period_end_signature not in seen_period_end_signatures:
-                    seen_period_end_signatures.add(period_end_signature)
-                    # The ending period's own tally, whether that's the
-                    # still-active one (the common case - not yet reset by
-                    # anything past it) or one already tucked away in
-                    # past_period_runs (a period-end marker arriving late,
-                    # the same way a late run can - see active_tally above).
-                    end_tally = active_tally if event_period == current_period else (
-                        past_period_runs.get(event_period) or {"home": 0, "away": 0}
+            # Sorted so a poll that finds new runs in more than one
+            # period/side announces them in a sensible (period, then
+            # side) order rather than arbitrary dict order.
+            for period, side in sorted(runs_by_period_side, key=lambda k: (k[0] if k[0] is not None else -1, k[1])):
+                items = runs_by_period_side[(period, side)]
+                # Pesäpallo scores each jakso independently, not as a
+                # match-long running total (the API's own result object
+                # bears this out: it has separate per-period run arrays,
+                # not one cumulative count) - so this is scoped to a
+                # single period, not the whole match. Never let the
+                # announced count for a side exceed pesistulokset.fi's
+                # own authoritative period total: confirmed live (match
+                # 147201) that a play can apparently get retracted and
+                # reissued mid-game with different content (e.g.
+                # correcting who was actually at bat), which would
+                # otherwise risk a double-announced or over-the-real-total
+                # score. The authoritative total is always eventually
+                # correct (confirmed against real final results), so
+                # capping against it is a safe invariant regardless of
+                # what's actually happening in the raw feed.
+                authoritative = self._period_runs(live, side, period)
+                already = announced.get((period, side), 0)
+                limit = len(items) if authoritative is None else min(len(items), authoritative)
+                scoring_team_id = home_id if side == "home" else away_id
+                for idx in range(already, limit):
+                    event, player_ref, batter = items[idx]
+                    announced[(period, side)] = idx + 1
+                    scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
+                    # The batter ("lyöjä") who put the ball in play is a
+                    # separate person from the runner who scored
+                    # ("etenijä") - resolved the same way (roster first,
+                    # since it's just as likely to be a jersey number).
+                    batter_name = (
+                        self._resolve_scorer_name(None, scoring_team_id, batter, roster)
+                        if batter is not None else None
                     )
-                    self._safe_send(irc_bot, channel, self._format_period_end(
-                        period_end_text, home_name, away_name, end_tally["home"], end_tally["away"],
+                    self._safe_send(irc_bot, channel, self._format_run(
+                        event, home_name, away_name, announced.get((period, "home"), 0),
+                        announced.get((period, "away"), 0), scoring_team_id, home_id,
+                        scorer_name, batter_name,
                     ))
+                if authoritative is not None and len(items) > limit:
+                    # Diagnostic, not an error: means more run-shaped
+                    # sub-events have been detected for this side/period
+                    # than pesistulokset.fi's own authoritative total
+                    # currently confirms - either that total simply hasn't
+                    # caught up yet (this will resolve itself once it
+                    # does, since `already` is never advanced past
+                    # `limit`) or one of the detected ones is a retraction
+                    # artifact that will never be confirmed. Either way,
+                    # logged so a recurrence leaves hard evidence.
+                    print(
+                        f"Superpesis: match {prev['match_id']} period {period} ({side}) has "
+                        f"{len(items)} detected run(s) but authoritative total is only "
+                        f"{authoritative} - holding back {len(items) - limit}"
+                    )
 
-        period_home_runs, period_away_runs = active_tally["home"], active_tally["away"]
+            for period, text in period_end_by_period.items():
+                if period in ended_periods:
+                    continue
+                ended_periods.add(period)
+                # The period's own final tally, using whatever was
+                # actually announced for it above (capped at
+                # authoritative the same way, so this can't show a number
+                # pesistulokset.fi's own page wouldn't).
+                self._safe_send(irc_bot, channel, self._format_period_end(
+                    text, home_name, away_name,
+                    announced.get((period, "home"), 0), announced.get((period, "away"), 0),
+                ))
 
-        # No longer used to gate the scan above (see the comment on
-        # seen_run_signatures) - kept as an informational high-water mark
-        # only, monotonic so a transiently shorter API response can't
-        # shrink it.
+        # Informational only (e.g. for anyone inspecting state) - nothing
+        # above is gated by this; monotonic so a transiently shorter API
+        # response can't shrink it.
         event_count = max(prev["event_count"], len(events)) if events is not None else prev["event_count"]
 
-        # The authoritative per-period total always wins over the running
-        # count above, so a missed/misparsed run (or period transition)
-        # self-corrects on the very next poll instead of drifting forever.
-        authoritative_home = self._period_runs(live, "home", current_period)
-        authoritative_away = self._period_runs(live, "away", current_period)
-        if authoritative_home is not None and authoritative_home != period_home_runs:
-            # Diagnostic for a reported case where the displayed score
-            # didn't match pesistulokset.fi's own play-by-play - couldn't
-            # reproduce it after the fact (the authoritative source had
-            # already settled back to the correct value), so this is here
-            # to capture hard evidence if it recurs rather than guessing.
-            print(
-                f"Superpesis: home score snap for match {prev['match_id']} period {current_period}: "
-                f"{period_home_runs} -> {authoritative_home}; raw runs={live.get('runs')}"
-            )
-            period_home_runs = authoritative_home
-        if authoritative_away is not None and authoritative_away != period_away_runs:
-            print(
-                f"Superpesis: away score snap for match {prev['match_id']} period {current_period}: "
-                f"{period_away_runs} -> {authoritative_away}; raw runs={live.get('runs')}"
-            )
-            period_away_runs = authoritative_away
+        # "period" is purely informational/for display continuity here -
+        # doesn't gate anything above, unlike the position/period-reset
+        # tracking this replaced. "lastPeriod" (confirmed live) is the
+        # period currently, or most recently, being played.
+        current_period = live.get("lastPeriod")
+        if current_period is None:
+            current_period = prev.get("period")
+        period_home_runs = announced.get((current_period, "home"), 0)
+        period_away_runs = announced.get((current_period, "away"), 0)
 
         finished = bool(live.get("finished"))
         if finished and not prev.get("finished"):
@@ -587,74 +553,85 @@ class SuperpesisCommand:
             "event_count": event_count,
             "finished": finished,
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
-            "seen_run_signatures": seen_run_signatures,
-            "seen_period_end_signatures": seen_period_end_signatures,
-            "past_period_runs": past_period_runs,
+            "announced": announced,
+            "ended_periods": ended_periods,
         }
 
-    def _apply_run(self, irc_bot, channel, event, player_ref, scoring_team_id, batter, signature,
-                    home_id, away_id, home_name, away_name, roster, tally, live, match_id):
-        """Applies one newly-detected run to `tally` (a mutable
-        {"home": int, "away": int} dict for whichever period it belongs
-        to - see _process_match) and announces it, unless the authoritative
-        total for that side/period says it shouldn't count (see the cap
-        comment below). Returns True if it was counted and announced,
-        False if it was suppressed."""
-        if scoring_team_id == home_id:
-            side = "home"
-        elif scoring_team_id == away_id:
-            side = "away"
-        else:
-            return False
+    def _group_runs_and_period_ends(self, events, home_id, away_id):
+        """Full-rescan helper shared by _process_match() and
+        _seed_match_extras(): groups every currently-recognized run by
+        (period, side) in array order (returned as
+        {(period, side): [(event, player_ref, batter), ...]}), plus the
+        first period-end marker text seen per period (returned as
+        {period: text}).
 
-        authoritative = self._period_runs(live, side, event.get("period"))
-        if authoritative is not None and tally[side] >= authoritative:
-            # Confirmed live (match 147201): the event feed can apparently
-            # retract-and-reissue a play mid-game (e.g. correcting who was
-            # actually at bat), producing a brand-new content signature
-            # for what is really the same real run - which would
-            # otherwise show an impossible score (past pesistulokset.fi's
-            # own authoritative period total, confirmed correct against
-            # that match's real final result) or a phantom duplicate RUN:
-            # line. Deliberately not marked "seen" by the caller: if this
-            # is instead just the authoritative source lagging a poll
-            # behind a genuinely new run, leaving it unseen lets a later
-            # poll (once authoritative catches up) count it instead of
-            # losing it forever.
-            print(
-                f"Superpesis: suppressed a would-be run for match {match_id} period {event.get('period')} "
-                f"({side}) - local count {tally[side]} already at/above authoritative {authoritative}; "
-                f"signature={signature}"
-            )
-            return False
+        Deliberately NOT content-signature based, unlike an earlier
+        version of this file. Confirmed live, two distinct ways
+        pesistulokset.fi's event feed can change an already-seen play's
+        own bytes between polls: a parent event's own sub-array growing
+        in place after it's already been scanned once (match 147206), and
+        a play apparently getting retracted and reissued with different
+        content for the same real point, e.g. correcting who was actually
+        at bat (match 147201) - both defeat a content hash, either by
+        making an already-counted play look "new" again or leaving a
+        genuinely new one looking like a duplicate, depending on exactly
+        what mutated. Counting *how many* run-shaped sub-events exist for
+        a given (period, side) on a full rescan, and only ever announcing
+        ones past however many were already announced (see
+        _process_match), doesn't care whether a specific play's bytes
+        changed between polls - only how many total plays exist for that
+        side/period right now, which also sidesteps a third confirmed
+        wrinkle (match 147207): a run for an earlier period appearing in
+        the array after play has already moved on to a later one no
+        longer needs special-casing, since every (period, side) is
+        tracked independently regardless of when it's encountered while
+        scanning.
 
-        tally[side] += 1
-        scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
-        # The batter ("lyöjä") who put the ball in play is a separate
-        # person from the runner who scored ("etenijä") - resolved the
-        # same way (roster first, since it's just as likely to be a
-        # jersey number).
-        batter_name = (
-            self._resolve_scorer_name(None, scoring_team_id, batter, roster)
-            if batter is not None else None
-        )
-        self._safe_send(irc_bot, channel, self._format_run(
-            event, home_name, away_name, tally["home"], tally["away"], scoring_team_id, home_id,
-            scorer_name, batter_name,
-        ))
-        return True
+        One thing this full rescan alone can't tell apart from a
+        genuinely new play: confirmed live (match 147206) that the same
+        exact play's sub-event can appear *twice within the very same
+        fetch*, re-appended later in the array at a different position
+        with byte-identical content. So each pass also guards against
+        that specific case with a per-call (not persisted - see above for
+        why that distinction matters) content check, scoped to
+        (period, side) so it can never suppress two different real plays
+        that legitimately look alike."""
+        runs_by_period_side = {}
+        period_end_by_period = {}
+        seen_this_pass = set()
+        for event in events:
+            event_period = event.get("period")
+            team_id = event.get("team") if event.get("team") is not None else event.get("hTeam")
+            if team_id == home_id:
+                side = "home"
+            elif team_id == away_id:
+                side = "away"
+            else:
+                side = None
+            if side is not None:
+                for player_ref, batter, sub_event in self._extract_runs(event):
+                    dup_key = (event_period, side, json.dumps(sub_event, sort_keys=True, ensure_ascii=False))
+                    if dup_key in seen_this_pass:
+                        continue  # the same exact play, re-appended elsewhere in this same fetch
+                    seen_this_pass.add(dup_key)
+                    runs_by_period_side.setdefault((event_period, side), []).append((event, player_ref, batter))
+
+            if event_period not in period_end_by_period:
+                period_end_text = self._extract_period_end_text(event)
+                if period_end_text:
+                    period_end_by_period[event_period] = period_end_text
+        return runs_by_period_side, period_end_by_period
 
     # ---- event parsing --------------------------------------------------
 
     def _extract_runs(self, event):
-        """Yields (player_ref, scoring_team_id, batter_fallback, signature)
-        for every run scored within this event - a single event can
-        contain more than one (e.g. a hit that scores multiple runners
-        already on base). player_ref is {"id": N}, {"number": N}, or
-        None - see _resolve_scorer_name() for why there are two shapes.
-        signature is a content fingerprint of the matched sub-event - see
-        _run_signature() for why it's needed on top of positional
-        (event-count) diffing.
+        """Yields (player_ref, batter_fallback, sub_event) for every run
+        scored within this event - a single event can contain more than
+        one (e.g. a hit that scores multiple runners already on base).
+        player_ref is {"id": N}, {"number": N}, or None - see
+        _resolve_scorer_name() for why there are two shapes. sub_event is
+        the raw matched sub-event, exposed for
+        _group_runs_and_period_ends()'s intra-poll duplicate check.
 
         Best-effort against real data, not a guarantee: pesäpallo's event
         feed has a rich Finnish scoring vocabulary that a handful of real
@@ -663,7 +640,6 @@ class SuperpesisCommand:
         _process_match) - only the individual "RUN:" chat announcement
         for that specific play could be missing, not the score itself.
         """
-        team_id = event.get("team") if event.get("team") is not None else event.get("hTeam")
         for sub_event in event.get("events") or []:
             texts = sub_event.get("texts") or []
             if self._is_run_sub_event(texts):
@@ -678,28 +654,7 @@ class SuperpesisCommand:
                     batter = "Harhaheitto"
                 else:
                     batter = event.get("batter")
-                yield player_ref, team_id, batter, self._run_signature(sub_event, event.get("period"))
-
-    def _run_signature(self, sub_event, period=None) -> str:
-        """A content fingerprint for a matched run sub-event, used to
-        detect the *same real play* showing up more than once - confirmed
-        live that the /online/{id}/events array can contain a whole
-        segment of already-seen events re-appended later at different
-        array positions (not a client-side fetch inconsistency: refetching
-        the full array in one request reproduced it), which plain
-        event-count-based diffing has no way to catch since it only looks
-        at *new positions*, not whether the content there is actually new.
-        Hashing the full matched sub-event (not just a couple of fields)
-        means a genuine second real play by the same player is
-        vanishingly unlikely to collide, since real game state
-        (runnersAtBases, cumulative stat counters) differs between any
-        two distinct plays *within the same period* - confirmed live
-        (match 147207) that it's NOT unlikely across two different
-        periods: the same two players, same bases-occupied state,
-        produced two byte-identical sub-events in jakso 1 and jakso 2,
-        which silently dropped the second (real) run as a false-positive
-        duplicate before `period` was folded into the hash here."""
-        return json.dumps({"period": period, "sub_event": sub_event}, sort_keys=True, ensure_ascii=False)
+                yield player_ref, batter, sub_event
 
     def _is_run_sub_event(self, texts) -> bool:
         # Confirmed ways pesäpallo's event feed records a run reaching
@@ -802,26 +757,13 @@ class SuperpesisCommand:
 
     def _extract_period_end_text(self, event):
         """Returns the human-readable text for a period-ending event (e.g.
-        "Ensimmäinen jakso päättyi", "Supervuoro päättyi"), or None. See
-        _extract_period_end() - this just discards its signature half,
-        kept as a thin wrapper since existing callers/tests only want the
-        text."""
-        text, _ = self._extract_period_end(event)
-        return text
-
-    def _extract_period_end(self, event):
-        """Returns (text, signature) for a period-ending event, or
-        (None, None). Detected via a {"type":"stat","periodend":...}
-        marker - confirmed present (and reliable) across every period
-        transition checked live, including into "Supervuoro" - rather
-        than matching the Finnish wording itself, which would be one more
-        guess at a vocabulary this API doesn't document. Distinct from
-        match-end, which uses its own "match-ended" stat key, not
-        "periodend". signature is a content fingerprint of the matched
-        sub-event (see _run_signature()) - needed because _process_match
-        now rescans the whole events array every poll (not just the
-        newly-appended tail, see the comment on that rescan) so a
-        periodend marker already announced once must not fire again."""
+        "Ensimmäinen jakso päättyi", "Supervuoro päättyi"), or None.
+        Detected via a {"type":"stat","periodend":...} marker - confirmed
+        present (and reliable) across every period transition checked
+        live, including into "Supervuoro" - rather than matching the
+        Finnish wording itself, which would be one more guess at a
+        vocabulary this API doesn't document. Distinct from match-end,
+        which uses its own "match-ended" stat key, not "periodend"."""
         for sub_event in event.get("events") or []:
             texts = sub_event.get("texts") or []
             has_periodend = any(
@@ -830,12 +772,11 @@ class SuperpesisCommand:
             )
             if not has_periodend:
                 continue
-            signature = self._run_signature(sub_event, event.get("period"))
             for t in texts:
                 if isinstance(t, dict) and t.get("type") == "event" and t.get("text"):
-                    return t.get("text"), signature
-            return "Jakso päättyi", signature  # marker present but no text - fallback
-        return None, None
+                    return t.get("text")
+            return "Jakso päättyi"  # marker present but no text - fallback
+        return None
 
     def _sum_runs(self, live_result, side):
         runs = live_result.get("runs")
@@ -997,17 +938,11 @@ class SuperpesisCommand:
             # to now, so starting mid-match doesn't replay old plays as
             # fresh RUN:/JAKSO: announcements - _process_match rescans the
             # full events array every poll and relies entirely on these
-            # sets for "already announced", not array position.
-            "seen_run_signatures": set(),
-            "seen_period_end_signatures": set(),
-            # Local tallies for runs belonging to an earlier period than
-            # the active one, seen late (see _process_match). Nothing to
-            # seed here even mid-match: any such run already in the
-            # match's history by now is *within* whichever period it
-            # belongs to, not literally out of order in the array, so
-            # _seed_match_extras()'s signature seeding (not this) is what
-            # prevents replaying it.
-            "past_period_runs": {},
+            # counts for "already announced" (see
+            # _group_runs_and_period_ends()), not array position or
+            # content hashing.
+            "announced": {},  # {(period, side): count}
+            "ended_periods": set(),
         }
 
     # ---- data fetching --------------------------------------------------

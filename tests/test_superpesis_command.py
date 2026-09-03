@@ -277,17 +277,18 @@ class TestSeedSnapshot:
         assert snapshot["period_home_runs"] == 0
         assert snapshot["period_away_runs"] == 0
 
-    def test_seeds_an_empty_signature_set(self, sc):
+    def test_seeds_empty_announced_and_ended_periods(self, sc):
         match = make_match(mid=146953, home_id=16802, away_id=16796)
         snapshot = sc._seed_snapshot(match)
-        assert snapshot["seen_run_signatures"] == set()
+        assert snapshot["announced"] == {}
+        assert snapshot["ended_periods"] == set()
 
 
 class TestSeedMatchExtras:
     def test_fills_in_event_count_and_roster_for_every_match(self, sc):
         state = {
-            1: {"event_count": 0, "roster": {}},
-            2: {"event_count": 0, "roster": {}},
+            1: {"event_count": 0, "roster": {}, "home_id": 10802, "away_id": 10803},
+            2: {"event_count": 0, "roster": {}, "home_id": 10804, "away_id": 10805},
         }
         rosters = {1: {10802: {1: "A"}}, 2: {10804: {1: "B"}}}
 
@@ -305,11 +306,35 @@ class TestSeedMatchExtras:
         assert state[2]["event_count"] == 6
         assert state[1]["roster"] == rosters[1]
         assert state[2]["roster"] == rosters[2]
+        assert state[1]["announced"] == {}  # no run-shaped content in the fake events
+        assert state[1]["ended_periods"] == set()
+
+    def test_seeds_announced_and_ended_periods_from_real_history(self, sc):
+        # Regression coverage for the actual purpose of this seeding:
+        # a match already in progress when !superpesis start runs must
+        # not replay its whole history as fresh RUN:/JAKSO: lines.
+        state = {1: {"event_count": 0, "roster": {}, "home_id": 16802, "away_id": 16796}}
+        events = [
+            match_event(1, team_id=16802, period=0, sub_events=[run_sub_event(1, 16802)]),
+            match_event(2, team_id=16802, period=0, sub_events=[run_sub_event(2, 16802)]),
+            match_event(3, team_id=16796, period=0, sub_events=[run_sub_event(3, 16796)]),
+            match_event(4, team_id=16802, period=0, sub_events=[
+                {"texts": [{"type": "event", "text": "Ensimmäinen jakso päättyi"},
+                           {"type": "stat", "periodend": 1}]},
+            ]),
+        ]
+
+        with patch.object(sc, "_fetch_match_events", return_value=events), \
+             patch.object(sc, "_fetch_match_roster", return_value={}):
+            sc._seed_match_extras(state)
+
+        assert state[1]["announced"] == {(0, "home"): 2, (0, "away"): 1}
+        assert state[1]["ended_periods"] == {0}
 
     def test_matches_are_fetched_concurrently_not_sequentially(self, sc):
         # If this ran sequentially, 3 matches x 0.1s each would take
         # >=0.3s; concurrently it should take roughly one slot's worth.
-        state = {i: {"event_count": 0, "roster": {}} for i in (1, 2, 3)}
+        state = {i: {"event_count": 0, "roster": {}, "home_id": 1, "away_id": 2} for i in (1, 2, 3)}
 
         def slow_events(mid):
             time.sleep(0.1)
@@ -324,7 +349,7 @@ class TestSeedMatchExtras:
         assert elapsed < 0.25
 
     def test_event_fetch_failure_leaves_event_count_untouched(self, sc):
-        state = {1: {"event_count": 5, "roster": {}}}
+        state = {1: {"event_count": 5, "roster": {}, "home_id": 1, "away_id": 2}}
 
         with patch.object(sc, "_fetch_match_events", return_value=None), \
              patch.object(sc, "_fetch_match_roster", return_value={}):
@@ -715,11 +740,11 @@ class TestRunDetection:
         }
         assert sc._is_run_sub_event(sub["texts"]) is False
 
-    def _without_signature(self, runs):
-        """_extract_runs() also yields a content signature (see
-        _run_signature) - strip it for tests that only care about who/what
-        scored, not the exact fingerprint string."""
-        return [r[:3] for r in runs]
+    def _without_sub_event(self, runs):
+        """_extract_runs() also yields the raw matched sub-event (used by
+        _group_runs_and_period_ends() for its intra-poll duplicate check)
+        - strip it for tests that only care about who/what scored."""
+        return [r[:2] for r in runs]
 
     def test_extract_runs_yields_multiple_scores_in_one_event(self, sc):
         event = match_event(1, team_id=16803, sub_events=[
@@ -727,22 +752,22 @@ class TestRunDetection:
             {"texts": [{"type": "event", "text": "eteni"}, "kolmospesälle"]},  # not a run
             run_sub_event(9904, 16803, pattern="eteni_koti"),
         ])
-        runs = self._without_signature(sc._extract_runs(event))
-        assert runs == [({"id": 9986}, 16803, None), ({"id": 9904}, 16803, None)]
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [({"id": 9986}, None), ({"id": 9904}, None)]
 
     def test_extract_runs_with_number_based_player_ref(self, sc):
         event = match_event(1, team_id=16798, sub_events=[
             run_sub_event_by_number(1, 16798),
         ])
-        runs = self._without_signature(sc._extract_runs(event))
-        assert runs == [({"number": 1}, 16798, None)]
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [({"number": 1}, None)]
 
     def test_extract_runs_no_player_ref_carries_batter_through(self, sc):
         event = match_event(1, team_id=16802, batter=555, sub_events=[
             {"texts": [{"type": "event", "text": "juoksu"}]},
         ])
-        runs = self._without_signature(sc._extract_runs(event))
-        assert runs == [(None, 16802, 555)]
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [(None, 555)]
 
     def test_extract_runs_empty_for_non_scoring_event(self, sc):
         event = match_event(1, team_id=16802, sub_events=[
@@ -763,27 +788,21 @@ class TestRunDetection:
                 {"type": "stat", "wtscore": 3},
             ]},
         ])
-        runs = self._without_signature(sc._extract_runs(event))
-        assert runs == [({"number": 11}, 16804, "Harhaheitto")]
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [({"number": 11}, "Harhaheitto")]
 
     def test_extract_runs_regular_run_still_uses_parent_batter(self, sc):
         event = match_event(1, team_id=16804, batter=10, sub_events=[
             run_sub_event_by_number(3, 16804),
         ])
-        runs = self._without_signature(sc._extract_runs(event))
-        assert runs == [({"number": 3}, 16804, 10)]
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [({"number": 3}, 10)]
 
-    def test_extract_runs_two_identical_sub_events_get_different_signatures_only_if_content_differs(self, sc):
-        # Same player/base/score twice in one event (distinct plays, e.g.
-        # unlikely but not impossible) still get compared on full content -
-        # this just documents that the signature is deterministic per
-        # sub-event content, not e.g. randomized or positional.
-        event = match_event(1, team_id=16803, sub_events=[
-            run_sub_event(9986, 16803, pattern="eteni_koti"),
-        ])
-        sig_a = list(sc._extract_runs(event))[0][3]
-        sig_b = list(sc._extract_runs(event))[0][3]
-        assert sig_a == sig_b
+    def test_extract_runs_exposes_the_raw_sub_event(self, sc):
+        sub_event = run_sub_event(9986, 16803, pattern="eteni_koti")
+        event = match_event(1, team_id=16803, sub_events=[sub_event])
+        [(_, _, exposed)] = list(sc._extract_runs(event))
+        assert exposed == sub_event
 
 
 class TestIsErrorDrivenRun:
@@ -798,40 +817,6 @@ class TestIsErrorDrivenRun:
     def test_false_for_kunnari(self, sc):
         texts = [{"type": "event", "text": "löi kunnarin!"}]
         assert sc._is_error_driven_run(texts) is False
-
-
-class TestRunSignature:
-    def test_deterministic_for_identical_content(self, sc):
-        sub_event = run_sub_event(9986, 16803, pattern="eteni_koti")
-        assert sc._run_signature(sub_event) == sc._run_signature(sub_event)
-
-    def test_differs_for_different_content(self, sc):
-        a = run_sub_event(9986, 16803, pattern="eteni_koti")
-        b = run_sub_event(9904, 16803, pattern="eteni_koti")
-        assert sc._run_signature(a) != sc._run_signature(b)
-
-    def test_key_order_does_not_matter(self, sc):
-        a = {"texts": ["x"], "runnersAtBases": [1, 2]}
-        b = {"runnersAtBases": [1, 2], "texts": ["x"]}
-        assert sc._run_signature(a) == sc._run_signature(b)
-
-    def test_differs_across_periods_for_identical_sub_event_content(self, sc):
-        # Regression test for a real incident (pesistulokset.fi match
-        # 147207): the exact same two players and exact same bases-
-        # occupied state produced a byte-identical sub-event in jakso 1
-        # and again in jakso 2 - a real coincidence, not corrupt data
-        # (confirmed live: both were genuine, distinct real runs on
-        # pesistulokset.fi's own page). Without the period folded in
-        # here, the second one collided with the first's signature and
-        # was silently dropped as a false-positive duplicate.
-        sub_event = run_sub_event(8119, 16801, pattern="eteni_koti")
-        assert sc._run_signature(sub_event, period=0) != sc._run_signature(sub_event, period=1)
-
-    def test_no_period_given_still_works(self, sc):
-        # Callers that don't have a period (or don't care) keep working -
-        # period defaults to None and still participates consistently.
-        sub_event = run_sub_event(9986, 16803, pattern="eteni_koti")
-        assert sc._run_signature(sub_event) == sc._run_signature(sub_event, period=None)
 
 
 class TestLastPlayerRef:
@@ -1295,13 +1280,13 @@ class TestProcessMatch:
         # log line ("home score snap ... 4 -> 3") and independently by
         # re-fetching the match's actual event feed: a whole segment of
         # already-counted plays was re-appended later in the events array
-        # at different positions, and one of those got counted a second
-        # time - a real run scored 3 times over showed up as 4.
+        # at different positions - _group_runs_and_period_ends()'s
+        # intra-poll duplicate check must collapse the byte-identical
+        # re-appended sub-event back down to a single real play.
         bot = MagicMock()
         roster = {16804: {1: "Iivari Vihanto", 4: "Hannes Pekkinen"}}
         prev = self._prev(match_id=147206, home_id=16804, away_id=16801,
-                           home_name="Sotkamon Jymy", away_name="Kouvolan Pallonlyöjät",
-                           roster=roster, period_home_runs=2, period_away_runs=1)
+                           home_name="Sotkamon Jymy", away_name="Kouvolan Pallonlyöjät", roster=roster)
         match = make_match(mid=147206, home_id=16804, away_id=16801,
                             home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät")
 
@@ -1328,49 +1313,49 @@ class TestProcessMatch:
 
         messages = [c[0][1] for c in bot.send_message.call_args_list]
         assert len(messages) == 1  # not 2
-        assert "Sotkamon Jymy 3-1 Kouvolan Pallonlyöjät" in messages[0]  # not 4-1
-        assert new_state["period_home_runs"] == 3
+        assert "Sotkamon Jymy 1-0 Kouvolan Pallonlyöjät" in messages[0]  # not 2-0
+        assert new_state["period_home_runs"] == 1
 
     def test_real_match_147206_runs_appended_to_an_already_seen_event_are_not_dropped(self, sc):
         # Regression test for a real incident (pesistulokset.fi match
-        # 147206, "2. jakso"): a batter's whole turn is ONE outer event at
-        # a fixed array position, but its own "events" sub-array grows in
-        # place over several polls as the play develops (confirmed live:
-        # the same object's "updated" timestamp kept changing while its
-        # array index didn't). The old event_count-based slicing marked
-        # that position "seen" the first time it crossed the boundary -
-        # even with zero runs in it yet - so three later-appended runs
-        # (two runners driven in, then the batter's own "löi kunnarin!")
-        # were silently dropped, and the next real run's local counter
-        # ended up one too high (announced "6-0" for what
-        # pesistulokset.fi's own page showed as "5-0") because an
-        # authoritative-score snap had already silently absorbed the
-        # missing growth. _process_match must now rescan the full events
-        # array every poll (relying on seen_run_signatures, not position)
-        # so growth appended to an already-"seen" event still gets picked
-        # up.
+        # 147206, "2. jakso"): a batter's whole turn is ONE outer event
+        # whose own "events" sub-array grows in place over several polls
+        # as the play develops (confirmed live: the same object's
+        # "updated" timestamp kept changing while its array index
+        # didn't). Under the old position-based design this could
+        # permanently drop runs appended after their event was already
+        # marked "seen"; under the current count-based design
+        # (_group_runs_and_period_ends()) every poll fully re-derives how
+        # many run-shaped sub-events exist right now, so growth is always
+        # picked up regardless of when it happened - this also verifies
+        # the "already announced" count from an earlier poll (when the
+        # event had grown zero runs yet) correctly carries forward
+        # without re-announcing anything already sent.
         bot = MagicMock()
-        roster = {16804: {2: "Jere Vikström", 3: "Kalle Kuosmanen", 4: "Hannes Pekkinen", 10: "Roope Korhonen",
-                           11: "Elmeri Purmonen"}}
+        roster = {16804: {1: "Iivari Vihanto", 2: "Jere Vikström", 3: "Kalle Kuosmanen", 4: "Hannes Pekkinen",
+                           10: "Roope Korhonen", 11: "Elmeri Purmonen"}}
         # One real batter's turn (id=14 in the actual feed): three
         # separate runners reach "kotipesään" inside it - #2, #3, then
         # #4 (the batter himself) via "löi kunnarin!" - interleaved with
         # non-scoring "eteni ... kolmospesälle/kakkospesälle" advances,
         # exactly as pesistulokset.fi's own play-by-play recorded it.
+        # An unrelated real run that already happened (and was already
+        # announced) earlier in the same period, present in every fetch
+        # from here on exactly as it would really be.
+        earlier_run = match_event(13, team_id=16804, batter=1, period=1, sub_events=[
+            run_sub_event_by_number(1, 16804),
+        ])
         growing_event = match_event(14, team_id=16804, batter=4, period=1, sub_events=[
             {"texts": ["3. lyönti", {"type": "hit", "hit": {"out": False}}]},
         ])
-        # First poll: this event has only just started (no runs in it
-        # yet) - the old code would mark this array position "seen" here.
+        match = make_match(mid=147206, home_id=16804, away_id=16801,
+                            home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät")
         prev = self._prev(match_id=147206, home_id=16804, away_id=16801,
                            home_name="Sotkamon Jymy", away_name="Kouvolan Pallonlyöjät",
-                           roster=roster, period=1, period_home_runs=1, period_away_runs=0)
-        with patch.object(sc, "_fetch_match_events", return_value=[growing_event]):
-            prev = sc._process_match(bot, "#pesis.fi", match_placeholder := make_match(
-                mid=147206, home_id=16804, away_id=16801,
-                home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät",
-            ), prev)
-        assert bot.send_message.call_count == 0  # no runs yet, nothing to announce
+                           roster=roster, period=1, announced={(1, "home"): 1})
+        with patch.object(sc, "_fetch_match_events", return_value=[earlier_run, growing_event]):
+            prev = sc._process_match(bot, "#pesis.fi", match, prev)
+        assert bot.send_message.call_count == 0  # no new runs yet, nothing to announce
 
         # Second poll: the SAME event (same array position) has grown to
         # include all three runs, and a genuinely new event (Roope
@@ -1394,10 +1379,8 @@ class TestProcessMatch:
         roope_event = match_event(15, team_id=16804, batter=10, period=1, sub_events=[
             run_sub_event_by_number(11, 16804),
         ])
-        match = make_match(mid=147206, home_id=16804, away_id=16801,
-                            home="Sotkamon Jymy", away="Kouvolan Pallonlyöjät")
 
-        with patch.object(sc, "_fetch_match_events", return_value=[grown_event, roope_event]):
+        with patch.object(sc, "_fetch_match_events", return_value=[earlier_run, grown_event, roope_event]):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
         messages = [c[0][1] for c in bot.send_message.call_args_list]
@@ -1411,94 +1394,96 @@ class TestProcessMatch:
         assert "Sotkamon Jymy 5-0 Kouvolan Pallonlyöjät" in messages[3]
         assert new_state["period_home_runs"] == 5
 
-    def test_real_match_147201_a_run_that_would_exceed_the_authoritative_total_is_suppressed(self, sc):
+    def test_real_match_147201_a_run_that_would_exceed_the_authoritative_total_is_held_back(self, sc):
         # Regression test for a real incident (pesistulokset.fi match
         # 147201, "1. jakso" and "2. jakso" both affected): pesistulokset.fi
         # apparently retracts and reissues a play mid-game (confirmed live:
         # the real "4. lopettava" run ended up announced twice, first as
         # "Perttu Ruuska -> Aapo Komulainen" then, minutes later, as the
         # actually-correct "Jukka-Pekka Vainionpää -> Aapo Komulainen" -
-        # same real point, two different batters), which produces a new
-        # content signature our dedup can't recognize as "already seen".
-        # Without a cap, that shows an impossible score (higher than
-        # pesistulokset.fi's own authoritative period total - the real
-        # period ended 6-5, but the bot announced "6-6"). The authoritative
-        # total is always eventually correct (confirmed against this same
-        # match's real final result: "6 - 5, 6 - 5"), so once the local
-        # count already matches it, one more detected run for that side
-        # must be suppressed rather than shown.
+        # same real point, two different batters). Without a cap, that
+        # risks an impossible score (higher than pesistulokset.fi's own
+        # authoritative period total - the real period ended 6-5, but the
+        # bot announced "6-6"). The authoritative total is always
+        # eventually correct (confirmed against this same match's real
+        # final result: "6 - 5, 6 - 5"), so a detected run beyond what it
+        # confirms must be held back rather than shown.
         bot = MagicMock()
-        roster = {16802: {10: "Perttu Ruuska", 11: "Jukka-Pekka Vainionpää", 5: "Aapo Komulainen"}}
-        # Local count is already at the real, authoritative period total
-        # (5) after the first ten real runs - matches the true incident
-        # timeline (the ghost run was the eleventh and last of the period).
+        roster = {16802: {1: "Jukka-Pekka Vainionpää", 5: "Aapo Komulainen"}}
         prev = self._prev(match_id=147201, home_id=16805, away_id=16802,
                            home_name="Vimpelin Veto", away_name="Manse PP, Tampere",
-                           roster=roster, period=0, period_home_runs=6, period_away_runs=4)
+                           roster=roster, period=0, announced={(0, "away"): 1})
         match = make_match(mid=147201, home_id=16805, away_id=16802,
                             home="Vimpelin Veto", away="Manse PP, Tampere")
-        match["liveResult"]["runs"] = [{"home": [6], "away": [4]}]  # authoritative: still 6-4
+        match["liveResult"]["runs"] = [{"home": [0], "away": [1]}]  # authoritative: still just 1
 
-        ghost_run = match_event(50, team_id=16802, batter=10, period=0, sub_events=[
+        already_counted_run = match_event(49, team_id=16802, batter=1, period=0, sub_events=[
             run_sub_event_by_number(5, 16802),
         ])
+        # A second, distinct-content sub-event for the same (period, side)
+        # - simulating the "retracted and reissued" real play, which the
+        # authoritative total hasn't caught up to yet.
+        ghost_run = match_event(50, team_id=16802, batter=10, period=0, sub_events=[
+            {"texts": [{"team": 16802, "type": "player", "number": 5},
+                       {"type": "event", "text": "eteni", "base": 3}, "kotipesään",
+                       {"type": "stat", "score": 99}]},
+        ])
 
-        with patch.object(sc, "_fetch_match_events", return_value=[ghost_run]), \
+        with patch.object(sc, "_fetch_match_events", return_value=[already_counted_run, ghost_run]), \
              patch("builtins.print") as mock_print:
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
         bot.send_message.assert_not_called()  # no RUN: line for the ghost
-        assert new_state["period_away_runs"] == 4  # not bumped to 5
-        assert any("suppressed" in str(c.args[0]) for c in mock_print.call_args_list)
+        assert new_state["period_away_runs"] == 1  # not bumped to 2
+        assert any("holding back" in str(c.args[0]) for c in mock_print.call_args_list)
 
-    def test_suppressed_run_is_retried_once_authoritative_catches_up(self, sc):
-        # A suppressed signature is deliberately NOT marked "seen" - if
-        # the suppression was instead just the authoritative source
-        # lagging a poll behind a genuinely new run, the next poll (once
-        # authoritative rises to match) must still count and announce it,
-        # not lose it forever.
+    def test_held_back_run_is_announced_once_authoritative_catches_up(self, sc):
+        # A run held back for exceeding the authoritative total isn't
+        # counted as "announced" - if the hold-back was instead just the
+        # authoritative source lagging a poll behind a genuinely new run,
+        # the next poll (once authoritative rises to match) must still
+        # count and announce it, not lose it forever.
         bot = MagicMock()
-        roster = {16802: {10: "Perttu Ruuska", 5: "Aapo Komulainen"}}
+        roster = {16802: {5: "Aapo Komulainen"}}
         run_event = match_event(50, team_id=16802, batter=10, period=0, sub_events=[
             run_sub_event_by_number(5, 16802),
         ])
 
-        # First poll: authoritative hasn't caught up yet - suppressed.
-        prev = self._prev(match_id=147201, home_id=16805, away_id=16802,
-                           roster=roster, period=0, period_home_runs=0, period_away_runs=4)
+        # First poll: authoritative hasn't caught up yet - held back.
+        prev = self._prev(match_id=147201, home_id=16805, away_id=16802, roster=roster, period=0)
         match = make_match(mid=147201, home_id=16805, away_id=16802)
-        match["liveResult"]["runs"] = [{"home": [0], "away": [4]}]
+        match["liveResult"]["runs"] = [{"home": [0], "away": [0]}]
         with patch.object(sc, "_fetch_match_events", return_value=[run_event]):
             prev = sc._process_match(bot, "#pesis.fi", match, prev)
         assert bot.send_message.call_count == 0
-        assert prev["period_away_runs"] == 4
+        assert prev["period_away_runs"] == 0
 
-        # Second poll: authoritative has now risen to 5 - the exact same
-        # signature (still present in the events array) must be picked up.
-        match["liveResult"]["runs"] = [{"home": [0], "away": [5]}]
+        # Second poll: authoritative has now risen to 1 - the exact same
+        # event (still present in the events array) must be picked up.
+        match["liveResult"]["runs"] = [{"home": [0], "away": [1]}]
         with patch.object(sc, "_fetch_match_events", return_value=[run_event]):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
         bot.send_message.assert_called_once()
-        assert new_state["period_away_runs"] == 5
+        assert new_state["period_away_runs"] == 1
 
-    def test_real_match_147207_a_late_run_for_an_earlier_period_does_not_reset_the_active_tally(self, sc):
+    def test_real_match_147207_a_run_for_an_earlier_period_is_tracked_independently(self, sc):
         # Regression test for a real incident (pesistulokset.fi match
         # 147207): a run event tagged period=0 (jakso 1) showed up in the
         # feed well after jakso 1's own JAKSO: end had already been
         # announced and jakso 2 was already in progress - a correction
         # appended out of period order (confirmed live: the settled
         # events array itself is cleanly period-ordered, so this only
-        # shows up mid-poll, not in a post-game fetch). The old behavior
-        # reset the active tally to 0 whenever a scanned event's period
-        # differed from the current one, wiping out jakso 2's real
-        # running score and restarting it from 0 instead of only ever
-        # advancing it.
+        # shows up mid-poll, not in a post-game fetch). Every (period,
+        # side) is tracked as its own independent bucket (see
+        # _group_runs_and_period_ends()), so a late run for an earlier
+        # period is simply counted into that period's own bucket without
+        # touching jakso 2's real, active running score at all.
         bot = MagicMock()
         roster = {16804: {2: "Aapo Hiltunen", 3: "Iivari Vihanto"}}
         prev = self._prev(match_id=147207, home_id=16801, away_id=16804,
                            home_name="Kouvolan Pallonlyöjät", away_name="Sotkamon Jymy",
-                           roster=roster, period=1, period_home_runs=1, period_away_runs=1)
+                           roster=roster, period=1, announced={(1, "home"): 1, (1, "away"): 1})
         match = make_match(mid=147207, home_id=16801, away_id=16804,
                             home="Kouvolan Pallonlyöjät", away="Sotkamon Jymy")
         match["liveResult"]["runs"] = [{"home": [2], "away": [2]}, {"home": [1], "away": [1]}]
@@ -1512,14 +1497,14 @@ class TestProcessMatch:
 
         message = bot.send_message.call_args[0][1]
         assert "(1. jakso)" in message  # labeled with its own real period
-        # Scoped to jakso 1's own (previously-untouched) tally, not
+        # Scoped to jakso 1's own (previously-untouched) bucket, not
         # jakso 2's running score.
         assert "Kouvolan Pallonlyöjät 0-1 Sotkamon Jymy" in message
         # jakso 2 (the active period) is completely untouched.
         assert new_state["period"] == 1
         assert new_state["period_home_runs"] == 1
         assert new_state["period_away_runs"] == 1
-        assert new_state["past_period_runs"] == {0: {"home": 0, "away": 1}}
+        assert new_state["announced"][(0, "away")] == 1
 
     def test_roster_is_carried_forward_unchanged(self, sc):
         bot = MagicMock()
@@ -1563,12 +1548,15 @@ class TestProcessMatch:
         assert "RUN:" in message
         assert "Test Player" in message
 
-    def test_score_resets_across_a_period_boundary(self, sc):
+    def test_score_is_independent_across_a_period_boundary(self, sc):
         # The actual reported bug: a run in the 2nd period was showing
         # the match-wide cumulative score (e.g. 4-3, continuing from
-        # jakso 1's 4-2) instead of restarting at 0 for the new period.
+        # jakso 1's 4-2) instead of restarting at 0 for the new period -
+        # every (period, side) is its own independent bucket (see
+        # _group_runs_and_period_ends()), so jakso 1's 4-2 has no bearing
+        # on jakso 2's own count at all.
         bot = MagicMock()
-        prev = self._prev(event_count=0, period=0, period_home_runs=4, period_away_runs=2)
+        prev = self._prev(event_count=0, period=0, announced={(0, "home"): 4, (0, "away"): 2})
         match = make_match(mid=146953, home_id=16802, away_id=16796)
         events = [match_event(1, team_id=16796, period=1, sub_events=[run_sub_event(111, 16796)])]
 
@@ -1580,10 +1568,16 @@ class TestProcessMatch:
         assert "Manse PP 0-1 Hyvinkään Tahko" in message  # not 4-3
         assert "(2. jakso)" in message
 
-    def test_period_field_updates_when_the_period_changes(self, sc):
+    def test_period_field_follows_the_authoritative_lastPeriod(self, sc):
+        # "period" (used for RUN:/JAKSO: display continuity) is driven
+        # purely by pesistulokset.fi's own authoritative "lastPeriod" -
+        # not by which events happen to get scanned, which would make it
+        # vulnerable to the same out-of-order-array wrinkle as everything
+        # else (see match 147207 in the class docstring).
         bot = MagicMock()
-        prev = self._prev(event_count=0, period=0, period_home_runs=4, period_away_runs=2)
+        prev = self._prev(event_count=0, period=0, announced={(0, "home"): 4, (0, "away"): 2})
         match = make_match(mid=146953, home_id=16802, away_id=16796)
+        match["liveResult"]["lastPeriod"] = 1
         events = [match_event(1, team_id=16796, period=1, sub_events=[run_sub_event(111, 16796)])]
 
         with patch.object(sc, "_fetch_match_events", return_value=events), \
@@ -1593,6 +1587,16 @@ class TestProcessMatch:
         assert new_state["period"] == 1
         assert new_state["period_home_runs"] == 0
         assert new_state["period_away_runs"] == 1
+
+    def test_period_field_falls_back_to_prev_without_lastPeriod(self, sc):
+        bot = MagicMock()
+        prev = self._prev(event_count=0, period=2)
+        match = make_match(mid=146953, home_id=16802, away_id=16796)  # no liveResult.lastPeriod
+
+        with patch.object(sc, "_fetch_match_events", return_value=[]):
+            new_state = sc._process_match(bot, "#pesis.fi", match, prev)
+
+        assert new_state["period"] == 2
 
     def test_period_end_uses_the_ending_periods_own_score_not_reset(self, sc):
         bot = MagicMock()
@@ -1614,11 +1618,14 @@ class TestProcessMatch:
         period_end_msg = next(m for m in messages if m.startswith(sc.PERIOD_END_PREFIX))
         assert "Manse PP 1-0 Hyvinkään Tahko" in period_end_msg
 
-    def test_score_snaps_to_authoritative_total(self, sc):
+    def test_score_is_never_inflated_past_what_was_actually_announced(self, sc):
+        # The authoritative total (3) is a ceiling, never a floor to snap
+        # up to: with only 1 run actually detectable in the raw feed (a
+        # disclosed possibility - see the class docstring's "Only runs
+        # are surfaced" note), the displayed count must stay at 1, not
+        # get inflated to a number with no announced RUN: line behind it.
         bot = MagicMock()
-        # Our own counting would only get to 1, but the authoritative
-        # liveResult says 3 - the final state must reflect the latter.
-        prev = self._prev(event_count=0, period=0, period_home_runs=0)
+        prev = self._prev(event_count=0, period=0)
         match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=3, away_runs=0)
         events = [match_event(1, team_id=16802, period=0, sub_events=[run_sub_event(111, 16802)])]
 
@@ -1626,7 +1633,8 @@ class TestProcessMatch:
              patch.object(sc, "_resolve_player_name", return_value="Test Player"):
             new_state = sc._process_match(bot, "#pesis.fi", match, prev)
 
-        assert new_state["period_home_runs"] == 3
+        assert len(bot.send_message.call_args_list) == 1  # only the one real detected run
+        assert new_state["period_home_runs"] == 1
 
     def test_no_new_events_sends_nothing(self, sc):
         bot = MagicMock()
