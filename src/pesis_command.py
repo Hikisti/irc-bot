@@ -10,29 +10,50 @@ import pytz
 import requests
 
 
-class SuperpesisCommand:
+class PesisCommand:
     """
-    Live-tracks today's Finnish Superpesis (pesäpallo, men's top division)
-    matches in a channel, announcing runs and final results as they
-    happen. Uses pesistulokset.fi's unofficial JSON API (the same one that
-    powers pesistulokset.fi itself, authenticated with the "public" API
-    key baked into that site's own frontend - not a secret credential).
+    Live-tracks today's matches of a Finnish pesäpallo league/division in a
+    channel, announcing runs and final results as they happen. Uses
+    pesistulokset.fi's unofficial JSON API (the same one that powers
+    pesistulokset.fi itself, authenticated with the "public" API key baked
+    into that site's own frontend - not a secret credential).
 
-    Usage:
-      !superpesis start  -> start polling today's matches in this channel
-      !superpesis stop   -> stop polling in this channel
-      !superpesis next   -> show the next upcoming matchday and its times
+    This is the shared engine, not a command by itself - every concrete
+    command (SuperpesisCommand, YkkospesisCommand, ...) is a thin subclass
+    that only overrides SERIES_LEVEL_NAME/SERIES_NAME (which league this
+    instance tracks), DISPLAY_NAME (how it's named in chat messages and
+    log lines) and CACHE_SLUG (its own series-id disk cache file, so two
+    subclasses running concurrently - e.g. !superpesis and !ykkospesis in
+    the same channel - never share or clobber each other's state; every
+    other piece of state - _channels, _player_cache, _series_cache - is
+    already a fresh instance attribute per subclass instance too). None of
+    the rest of this file is specific to any one league: same API, same
+    endpoints, same event/roster shapes, same scoring vocabulary,
+    confirmed live against real matches from both leagues currently
+    configured.
 
-    Restricted to the #pesis.fi channel (see CommandHandler's "channels"
-    config), unlike most other commands.
+    Usage (COMMAND_NAME substituted per subclass, e.g. "!superpesis"):
+      <COMMAND_NAME> start  -> start polling today's matches in this channel
+      <COMMAND_NAME> stop   -> stop polling in this channel
+      <COMMAND_NAME> next   -> show the next upcoming matchday and its times
+
+    Every subclass configured so far is restricted to the #pesis.fi channel
+    (see CommandHandler's "channels" config), unlike most other commands.
 
     Notes on the implementation, since this was built by reverse-engineering
     an undocumented API rather than reading real docs:
-      - "Miesten Superpesis" (men's) is looked up dynamically by name each
-        time tracking starts (level="Superpesis", series="Miehet"), rather
-        than a hardcoded season-series id, since that id changes every
-        season. The women's division shares the same "Superpesis" level
-        name, distinguished only by series="Miehet" vs "Naiset".
+      - "Miesten <league>" (men's) is looked up dynamically by name each
+        time tracking starts (level=SERIES_LEVEL_NAME, series="Miehet"),
+        rather than a hardcoded season-series id, since that id changes
+        every season. The women's division shares the same level name,
+        distinguished only by series="Miehet" vs "Naiset". Confirmed live
+        that a level/series pair can match *more than one* seasonSeries
+        (e.g. Ykköspesis: the real "Miesten Ykköspesis" league alongside
+        several unrelated same-category tournaments like "Talven
+        harjoitusotteluita") - disambiguated by preferring an entry with
+        "shortcut": true (confirmed live this reliably marks the actual
+        league, for both leagues configured so far), falling back to the
+        first match if none has it set. See _resolve_series_id().
       - Score and "finished" status always come from /public/matches-list's
         authoritative liveResult object, never computed from the event
         feed - the event feed is only used for *which* player scored, and
@@ -40,18 +61,22 @@ class SuperpesisCommand:
         total after each cycle so it can't silently drift.
       - Only runs are surfaced (via the confirmed patterns in
         _is_run_sub_event(): "eteni"/"eteni harhaheitolla" (wild throw)
-        reaching "kotipesään", "löi kunnarin!" (home run), and "juoksu"
-        for a scoring-contest tie-break); the richer play-by-play
-        (individual hits, defensive positioning, outs, etc.) is
-        intentionally not parsed. Checked against several real, finished
-        matches: this still isn't guaranteed to be the complete pesäpallo
-        scoring vocabulary (each addition so far came from a real report
-        of a missed run, most recently "löi kunnarin!" and "eteni
-        harhaheitolla"), so a genuinely new pattern could still be missed
-        as an individual "RUN:" announcement. This is a disclosed gap in
-        the play-by-play, not a rounding error to "fix" preemptively; the
-        final/authoritative score is never affected by it either way
-        (see _process_match).
+        reaching "kotipesään", "löi kunnarin!" (home run), "sai
+        vapaataipaleen..." (a bases-loaded walk forcing a run home -
+        confirmed live in an Ykköspesis match; pesistulokset.fi's own page
+        labels the batter column literally "Vapaataival" for these, the
+        same convention as the unrelated "Harhaheitto" wild-throw case),
+        and "juoksu" for a scoring-contest tie-break); the richer
+        play-by-play (individual hits, defensive positioning, outs, etc.)
+        is intentionally not parsed. Checked against several real,
+        finished matches across both leagues configured so far: this
+        still isn't guaranteed to be the complete pesäpallo scoring
+        vocabulary (each addition so far came from a real report of a
+        missed run), so a genuinely new pattern could still be missed as
+        an individual "RUN:" announcement. This is a disclosed gap in the
+        play-by-play, not a rounding error to "fix" preemptively; the
+        final/authoritative score is never affected by it either way (see
+        _process_match).
       - Scorer identification: a player reference in the event feed is
         either a global {"id": N} (resolved via /public/player/{id}) or a
         per-match jersey {"number": N} - confirmed live that some matches
@@ -119,10 +144,19 @@ class SuperpesisCommand:
     # bundle - the same one every visitor's browser uses, not a secret.
     API_KEY = "wRX0tTke3DZ8RLKAMntjZ81LwgNQuSN9"
 
-    SERIES_LEVEL_NAME = "Superpesis"
-    SERIES_NAME = "Miehet"
+    # The four attributes below are what make a concrete subclass -
+    # PesisCommand itself is never instantiated directly. See the class
+    # docstring for what each one is for.
+    SERIES_LEVEL_NAME = None
+    SERIES_NAME = None
+    DISPLAY_NAME = None
+    CACHE_SLUG = None
+    # e.g. "!superpesis" - only used for the usage string and log-message
+    # readability, never for actual command dispatch (that's
+    # CommandHandler's job, driven by its own aliases config).
+    COMMAND_NAME = None
 
-    # How far forward !superpesis next searches, day by day, for the next
+    # How far forward "<command> next" searches, day by day, for the next
     # scheduled matchday - the API has no "next date with matches" hint
     # like liiga.fi does, so this is a bounded linear search instead.
     NEXT_SEARCH_MAX_DAYS = 21
@@ -133,14 +167,16 @@ class SuperpesisCommand:
 
     # /public/series-list is ~1MB even filtered to the current season alone
     # (5.6MB unfiltered, across 82+ historical seasons) - confirmed live
-    # this was the single biggest cost in !superpesis start. The resolved
+    # this was the single biggest cost in "<command> start". The resolved
     # id only ever changes around a season boundary, so caching it for a
     # few hours cuts that cost to (near) zero on every start after the
     # first, at negligible staleness risk. Persisted to disk (not just
     # kept in memory) so a bot restart doesn't lose it either - otherwise
-    # every restart pays the full cost again on the very next start.
+    # every restart pays the full cost again on the very next start. The
+    # file itself is keyed by CACHE_SLUG (set in __init__, once
+    # CACHE_SLUG is known) so two subclasses never share or clobber each
+    # other's cached series id.
     SERIES_CACHE_TTL_SECONDS = 6 * 3600
-    SERIES_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superpesis_series_cache.json")
 
     BOLD = "\x02"
     COLOR_RESET = "\x0F"
@@ -165,13 +201,18 @@ class SuperpesisCommand:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "KukistiBot-Superpesis/1.0",
+            "User-Agent": f"KukistiBot-{self.CACHE_SLUG}/1.0",
             "Accept": "application/json",
         })
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", "matches"}
         self._player_cache = {}  # player id -> display name
         self._series_cache = None  # (series_id, resolved_at_epoch_seconds) or None; see _resolve_series_id()
+        # Per-subclass (CACHE_SLUG) file, so !superpesis and !ykkospesis
+        # never share or clobber each other's cached series id.
+        self.SERIES_CACHE_FILE = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), f".{self.CACHE_SLUG}_series_cache.json",
+        )
 
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
         arg = (args or "").strip().lower()
@@ -182,7 +223,7 @@ class SuperpesisCommand:
             return self._stop(channel)
         elif arg == "next":
             return self._next(irc_bot, channel)
-        return "Usage: !superpesis start | !superpesis stop | !superpesis next"
+        return f"Usage: {self.COMMAND_NAME} start | {self.COMMAND_NAME} stop | {self.COMMAND_NAME} next"
 
     # ---- start / stop -----------------------------------------------
 
@@ -192,7 +233,7 @@ class SuperpesisCommand:
 
         with self._lock:
             if channel in self._channels:
-                return "Already tracking live Superpesis matches in this channel."
+                return f"Already tracking live {self.DISPLAY_NAME} matches in this channel."
             stop_event = threading.Event()
             self._channels[channel] = {"stop_event": stop_event, "thread": None, "matches": {}}
 
@@ -207,15 +248,15 @@ class SuperpesisCommand:
                 entry["thread"] = thread
         thread.start()
 
-        return "Checking today's Superpesis matches..."
+        return f"Checking today's {self.DISPLAY_NAME} matches..."
 
     def _stop(self, channel):
         with self._lock:
             entry = self._channels.pop(channel, None)
         if not entry:
-            return "Not currently tracking Superpesis matches in this channel."
+            return f"Not currently tracking {self.DISPLAY_NAME} matches in this channel."
         entry["stop_event"].set()
-        return "Stopped live Superpesis tracking."
+        return f"Stopped live {self.DISPLAY_NAME} tracking."
 
     def _next(self, irc_bot, channel):
         if irc_bot is None or channel is None:
@@ -229,38 +270,38 @@ class SuperpesisCommand:
             daemon=True,
         ).start()
 
-        return "Checking the next Superpesis matchday..."
+        return f"Checking the next {self.DISPLAY_NAME} matchday..."
 
     def _run_next(self, irc_bot, channel):
         try:
             series_id = self._resolve_series_id()
         except Exception as e:
-            print(f"Superpesis series lookup error: {e}")
+            print(f"{self.DISPLAY_NAME} series lookup error: {e}")
             series_id = None
 
         if series_id is None:
-            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
             return
 
         try:
             status, date_str, matches = self._fetch_next_matchday(series_id)
         except Exception as e:
-            print(f"Superpesis next-matchday fetch error: {e}")
+            print(f"{self.DISPLAY_NAME} next-matchday fetch error: {e}")
             status, date_str, matches = "error", None, None
 
         if status == "error":
-            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
             return
         if status == "not_found":
             self._safe_send(
                 irc_bot, channel,
-                f"No upcoming Superpesis matches found in the next {self.NEXT_SEARCH_MAX_DAYS} days.",
+                f"No upcoming {self.DISPLAY_NAME} matches found in the next {self.NEXT_SEARCH_MAX_DAYS} days.",
             )
             return
 
         label = self._format_date_label(date_str)
         summary = self._format_matches_summary(matches.values())
-        self._safe_send(irc_bot, channel, f"Next Superpesis matchday ({label}): {summary}")
+        self._safe_send(irc_bot, channel, f"Next {self.DISPLAY_NAME} matchday ({label}): {summary}")
 
     # ---- background thread entry point --------------------------------
 
@@ -268,28 +309,28 @@ class SuperpesisCommand:
         try:
             series_id = self._resolve_series_id()
         except Exception as e:
-            print(f"Superpesis series lookup error: {e}")
+            print(f"{self.DISPLAY_NAME} series lookup error: {e}")
             series_id = None
 
         if series_id is None:
             self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
             return
 
         try:
             matches = self._fetch_today_matches(series_id)
         except Exception as e:
-            print(f"Superpesis initial fetch error: {e}")
+            print(f"{self.DISPLAY_NAME} initial fetch error: {e}")
             matches = None
 
         if matches is None:
             self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, "Error: could not reach the Superpesis API.")
+            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
             return
 
         if not matches:
             self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, "No Superpesis matches scheduled today.")
+            self._safe_send(irc_bot, channel, f"No {self.DISPLAY_NAME} matches scheduled today.")
             return
 
         state = {mid: self._seed_snapshot(m) for mid, m in matches.items()}
@@ -303,7 +344,7 @@ class SuperpesisCommand:
 
         summary = self._format_matches_summary(matches.values())
         self._safe_send(
-            irc_bot, channel, f"Tracking {len(matches)} Superpesis match(es) today: {summary}"
+            irc_bot, channel, f"Tracking {len(matches)} {self.DISPLAY_NAME} match(es) today: {summary}"
         )
 
         self._poll_loop(irc_bot, channel, stop_event, series_id)
@@ -349,7 +390,7 @@ class SuperpesisCommand:
         try:
             irc_bot.send_message(channel, message)
         except Exception as e:
-            print(f"Superpesis: failed to send message to {channel}: {e}")
+            print(f"{self.DISPLAY_NAME}: failed to send message to {channel}: {e}")
 
     # ---- polling loop -------------------------------------------------
 
@@ -362,7 +403,7 @@ class SuperpesisCommand:
                 # anticipated by a narrower handler below - print the
                 # traceback too, not just str(e), since by definition
                 # nothing more specific caught this one.
-                print(f"Superpesis poll error in {channel}: {e}")
+                print(f"{self.DISPLAY_NAME} poll error in {channel}: {e}")
                 traceback.print_exc()
                 all_ended = False
 
@@ -370,7 +411,7 @@ class SuperpesisCommand:
                 self._drop_if_current(channel, stop_event)
                 self._safe_send(
                     irc_bot, channel,
-                    "All of today's Superpesis matches have finished. Live tracking stopped.",
+                    f"All of today's {self.DISPLAY_NAME} matches have finished. Live tracking stopped.",
                 )
                 return
 
@@ -408,7 +449,7 @@ class SuperpesisCommand:
                 # this file and every real bug found so far broke inside
                 # it - the traceback is what actually pinpoints the line,
                 # str(e) alone often isn't enough (e.g. a bare KeyError).
-                print(f"Superpesis: failed to process match {mid} in {channel}: {e}")
+                print(f"{self.DISPLAY_NAME}: failed to process match {mid} in {channel}: {e}")
                 traceback.print_exc()
                 new_state[mid] = prev
 
@@ -501,7 +542,7 @@ class SuperpesisCommand:
                     # artifact that will never be confirmed. Either way,
                     # logged so a recurrence leaves hard evidence.
                     print(
-                        f"Superpesis: match {prev['match_id']} period {period} ({side}) has "
+                        f"{self.DISPLAY_NAME}: match {prev['match_id']} period {period} ({side}) has "
                         f"{len(items)} detected run(s) but authoritative total is only "
                         f"{authoritative} - holding back {len(items) - limit}"
                     )
@@ -652,6 +693,13 @@ class SuperpesisCommand:
                     # at-bat, and pesistulokset.fi's own site shows
                     # literally "Harhaheitto" instead of a name for these.
                     batter = "Harhaheitto"
+                elif self._is_walk_forced_run(texts):
+                    # Same idea for a bases-loaded walk forcing a run home
+                    # - confirmed live (Ykköspesis) pesistulokset.fi's own
+                    # page shows literally "Vapaataival" as the batter for
+                    # these too, not the name of whoever actually drew the
+                    # walk.
+                    batter = "Vapaataival"
                 else:
                     batter = event.get("batter")
                 yield player_ref, batter, sub_event
@@ -667,6 +715,10 @@ class SuperpesisCommand:
         #    of scoring.
         #  - a home run: "löi kunnarin!" - doesn't pair with a "kotipesään"
         #    destination string like regular advancement does.
+        #  - a bases-loaded walk forcing a run home: "sai vapaataipaleen
+        #    väärien syöttöjen johdosta" (confirmed live, Ykköspesis) -
+        #    paired with a "kotipesään" destination the same way "eteni"
+        #    is.
         #  - a scoring-contest / tie-break decider: a "juoksu" (run) event.
         event_texts = [
             t.get("text") for t in texts
@@ -674,7 +726,7 @@ class SuperpesisCommand:
         ]
         if "juoksu" in event_texts or "löi kunnarin!" in event_texts:
             return True
-        if any(text.startswith("eteni") for text in event_texts):
+        if any(text.startswith("eteni") or "vapaataipaleen" in text for text in event_texts):
             plain_texts = {t for t in texts if isinstance(t, str)}
             if "kotipesään" in plain_texts:
                 return True
@@ -684,6 +736,13 @@ class SuperpesisCommand:
         return any(
             isinstance(t, dict) and t.get("type") == "event"
             and isinstance(t.get("text"), str) and "harhaheitolla" in t.get("text")
+            for t in texts
+        )
+
+    def _is_walk_forced_run(self, texts) -> bool:
+        return any(
+            isinstance(t, dict) and t.get("type") == "event"
+            and isinstance(t.get("text"), str) and "vapaataipaleen" in t.get("text")
             for t in texts
         )
 
@@ -856,9 +915,9 @@ class SuperpesisCommand:
                     or name
                 )
         except requests.exceptions.RequestException as e:
-            print(f"Superpesis: player lookup failed for {player_id}: {e}")
+            print(f"{self.DISPLAY_NAME}: player lookup failed for {player_id}: {e}")
         except ValueError:
-            print(f"Superpesis: player lookup returned invalid JSON for {player_id}")
+            print(f"{self.DISPLAY_NAME}: player lookup returned invalid JSON for {player_id}")
 
         self._player_cache[player_id] = name
         return name
@@ -968,7 +1027,7 @@ class SuperpesisCommand:
     # ---- data fetching --------------------------------------------------
 
     def _resolve_series_id(self):
-        """Finds the current season's "Miesten Superpesis" seasonSeries id
+        """Finds the current season's "Miesten <league>" seasonSeries id
         by name, so this doesn't need updating every season. Returns None
         on any failure (network error, unexpected shape, or just not
         found). Result is cached (SERIES_CACHE_TTL_SECONDS), both
@@ -997,10 +1056,10 @@ class SuperpesisCommand:
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.RequestException as e:
-            print(f"Superpesis series-list request failed: {e}")
+            print(f"{self.DISPLAY_NAME} series-list request failed: {e}")
             return None
         except ValueError:
-            print("Superpesis series-list returned invalid JSON")
+            print(f"{self.DISPLAY_NAME} series-list returned invalid JSON")
             return None
 
         seasons = data.get("seasons") if isinstance(data, dict) else None
@@ -1011,14 +1070,23 @@ class SuperpesisCommand:
             return (s.get("season") or {}).get("season", -1)
 
         latest = max(seasons, key=season_year)
-        series_id = None
-        for ss in latest.get("seasonSerieses") or []:
-            level_name = (ss.get("level") or {}).get("name")
-            series_name = (ss.get("series") or {}).get("name")
-            if level_name == self.SERIES_LEVEL_NAME and series_name == self.SERIES_NAME:
-                season_series = ss.get("seasonSeries") or {}
-                series_id = season_series.get("id")
-                break
+        # Confirmed live (Ykköspesis): a level/series pair can match more
+        # than one seasonSeries - "Ykköspesis"/"Miehet" matches both the
+        # real "Miesten Ykköspesis" league and several unrelated
+        # same-category tournaments (e.g. "Talven harjoitusotteluita").
+        # "shortcut": true reliably marks the actual league (confirmed for
+        # both leagues configured so far) - preferred over just taking
+        # whichever match happens to sort first, which only coincidentally
+        # picked the right one before this was checked.
+        candidates = [
+            ss for ss in (latest.get("seasonSerieses") or [])
+            if (ss.get("level") or {}).get("name") == self.SERIES_LEVEL_NAME
+            and (ss.get("series") or {}).get("name") == self.SERIES_NAME
+        ]
+        chosen = next((ss for ss in candidates if ss.get("seasonSeries", {}).get("shortcut")), None)
+        if chosen is None:
+            chosen = candidates[0] if candidates else None
+        series_id = (chosen.get("seasonSeries") or {}).get("id") if chosen else None
 
         if series_id is not None:
             self._series_cache = (series_id, time.time())
@@ -1033,7 +1101,7 @@ class SuperpesisCommand:
         except FileNotFoundError:
             return None
         except (OSError, ValueError, KeyError, TypeError) as e:
-            print(f"Superpesis: failed to read series cache file: {e}")
+            print(f"{self.DISPLAY_NAME}: failed to read series cache file: {e}")
             return None
 
     def _save_series_cache(self, cache):
@@ -1045,7 +1113,7 @@ class SuperpesisCommand:
             # Not fatal - just means this run's cache stays in-memory-only
             # (per _resolve_series_id's in-memory check) instead of also
             # surviving a restart.
-            print(f"Superpesis: failed to write series cache file: {e}")
+            print(f"{self.DISPLAY_NAME}: failed to write series cache file: {e}")
 
     def _fetch_today_matches(self, series_id):
         """Returns {match_id: match_dict} for today, or None on failure."""
@@ -1064,10 +1132,10 @@ class SuperpesisCommand:
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.RequestException as e:
-            print(f"Superpesis matches-list request failed: {e}")
+            print(f"{self.DISPLAY_NAME} matches-list request failed: {e}")
             return None
         except ValueError:
-            print("Superpesis matches-list returned invalid JSON")
+            print(f"{self.DISPLAY_NAME} matches-list returned invalid JSON")
             return None
 
         matches = {}
@@ -1121,10 +1189,10 @@ class SuperpesisCommand:
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.RequestException as e:
-            print(f"Superpesis match-events request failed for {match_id}: {e}")
+            print(f"{self.DISPLAY_NAME} match-events request failed for {match_id}: {e}")
             return None
         except ValueError:
-            print(f"Superpesis match-events returned invalid JSON for {match_id}")
+            print(f"{self.DISPLAY_NAME} match-events returned invalid JSON for {match_id}")
             return None
 
         events = data.get("events") if isinstance(data, dict) else None
@@ -1145,10 +1213,10 @@ class SuperpesisCommand:
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.RequestException as e:
-            print(f"Superpesis match-detail request failed for {match_id}: {e}")
+            print(f"{self.DISPLAY_NAME} match-detail request failed for {match_id}: {e}")
             return {}
         except ValueError:
-            print(f"Superpesis match-detail returned invalid JSON for {match_id}")
+            print(f"{self.DISPLAY_NAME} match-detail returned invalid JSON for {match_id}")
             return {}
 
         if not isinstance(data, dict):
@@ -1170,3 +1238,25 @@ class SuperpesisCommand:
                     by_number[number] = name
             roster[team_id] = by_number
         return roster
+
+
+class SuperpesisCommand(PesisCommand):
+    """Live-tracks Miesten Superpesis (pesäpallo, men's top division) - see
+    PesisCommand for the shared implementation."""
+    SERIES_LEVEL_NAME = "Superpesis"
+    SERIES_NAME = "Miehet"
+    DISPLAY_NAME = "Superpesis"
+    CACHE_SLUG = "superpesis"
+    COMMAND_NAME = "!superpesis"
+
+
+class YkkospesisCommand(PesisCommand):
+    """Live-tracks Miesten Ykköspesis (pesäpallo, men's second division) -
+    see PesisCommand for the shared implementation. Confirmed live against
+    real matches (147197, 2026-09-03) that the API, event/roster shapes,
+    and scoring vocabulary are identical to Superpesis's."""
+    SERIES_LEVEL_NAME = "Ykköspesis"
+    SERIES_NAME = "Miehet"
+    DISPLAY_NAME = "Ykköspesis"
+    CACHE_SLUG = "ykkospesis"
+    COMMAND_NAME = "!ykkospesis"

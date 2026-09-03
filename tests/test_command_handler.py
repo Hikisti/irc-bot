@@ -108,10 +108,10 @@ class TestCommandHandler:
 
 
 class TestChannelRestriction:
-    """!superpesis is registered restricted to #pesis.fi and !liiga to
-    #smliiga; every other command has no "channels" key at all, so this
-    is also the coverage for "absent = allowed everywhere" not
-    regressing."""
+    """!superpesis and !ykkospesis are registered restricted to #pesis.fi
+    and !liiga to #smliiga; every other command has no "channels" key at
+    all, so this is also the coverage for "absent = allowed everywhere"
+    not regressing."""
 
     def test_restricted_command_is_silently_ignored_in_other_channels(self, handler):
         bot = MagicMock()
@@ -132,6 +132,29 @@ class TestChannelRestriction:
         handler.handle_command(bot, "nick", "#pesis.fi", "!superpesis start")
 
         mock_superpesis.execute.assert_called_once()
+        bot.send_message.assert_called_once_with("#pesis.fi", "ok")
+
+    def test_ykkospesis_is_silently_ignored_outside_pesis_fi(self, handler):
+        bot = MagicMock()
+        mock_ykkospesis = MagicMock()
+        replace_command(handler, "!ykkospesis", mock_ykkospesis)
+
+        handler.handle_command(bot, "nick", "#smliiga", "!ykkospesis start")
+
+        mock_ykkospesis.execute.assert_not_called()
+        bot.send_message.assert_not_called()
+
+    def test_ykkospesis_works_in_pesis_fi_alongside_superpesis(self, handler):
+        # Explicitly the behavior asked for: both leagues share the same
+        # channel restriction, and neither command shadows the other.
+        bot = MagicMock()
+        mock_ykkospesis = MagicMock()
+        mock_ykkospesis.execute.return_value = "ok"
+        replace_command(handler, "!ykkospesis", mock_ykkospesis)
+
+        handler.handle_command(bot, "nick", "#pesis.fi", "!ykkospesis start")
+
+        mock_ykkospesis.execute.assert_called_once()
         bot.send_message.assert_called_once_with("#pesis.fi", "ok")
 
     def test_liiga_is_silently_ignored_outside_smliiga(self, handler):

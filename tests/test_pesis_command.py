@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from superpesis_command import SuperpesisCommand
+from pesis_command import PesisCommand, SuperpesisCommand, YkkospesisCommand
 
 
 def make_response(json_data, status_code=200, reason="Error"):
@@ -133,13 +133,76 @@ def join_channel_thread(sc, channel, timeout=2):
 
 
 @pytest.fixture
-def sc(tmp_path, monkeypatch):
+def sc(tmp_path):
     # Isolate every test from the real on-disk series-id cache: without
     # this, a leftover cache file from a real bot run (or another test)
     # would make _resolve_series_id() skip the mocked session.get() call
     # entirely, breaking assertions that expect it to be called.
-    monkeypatch.setattr(SuperpesisCommand, "SERIES_CACHE_FILE", str(tmp_path / "series_cache.json"))
-    return SuperpesisCommand()
+    # SERIES_CACHE_FILE is set per-instance in __init__ (see PesisCommand -
+    # it's derived from CACHE_SLUG, so each subclass gets its own file),
+    # so it has to be overridden after construction, not via
+    # monkeypatch.setattr on the class.
+    instance = SuperpesisCommand()
+    instance.SERIES_CACHE_FILE = str(tmp_path / "series_cache.json")
+    return instance
+
+
+class TestLeagueSubclasses:
+    """PesisCommand itself is never registered as a command - only its
+    subclasses are. This covers just the per-subclass configuration
+    wiring (DISPLAY_NAME/SERIES_LEVEL_NAME/CACHE_SLUG/COMMAND_NAME); the
+    shared business logic is exercised everywhere else in this file via
+    the `sc` (SuperpesisCommand) fixture and applies identically to every
+    subclass since none of it references these constants' concrete
+    values except through `self`."""
+
+    def test_superpesis_is_configured_for_the_mens_superpesis_league(self):
+        sp = SuperpesisCommand()
+        assert sp.SERIES_LEVEL_NAME == "Superpesis"
+        assert sp.SERIES_NAME == "Miehet"
+        assert sp.DISPLAY_NAME == "Superpesis"
+        assert sp.COMMAND_NAME == "!superpesis"
+
+    def test_ykkospesis_is_configured_for_the_mens_ykkospesis_league(self):
+        yp = YkkospesisCommand()
+        assert yp.SERIES_LEVEL_NAME == "Ykköspesis"
+        assert yp.SERIES_NAME == "Miehet"
+        assert yp.DISPLAY_NAME == "Ykköspesis"
+        assert yp.COMMAND_NAME == "!ykkospesis"
+
+    def test_each_subclass_gets_its_own_series_cache_file(self):
+        sp = SuperpesisCommand()
+        yp = YkkospesisCommand()
+        assert sp.SERIES_CACHE_FILE != yp.SERIES_CACHE_FILE
+        assert "superpesis" in sp.SERIES_CACHE_FILE
+        assert "ykkospesis" in yp.SERIES_CACHE_FILE
+
+    def test_superpesis_cache_file_path_is_unchanged_from_before_multi_league_support(self):
+        # Regression test: SERIES_CACHE_FILE moved from a hardcoded class
+        # constant to one derived from CACHE_SLUG in __init__ - the
+        # already-deployed !superpesis cache file must resolve to the
+        # exact same path either way, or a bot restart would silently
+        # start paying series-list's full request cost again.
+        sp = SuperpesisCommand()
+        assert sp.SERIES_CACHE_FILE.endswith(".superpesis_series_cache.json")
+
+    def test_display_name_flows_into_user_facing_messages(self):
+        yp = YkkospesisCommand()
+        assert "!ykkospesis" in yp.execute("bogus", irc_bot=MagicMock(), channel="#pesis.fi")
+        assert "Ykköspesis" in yp._stop("#pesis.fi")
+
+    def test_two_leagues_track_independently_even_in_the_same_channel(self):
+        # Instance-level state (_channels, _player_cache, _series_cache)
+        # is never shared between subclass instances, so running both
+        # trackers in the same IRC channel can't cross-contaminate.
+        sp = SuperpesisCommand()
+        yp = YkkospesisCommand()
+        bot = MagicMock()
+        with patch.object(sp, "_resolve_series_id", return_value=None):
+            sp._start(bot, "#pesis.fi")
+            join_channel_thread(sp, "#pesis.fi")
+        assert "#pesis.fi" not in sp._channels  # dropped after the error
+        assert yp._channels == {}  # never touched at all
 
 
 class TestUsage:
@@ -567,6 +630,31 @@ class TestSeriesResolution:
         # 2946 is "Naisten Superpesis" - same level name, different series name.
         assert series_id != 2946
 
+    def test_prefers_the_shortcut_entry_when_level_series_matches_more_than_one(self, sc):
+        # Regression test built from real data (Ykköspesis): the same
+        # level/series pair can match more than one seasonSeries - the
+        # real league plus unrelated same-category tournaments (e.g.
+        # "Talven harjoitusotteluita"). "shortcut": true reliably marks
+        # the real league - confirmed live for both leagues configured so
+        # far - and must be preferred even when a non-league entry sorts
+        # first in the array.
+        payload = {"seasons": [{"season": {"id": 110, "season": 2026}, "seasonSerieses": [
+            {"seasonSeries": {"id": 3050, "name": "Talven harjoitusotteluita", "shortcut": False},
+             "level": {"name": "Ykköspesis"}, "series": {"name": "Miehet"}},
+            {"seasonSeries": {"id": 2954, "name": "Miesten Ykköspesis", "shortcut": True},
+             "level": {"name": "Ykköspesis"}, "series": {"name": "Miehet"}},
+        ]}]}
+        sc.SERIES_LEVEL_NAME = "Ykköspesis"  # this fixture's `sc` is a SuperpesisCommand
+        with patch.object(sc.session, "get", return_value=make_response(payload)):
+            series_id = sc._resolve_series_id()
+        assert series_id == 2954  # not 3050, even though it sorts first
+
+    def test_falls_back_to_the_first_match_when_none_has_shortcut(self, sc):
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
+            series_id = sc._resolve_series_id()
+        # series_list_payload()'s entries have no "shortcut" key at all.
+        assert series_id == 2945
+
     def test_missing_series_returns_none(self, sc):
         with patch.object(sc.session, "get", return_value=make_response({"seasons": [{"season": {"season": 2026}, "seasonSerieses": []}]})):
             assert sc._resolve_series_id() is None
@@ -611,6 +699,7 @@ class TestSeriesResolution:
             sc._resolve_series_id()
 
         fresh_instance = SuperpesisCommand()
+        fresh_instance.SERIES_CACHE_FILE = sc.SERIES_CACHE_FILE  # same isolated tmp file as `sc`
         with patch.object(fresh_instance.session, "get") as mock_get2:
             series_id = fresh_instance._resolve_series_id()
 
@@ -627,6 +716,7 @@ class TestSeriesResolution:
             json.dump({"series_id": 2945, "resolved_at": stale_time}, f)
 
         fresh_instance = SuperpesisCommand()
+        fresh_instance.SERIES_CACHE_FILE = sc.SERIES_CACHE_FILE  # same isolated tmp file as `sc`
         with patch.object(fresh_instance.session, "get", return_value=make_response(series_list_payload())) as mock_get2:
             fresh_instance._resolve_series_id()
 
@@ -718,6 +808,30 @@ class TestRunDetection:
         }
         assert sc._is_run_sub_event(sub["texts"]) is True
 
+    def test_vapaataival_kotipesaan_is_a_run(self, sc):
+        # Regression test built from real Ykköspesis match data (147197):
+        # a bases-loaded walk forcing a run home - a new pattern this
+        # vocabulary didn't recognize until it showed up in that match.
+        sub = {
+            "texts": [
+                {"team": 16926, "type": "player", "id": 7479},
+                {"type": "event", "text": "sai vapaataipaleen väärien syöttöjen johdosta"},
+                "kotipesään",
+                {"type": "stat", "walkscore": 3},
+            ],
+        }
+        assert sc._is_run_sub_event(sub["texts"]) is True
+
+    def test_vapaataival_to_a_regular_base_is_not_a_run(self, sc):
+        sub = {
+            "texts": [
+                {"team": 16926, "type": "player", "id": 10249},
+                {"type": "event", "text": "sai vapaataipaleen väärien syöttöjen johdosta"},
+                "ykköspesälle",
+            ],
+        }
+        assert sc._is_run_sub_event(sub["texts"]) is False
+
     def test_eteni_harhaheitolla_kotipesaan_is_a_run(self, sc):
         # A suffixed "eteni..." variant (wild throw) - was being missed
         # entirely by an exact "eteni" match before this was reported.
@@ -792,6 +906,22 @@ class TestRunDetection:
         runs = self._without_sub_event(sc._extract_runs(event))
         assert runs == [({"number": 11}, "Harhaheitto")]
 
+    def test_extract_runs_uses_vapaataival_label_not_the_parent_batter(self, sc):
+        # Same idea as Harhaheitto, for a bases-loaded walk (built from
+        # real Ykköspesis match 147197 data): pesistulokset.fi's own page
+        # shows literally "Vapaataival" as the batter, not whoever really
+        # drew the walk.
+        event = match_event(1, team_id=16926, batter=5246, sub_events=[
+            {"texts": [
+                {"team": 16926, "type": "player", "id": 7479},
+                {"type": "event", "text": "sai vapaataipaleen väärien syöttöjen johdosta"},
+                "kotipesään",
+                {"type": "stat", "walkscore": 3},
+            ]},
+        ])
+        runs = self._without_sub_event(sc._extract_runs(event))
+        assert runs == [({"id": 7479}, "Vapaataival")]
+
     def test_extract_runs_regular_run_still_uses_parent_batter(self, sc):
         event = match_event(1, team_id=16804, batter=10, sub_events=[
             run_sub_event_by_number(3, 16804),
@@ -818,6 +948,20 @@ class TestIsErrorDrivenRun:
     def test_false_for_kunnari(self, sc):
         texts = [{"type": "event", "text": "löi kunnarin!"}]
         assert sc._is_error_driven_run(texts) is False
+
+
+class TestIsWalkForcedRun:
+    def test_true_for_vapaataival_text(self, sc):
+        texts = [{"type": "event", "text": "sai vapaataipaleen väärien syöttöjen johdosta"}]
+        assert sc._is_walk_forced_run(texts) is True
+
+    def test_false_for_plain_eteni(self, sc):
+        texts = [{"type": "event", "text": "eteni"}]
+        assert sc._is_walk_forced_run(texts) is False
+
+    def test_false_for_harhaheitto(self, sc):
+        texts = [{"type": "event", "text": "eteni harhaheitolla"}]
+        assert sc._is_walk_forced_run(texts) is False
 
 
 class TestLastPlayerRef:

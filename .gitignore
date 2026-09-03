@@ -129,6 +129,7 @@ celerybeat.pid
 
 # Runtime caches
 src/.superpesis_series_cache.json
+src/.ykkospesis_series_cache.json
 
 # Environments
 .env

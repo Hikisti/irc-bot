@@ -60,6 +60,7 @@ in `src/irc_bot.py`.
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
+| Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
 
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
@@ -106,6 +107,12 @@ never shows more than the provider's own authoritative period total confirms, so
 line means that score temporarily trails by the same one run rather than ever overstating it.
 `FINAL:` is always fully accurate regardless, since it's read straight from the API's own
 authoritative live-result summary rather than computed locally.
+
+`!ykkospesis` tracks Miesten Ykköspesis (pesäpallo's second division) exactly the same way —
+same commands, same message formats, same `#pesis.fi` restriction — since both share one
+implementation (`src/pesis_command.py`'s `PesisCommand`, with `SuperpesisCommand`/
+`YkkospesisCommand` as thin per-league subclasses); a fix to one fixes both. Both trackers can
+run at once, including in the same channel, without interfering with each other.
 
 The bot also watches every message for `http(s)://` links and replies with the page title,
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`).

@@ -8,7 +8,7 @@ from time_command import TimeCommand
 from f1_command import F1Command
 from liiga_command import LiigaCommand
 from distance_command import DistanceCommand
-from superpesis_command import SuperpesisCommand
+from pesis_command import SuperpesisCommand, YkkospesisCommand
 
 class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes."""
@@ -25,7 +25,8 @@ class CommandHandler:
             F1Command(): {"aliases": ["!f1"], "allow_args": False},
             LiigaCommand(): {"aliases": ["!liiga"], "allow_args": True, "channels": ["#smliiga"]},
             DistanceCommand(): {"aliases": ["!distance"], "allow_args": True},
-            SuperpesisCommand(): {"aliases": ["!superpesis"], "allow_args": True, "channels": ["#pesis.fi"]}
+            SuperpesisCommand(): {"aliases": ["!superpesis"], "allow_args": True, "channels": ["#pesis.fi"]},
+            YkkospesisCommand(): {"aliases": ["!ykkospesis"], "allow_args": True, "channels": ["#pesis.fi"]}
         }
 
     def handle_command(self, irc_bot, nick, channel, message):
