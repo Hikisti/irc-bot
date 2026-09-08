@@ -404,8 +404,15 @@ class LiigaCommand:
                 f"finishedType={finished!r} (-> {suffix_from_type!r}) vs periods (-> {suffix_from_periods!r})"
             )
 
+        spectators = game.get("spectators")
+        # Confirmed live (game 2701291, HPK-Ilves, 2026-09-08): matches
+        # liiga.fi's own "Yleisöä: N" figure exactly. Omitted when absent
+        # (e.g. some preseason/training games don't carry an attendance
+        # figure at all) rather than printing a misleading "0".
+        attendance = f" | Yleisöä: {spectators}" if isinstance(spectators, (int, float)) else ""
+
         self._safe_send(
-            irc_bot, channel, f"{self.FINAL_PREFIX} {home} {home_goals}-{away_goals} {away}{suffix}"
+            irc_bot, channel, f"{self.FINAL_PREFIX} {home} {home_goals}-{away_goals} {away}{suffix}{attendance}"
         )
 
     # ---- data fetching --------------------------------------------------

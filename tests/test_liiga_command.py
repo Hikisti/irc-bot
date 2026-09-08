@@ -503,6 +503,53 @@ class TestAnnounceEnd:
         message = bot.send_message.call_args[0][1]
         assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit"
 
+    def test_attendance_is_appended_when_present(self, liiga_command):
+        # Regression test built from the real payload for Liiga game
+        # 2701291 (HPK-Ilves, 2026-09-08): "spectators" matches liiga.fi's
+        # own "Yleisöä: N" figure exactly.
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_REGULAR_GAME_TIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 1},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 1},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+        ])
+        game["spectators"] = 3532
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit | Yleisöä: 3532"
+
+    def test_attendance_is_omitted_when_absent(self, liiga_command):
+        # Some preseason/training games don't carry an attendance figure
+        # at all - must not print a misleading "Yleisöä: None"/"0".
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_REGULAR_GAME_TIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 1},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 1},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert "Yleisöä" not in message
+
+    def test_attendance_follows_the_ot_so_suffix(self, liiga_command):
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_OVERTIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ])
+        game["spectators"] = 4200
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (OT) | Yleisöä: 4200"
+
 
 class TestFetchTodayGames:
     def _make_response(self, status_ok=True, payload=None):

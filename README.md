@@ -69,9 +69,10 @@ all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the
 gameday (today if there's still something scheduled and not already finished, otherwise the next
 date with games) and lists its matchups grouped by start time, e.g. `Next Liiga gameday
 (tomorrow): 18:30 TPS-Jokerit, Pelicans-KooKoo`. A `FINAL:` line gets an `(OT)` or `(SO)` suffix
-when the game was decided in overtime or a shootout, e.g. `FINAL: Sport 5-4 Jokerit (SO)`. Uses
-the unofficial liiga.fi JSON API, so no key is needed but the endpoint isn't guaranteed to stay
-stable. **Only works in `#smliiga`** — like `!superpesis`, it's restricted to that one channel
+when the game was decided in overtime or a shootout, plus the attendance figure when the API
+reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Uses the unofficial liiga.fi
+JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
+`#smliiga`** — like `!superpesis`, it's restricted to that one channel
 (see `"channels"` in `command_handler.py`); typing it elsewhere is silently ignored.
 
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
