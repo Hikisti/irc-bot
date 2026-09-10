@@ -242,7 +242,7 @@ class TestPollOnce:
         assert channel == "#chan"
         assert "GOAL" in message
         assert "Kristian Vesalainen" in message
-        assert "HIFK 1-0 Ilves" in message
+        assert "HIFK" in message and "1-0" in message and "Ilves" in message
         assert "02:05" in message  # 125s -> 2:05 into period 1
 
     def test_goal_and_final_use_mirc_colors(self, liiga_command):
@@ -268,6 +268,28 @@ class TestPollOnce:
         # left bold/colored on the user's client.
         assert liiga_command.COLOR_RESET in goal_msg
         assert liiga_command.COLOR_RESET in final_msg
+
+    def test_goal_bolds_team_names_and_score_but_final_does_not(self, liiga_command):
+        # Explicitly the behavior asked for: bold team names + score in
+        # GOAL: lines only, not FINAL:.
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
+
+        updated = {1: make_game(
+            home_goals=[goal_event(home_score=1, away_score=0)],
+            ended=True,
+        )}
+        with patch.object(liiga_command, "_fetch_today_games", return_value=updated):
+            liiga_command._poll_once(bot, "#chan")
+
+        messages = [c[0][1] for c in bot.send_message.call_args_list]
+        goal_msg = next(m for m in messages if "GOAL:" in m)
+        final_msg = next(m for m in messages if "FINAL:" in m)
+
+        bold = liiga_command.BOLD
+        assert f"{bold}HIFK{liiga_command.COLOR_RESET} {bold}1-0{liiga_command.COLOR_RESET} {bold}Ilves" in goal_msg
+        # Only the GOAL: prefix's own bold code, not the score too.
+        assert final_msg.count(bold) == 1
 
     def test_goal_with_assists_and_tag(self, liiga_command):
         bot = MagicMock()

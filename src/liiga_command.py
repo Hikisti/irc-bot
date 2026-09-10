@@ -341,9 +341,12 @@ class LiigaCommand:
         clock = self._format_clock(game, event)
         time_str = f" {clock} {period_label}".rstrip() if clock else f" {period_label}".rstrip()
 
+        # Team names and the score bolded, GOAL: only - makes the actual
+        # score stand out at a glance in a scrolling channel.
         return (
             f"{self.GOAL_PREFIX} {scoring_team} — {scorer_name}{tag_str}{assist_str} | "
-            f"{home} {home_score}-{away_score} {away}{time_str}"
+            f"{self.BOLD}{home}{self.COLOR_RESET} {self.BOLD}{home_score}-{away_score}{self.COLOR_RESET} "
+            f"{self.BOLD}{away}{self.COLOR_RESET}{time_str}"
         )
 
     def _format_clock(self, game, event) -> str:
