@@ -269,9 +269,10 @@ class TestPollOnce:
         assert liiga_command.COLOR_RESET in goal_msg
         assert liiga_command.COLOR_RESET in final_msg
 
-    def test_goal_bolds_team_names_and_score_but_final_does_not(self, liiga_command):
-        # Explicitly the behavior asked for: bold team names + score in
-        # GOAL: lines only, not FINAL:.
+    def test_goal_leads_with_the_bolded_score_final_does_not(self, liiga_command):
+        # Explicitly the behavior asked for: the score (bolded) leads a
+        # GOAL: line, with scorer/assist detail trailing after the pipe -
+        # FINAL: is unaffected.
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
 
@@ -286,8 +287,11 @@ class TestPollOnce:
         goal_msg = next(m for m in messages if "GOAL:" in m)
         final_msg = next(m for m in messages if "FINAL:" in m)
 
-        bold = liiga_command.BOLD
-        assert f"{bold}HIFK{liiga_command.COLOR_RESET} {bold}1-0{liiga_command.COLOR_RESET} {bold}Ilves" in goal_msg
+        bold, reset = liiga_command.BOLD, liiga_command.COLOR_RESET
+        assert goal_msg == (
+            f"{liiga_command.GOAL_PREFIX} {bold}HIFK 1-0 Ilves{reset} 02:05 1st | "
+            f"HIFK — Kristian Vesalainen"
+        )
         # Only the GOAL: prefix's own bold code, not the score too.
         assert final_msg.count(bold) == 1
 
