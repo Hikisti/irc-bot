@@ -1,7 +1,9 @@
+import os
 import socket
 import threading
 import time
 import sys
+import traceback
 
 from command_handler import CommandHandler
 from url_fetcher import URLFetcher
@@ -20,13 +22,19 @@ class IrcBot:
 
     def connect(self):
         """Connect to the IRC server and join the channel."""
+        # A distinct, greppable marker with the PID - lets
+        # `journalctl | grep "BOT STARTED"` show every start/restart at a
+        # glance instead of having to correlate `systemctl status` output
+        # with log timestamps by hand.
+        print(f"==== BOT STARTED pid={os.getpid()} ====")
         print(f"Connecting to {self.server}:{self.port} as {self.nickname}...")
         try:
             self.sock.connect((self.server, self.port))
+            print(f"CONNECTED: {self.server}:{self.port} as {self.nickname}")
             self.send_raw(f"NICK {self.nickname}")
             self.send_raw(f"USER {self.nickname} 0 * :{self.nickname}")
             self.running = True
-            
+
             # Start listening in a separate thread
             listener = threading.Thread(target=self.listen, daemon=True)
             listener.start()
@@ -39,7 +47,8 @@ class IrcBot:
             while self.running:
                 time.sleep(1)
         except Exception as e:
-            print(f"Connection error: {e}")
+            print(f"CONNECT FAILED: {e}")
+            traceback.print_exc()
 
     def listen(self):
         """Listen for messages from the server."""
@@ -47,7 +56,10 @@ class IrcBot:
             try:
                 response = self.sock.recv(2048).decode("utf-8", errors="ignore").strip()
                 if not response:
-                    print("Connection lost. Exiting...")
+                    # "DISCONNECTED: ..." wording matches the exception
+                    # branch below - a single, consistent, greppable
+                    # prefix for every way the connection can end.
+                    print("DISCONNECTED: server closed the connection (EOF)")
                     self.running = False
                     break
 
@@ -63,7 +75,13 @@ class IrcBot:
                     elif "PRIVMSG" in line:
                         self.process_message(line)
             except Exception as e:
-                print(f"Error in listen loop: {e}")
+                # The catch-all here is the last line of defense against
+                # anything not anticipated by more specific handling - a
+                # traceback (not just str(e)) is what actually pinpoints
+                # where this broke, same reasoning as the equivalent
+                # catch-alls in liiga_command.py/pesis_command.py.
+                print(f"DISCONNECTED: error in listen loop: {e}")
+                traceback.print_exc()
                 self.running = False
 
     def pong(self, message):
@@ -116,7 +134,7 @@ class IrcBot:
     
     def stop(self):
         """Stop the bot and close the connection."""
-        print("Stopping bot...")
+        print("DISCONNECTED: stop() called (requested shutdown)")
         self.running = False
         self.send_raw("QUIT :Bot shutting down")
         self.sock.close()
