@@ -13,6 +13,23 @@ class PesisEventParsingMixin:
     those class attributes, this just organizes the methods that use them.
     """
 
+    # Finnish scoring vocabulary confirmed live in pesistulokset.fi's
+    # event feed - see _is_run_sub_event()'s own docstring for the full
+    # story behind each pattern. Named here rather than left as scattered
+    # literals since this vocabulary is explicitly disclosed as
+    # incomplete (see the class docstring on PesisCommand) and every
+    # addition so far came from a real report of a missed run - a new one
+    # only ever needs adding in this one place.
+    TEXT_HOME_BASE = "kotipesään"              # "to home base" - a run's destination
+    TEXT_ADVANCED_PREFIX = "eteni"             # "advanced" - regular baserunning
+    TEXT_HOME_RUN = "löi kunnarin!"            # "hit a home run!"
+    TEXT_TIEBREAK_RUN = "juoksu"               # "run" - scoring-contest tie-break decider
+    TEXT_WILD_THROW = "harhaheitolla"          # "by a wild throw" - suffix on an "eteni" event
+    TEXT_FORCED_WALK = "vapaataipaleen"        # "free passage" - a bases-loaded walk forcing a run home
+    BATTER_WILD_THROW = "Harhaheitto"          # pesistulokset.fi's own placeholder "batter" for a wild-throw run
+    BATTER_FORCED_WALK = "Vapaataival"         # pesistulokset.fi's own placeholder "batter" for a forced-walk run
+    PERIOD_END_FALLBACK_TEXT = "Jakso päättyi"  # marker present but no text of its own - fallback
+
     def _extract_runs(self, event):
         """Yields (player_ref, batter_fallback, sub_event) for every run
         scored within this event - a single event can contain more than
@@ -40,14 +57,14 @@ class PesisEventParsingMixin:
                     # pointed at a completely unrelated player's earlier
                     # at-bat, and pesistulokset.fi's own site shows
                     # literally "Harhaheitto" instead of a name for these.
-                    batter = "Harhaheitto"
+                    batter = self.BATTER_WILD_THROW
                 elif self._is_walk_forced_run(texts):
                     # Same idea for a bases-loaded walk forcing a run home
                     # - confirmed live (Ykköspesis) pesistulokset.fi's own
                     # page shows literally "Vapaataival" as the batter for
                     # these too, not the name of whoever actually drew the
                     # walk.
-                    batter = "Vapaataival"
+                    batter = self.BATTER_FORCED_WALK
                 else:
                     batter = event.get("batter")
                 yield player_ref, batter, sub_event
@@ -72,25 +89,28 @@ class PesisEventParsingMixin:
             t.get("text") for t in texts
             if isinstance(t, dict) and t.get("type") == "event" and isinstance(t.get("text"), str)
         ]
-        if "juoksu" in event_texts or "löi kunnarin!" in event_texts:
+        if self.TEXT_TIEBREAK_RUN in event_texts or self.TEXT_HOME_RUN in event_texts:
             return True
-        if any(text.startswith("eteni") or "vapaataipaleen" in text for text in event_texts):
+        if any(
+            text.startswith(self.TEXT_ADVANCED_PREFIX) or self.TEXT_FORCED_WALK in text
+            for text in event_texts
+        ):
             plain_texts = {t for t in texts if isinstance(t, str)}
-            if "kotipesään" in plain_texts:
+            if self.TEXT_HOME_BASE in plain_texts:
                 return True
         return False
 
     def _is_error_driven_run(self, texts) -> bool:
         return any(
             isinstance(t, dict) and t.get("type") == "event"
-            and isinstance(t.get("text"), str) and "harhaheitolla" in t.get("text")
+            and isinstance(t.get("text"), str) and self.TEXT_WILD_THROW in t.get("text")
             for t in texts
         )
 
     def _is_walk_forced_run(self, texts) -> bool:
         return any(
             isinstance(t, dict) and t.get("type") == "event"
-            and isinstance(t.get("text"), str) and "vapaataipaleen" in t.get("text")
+            and isinstance(t.get("text"), str) and self.TEXT_FORCED_WALK in t.get("text")
             for t in texts
         )
 
@@ -202,7 +222,7 @@ class PesisEventParsingMixin:
             for t in texts:
                 if isinstance(t, dict) and t.get("type") == "event" and t.get("text"):
                     return t.get("text")
-            return "Jakso päättyi"  # marker present but no text - fallback
+            return self.PERIOD_END_FALLBACK_TEXT  # marker present but no text of its own
         return None
 
     def _sum_values(self, values):
