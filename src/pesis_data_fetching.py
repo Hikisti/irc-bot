@@ -8,7 +8,35 @@ import requests
 class PesisDataFetchingMixin:
     """All of PesisCommand's actual pesistulokset.fi HTTP calls: resolving
     a league name to its current-season seasonSeries id (with an on-disk
-    cache), and fetching matches/events/roster for a given id/date."""
+    cache), and fetching matches/events/roster for a given id/date. Also
+    provides _api_get(), used by PesisPlayerNamesMixin's player lookup
+    too (both mixins are only ever combined via PesisCommand)."""
+
+    def _api_get(self, path, params=None, what="request", item=None):
+        """GET {BASE_URL}/{path} with the apikey merged into `params`,
+        returning the parsed JSON body, or None on any network/HTTP
+        failure or non-JSON response (logged either way). `what` names
+        the endpoint for that log line (e.g. "series-list"); `item`
+        (optional) is a per-call id (e.g. a match or player id) appended
+        as "for {item}" - every call site here already handles a None
+        result (or any other JSON shape) the same way it would handle
+        this failing outright, so there's no separate default to pick."""
+        try:
+            resp = self.session.get(
+                f"{self.BASE_URL}/{path}",
+                params={"apikey": self.API_KEY, **(params or {})},
+                timeout=self.REQUEST_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            suffix = f" for {item}" if item is not None else ""
+            print(f"{self.DISPLAY_NAME} {what} request failed{suffix}: {e}")
+            return None
+        except ValueError:
+            suffix = f" for {item}" if item is not None else ""
+            print(f"{self.DISPLAY_NAME} {what} returned invalid JSON{suffix}")
+            return None
 
     def _resolve_series_id(self):
         """Finds the current season's "Miesten <league>" seasonSeries id
@@ -27,24 +55,15 @@ class PesisDataFetchingMixin:
             if time.time() - resolved_at < self.SERIES_CACHE_TTL_SECONDS:
                 return series_id
 
-        try:
-            resp = self.session.get(
-                f"{self.BASE_URL}/public/series-list",
-                # Restricts the response to the current season only -
-                # ~1MB instead of ~5.6MB for the unfiltered (all 82+
-                # historical seasons) response. Same param the site's own
-                # frontend uses for this.
-                params={"apikey": self.API_KEY, "current-season": "true"},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.RequestException as e:
-            print(f"{self.DISPLAY_NAME} series-list request failed: {e}")
-            return None
-        except ValueError:
-            print(f"{self.DISPLAY_NAME} series-list returned invalid JSON")
-            return None
+        data = self._api_get(
+            "public/series-list",
+            # Restricts the response to the current season only - ~1MB
+            # instead of ~5.6MB for the unfiltered (all 82+ historical
+            # seasons) response. Same param the site's own frontend uses
+            # for this.
+            params={"current-season": "true"},
+            what="series-list",
+        )
 
         seasons = data.get("seasons") if isinstance(data, dict) else None
         if not seasons:
@@ -107,19 +126,12 @@ class PesisDataFetchingMixin:
     def _fetch_matches_for_date(self, series_id, date_str):
         """Returns {match_id: match_dict} for a specific date, or None on
         failure."""
-        try:
-            resp = self.session.get(
-                f"{self.BASE_URL}/public/matches-list",
-                params={"apikey": self.API_KEY, "seasonSeriesId": series_id, "date": date_str},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.RequestException as e:
-            print(f"{self.DISPLAY_NAME} matches-list request failed: {e}")
-            return None
-        except ValueError:
-            print(f"{self.DISPLAY_NAME} matches-list returned invalid JSON")
+        data = self._api_get(
+            "public/matches-list",
+            params={"seasonSeriesId": series_id, "date": date_str},
+            what="matches-list",
+        )
+        if data is None:
             return None
 
         matches = {}
@@ -166,21 +178,7 @@ class PesisDataFetchingMixin:
 
     def _fetch_match_events(self, match_id):
         """Returns the full events list for a match, or None on failure."""
-        try:
-            resp = self.session.get(
-                f"{self.BASE_URL}/online/{match_id}/events",
-                params={"apikey": self.API_KEY},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.RequestException as e:
-            print(f"{self.DISPLAY_NAME} match-events request failed for {match_id}: {e}")
-            return None
-        except ValueError:
-            print(f"{self.DISPLAY_NAME} match-events returned invalid JSON for {match_id}")
-            return None
-
+        data = self._api_get(f"online/{match_id}/events", what="match-events", item=match_id)
         events = data.get("events") if isinstance(data, dict) else None
         return events if isinstance(events, list) else None
 
@@ -190,21 +188,7 @@ class PesisDataFetchingMixin:
         fall back to a placeholder name rather than crashing or - worse -
         resolving to a real but unrelated player, which is the bug this
         exists to fix; see _last_player_ref())."""
-        try:
-            resp = self.session.get(
-                f"{self.BASE_URL}/public/match",
-                params={"apikey": self.API_KEY, "id": match_id},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.RequestException as e:
-            print(f"{self.DISPLAY_NAME} match-detail request failed for {match_id}: {e}")
-            return {}
-        except ValueError:
-            print(f"{self.DISPLAY_NAME} match-detail returned invalid JSON for {match_id}")
-            return {}
-
+        data = self._api_get("public/match", params={"id": match_id}, what="match-detail", item=match_id)
         if not isinstance(data, dict):
             return {}
 

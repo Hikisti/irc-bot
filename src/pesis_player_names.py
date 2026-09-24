@@ -1,36 +1,23 @@
-import requests
-
-
 class PesisPlayerNamesMixin:
     """Resolves a scorer/batter reference from the event feed (a global
     player id or a per-match jersey number - see
     PesisEventParsingMixin._last_player_ref()) into a display name, via
-    /public/player/{id} and the per-match roster fetched by
-    PesisDataFetchingMixin._fetch_match_roster()."""
+    /public/player/{id} (through PesisDataFetchingMixin._api_get(), only
+    ever combined with this mixin via PesisCommand) and the per-match
+    roster fetched by PesisDataFetchingMixin._fetch_match_roster()."""
 
     def _resolve_player_name(self, player_id):
         if player_id in self._player_cache:
             return self._player_cache[player_id]
 
         name = f"Player {player_id}"
-        try:
-            resp = self.session.get(
-                f"{self.BASE_URL}/public/player/{player_id}",
-                params={"apikey": self.API_KEY},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
+        data = self._api_get(f"public/player/{player_id}", what="player lookup", item=player_id)
+        if isinstance(data, dict):
+            name = (
+                data.get("name")
+                or f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+                or name
             )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict):
-                name = (
-                    data.get("name")
-                    or f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
-                    or name
-                )
-        except requests.exceptions.RequestException as e:
-            print(f"{self.DISPLAY_NAME}: player lookup failed for {player_id}: {e}")
-        except ValueError:
-            print(f"{self.DISPLAY_NAME}: player lookup returned invalid JSON for {player_id}")
 
         self._player_cache[player_id] = name
         return name
