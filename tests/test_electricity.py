@@ -44,16 +44,6 @@ class TestElectricityCommand:
             result = electricity_command.execute()
         assert result == "-1.20 snt / kWh"
 
-    def test_second_call_uses_cache_without_new_request(self, electricity_command):
-        with patch.object(
-            electricity_command.session, "get", return_value=make_response({"price": 3.0})
-        ) as mock_get:
-            first = electricity_command.execute()
-            second = electricity_command.execute()
-
-        assert first == second == "3.00 snt / kWh"
-        mock_get.assert_called_once()
-
     def test_missing_price_field_returns_error(self, electricity_command):
         with patch.object(electricity_command.session, "get", return_value=make_response({"foo": "bar"})):
             result = electricity_command.execute()

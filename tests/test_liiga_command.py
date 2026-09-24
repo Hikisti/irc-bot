@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from irc_format import BOLD, RESET, GREEN, ORANGE
+from irc_format import BOLD, RESET, ORANGE
 from liiga_command import LiigaCommand
 from tests.conftest import join_channel_thread
 
@@ -54,20 +54,6 @@ def goal_event(period=1, game_time=125, home_score=1, away_score=0,
 @pytest.fixture
 def liiga_command():
     return LiigaCommand()
-
-
-class TestUsage:
-    def test_no_args_shows_usage(self, liiga_command):
-        result = liiga_command.execute("", irc_bot=MagicMock(), channel="#chan")
-        assert "Usage:" in result
-
-    def test_unknown_arg_shows_usage(self, liiga_command):
-        result = liiga_command.execute("bogus", irc_bot=MagicMock(), channel="#chan")
-        assert "Usage:" in result
-
-    def test_start_without_context_errors(self, liiga_command):
-        result = liiga_command.execute("start")
-        assert "Error" in result
 
 
 class TestStartDoesNotBlock:
@@ -171,10 +157,10 @@ class TestRun:
 
 
 class TestStop:
-    def test_stop_without_active_tracking(self, liiga_command):
-        result = liiga_command.execute("stop", irc_bot=MagicMock(), channel="#chan")
-        assert "Not currently tracking" in result
-
+    # "stop without active tracking" and the plain stop/set-event/clear
+    # state transition are LiveTrackerCommand's own base behavior,
+    # covered there - this class only needs the parts genuinely specific
+    # to Liiga: stopping while a real background fetch is in flight.
     def test_stop_signals_thread_and_clears_state(self, liiga_command):
         release_fetch = threading.Event()
 
@@ -194,22 +180,6 @@ class TestStop:
             assert "#chan" not in liiga_command._channels
 
             release_fetch.set()  # let the orphaned thread finish so it doesn't leak into other tests
-
-
-class TestPollLoop:
-    def test_unexpected_poll_once_failure_logs_a_traceback_and_continues(self, liiga_command):
-        bot = MagicMock()
-        stop_event = threading.Event()
-
-        def fail_once(*args, **kwargs):
-            stop_event.set()  # let the loop exit after this one iteration
-            raise RuntimeError("boom")
-
-        with patch.object(liiga_command, "_poll_once", side_effect=fail_once), \
-             patch("traceback.print_exc") as mock_print_exc:
-            liiga_command._poll_loop(bot, "#chan", stop_event)  # must not raise
-
-        mock_print_exc.assert_called_once()
 
 
 class TestPollOnce:
@@ -266,34 +236,12 @@ class TestPollOnce:
 
         assert all_ended is True
 
-    def test_goal_and_final_use_mirc_colors(self, liiga_command):
-        bot = MagicMock()
-        self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
-
-        updated = {1: make_game(
-            home_goals=[goal_event(home_score=1, away_score=0)],
-            ended=True,
-        )}
-        with patch.object(liiga_command, "_fetch_today_games", return_value=updated):
-            liiga_command._poll_once(bot, "#chan")
-
-        messages = [c[0][1] for c in bot.send_message.call_args_list]
-        goal_msg = next(m for m in messages if "GOAL:" in m)
-        final_msg = next(m for m in messages if "FINAL:" in m)
-
-        assert goal_msg.startswith(liiga_command.GOAL_PREFIX)
-        assert GREEN in goal_msg
-        assert final_msg.startswith(liiga_command.FINAL_PREFIX)
-        assert ORANGE in final_msg
-        # Both prefixes must reset formatting so the rest of the line isn't
-        # left bold/colored on the user's client.
-        assert RESET in goal_msg
-        assert RESET in final_msg
-
     def test_goal_leads_with_the_bolded_score_final_does_not(self, liiga_command):
         # Explicitly the behavior asked for: the score (bolded) leads a
         # GOAL: line, with scorer/assist detail trailing after the pipe -
-        # FINAL: is unaffected.
+        # FINAL: is unaffected. Also covers both prefixes' mIRC colors and
+        # that both reset formatting so the rest of the line isn't left
+        # bold/colored on the user's client.
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
 
@@ -314,6 +262,9 @@ class TestPollOnce:
         )
         # Only the GOAL: prefix's own bold code, not the score too.
         assert final_msg.count(BOLD) == 1
+        assert final_msg.startswith(liiga_command.FINAL_PREFIX)
+        assert ORANGE in final_msg
+        assert RESET in final_msg
 
     def test_goal_with_assists_and_tag(self, liiga_command):
         bot = MagicMock()
@@ -661,10 +612,11 @@ class TestNext:
 
         bot.send_message.assert_called_once()
 
-    def test_next_without_context_errors(self, liiga_command):
-        result = liiga_command.execute("next")
-        assert "Error" in result
-
+    # "next" without context, and _run_next's not-found/unreachable/
+    # exception handling, are LiveTrackerCommand's own base behavior
+    # (Liiga's _fetch_next_period is a pure pass-through to
+    # _fetch_next_gameday(), with no logic of its own) - covered there.
+    # This class only needs Liiga's own summary format.
     def test_run_next_reports_games_and_date_label(self, liiga_command):
         bot = MagicMock()
         with patch.object(
@@ -676,24 +628,6 @@ class TestNext:
         message = bot.send_message.call_args[0][1]
         assert "Next Liiga gameday (tomorrow)" in message
         assert "TPS-Jokerit" in message
-
-    def test_run_next_no_games_found(self, liiga_command):
-        bot = MagicMock()
-        with patch.object(liiga_command, "_fetch_next_gameday", return_value=(None, {})):
-            liiga_command._run_next(bot, "#chan")
-        bot.send_message.assert_called_once_with("#chan", "No upcoming Liiga games found.")
-
-    def test_run_next_api_unreachable(self, liiga_command):
-        bot = MagicMock()
-        with patch.object(liiga_command, "_fetch_next_gameday", return_value=(None, None)):
-            liiga_command._run_next(bot, "#chan")
-        bot.send_message.assert_called_once_with("#chan", "Error: could not reach the Liiga API.")
-
-    def test_run_next_unexpected_exception_does_not_propagate(self, liiga_command):
-        bot = MagicMock()
-        with patch.object(liiga_command, "_fetch_next_gameday", side_effect=RuntimeError("boom")):
-            liiga_command._run_next(bot, "#chan")  # must not raise
-        bot.send_message.assert_called_once_with("#chan", "Error: could not reach the Liiga API.")
 
 
 class TestFetchNextGameday:
@@ -707,6 +641,7 @@ class TestFetchNextGameday:
 
     def test_returns_today_if_games_already_scheduled_today(self, liiga_command):
         today_game = make_game(gid=1)
+        today_str = datetime.datetime.now(liiga_command.HELSINKI_TZ).strftime("%Y-%m-%d")
 
         def fake_get(url, params=None, timeout=None):
             if params["tournament"] == "runkosarja":
@@ -717,7 +652,7 @@ class TestFetchNextGameday:
             date_str, games = liiga_command._fetch_next_gameday()
 
         assert games == {1: today_game}
-        assert date_str is not None
+        assert date_str == today_str
 
     def test_ignores_a_backward_pointing_next_game_date(self, liiga_command):
         # Regression test for a real incident: once valmistavat_ottelut
@@ -860,24 +795,6 @@ class TestAllGamesEnded:
 
     def test_false_for_empty_dict(self, liiga_command):
         assert liiga_command._all_games_ended({}) is False
-
-
-class TestDateLabel:
-    def test_today(self, liiga_command):
-        today = datetime.datetime.now(liiga_command.HELSINKI_TZ).strftime("%Y-%m-%d")
-        assert liiga_command._format_date_label(today) == "today"
-
-    def test_tomorrow(self, liiga_command):
-        tomorrow = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        assert liiga_command._format_date_label(tomorrow) == "tomorrow"
-
-    def test_other_date_shows_weekday_and_date(self, liiga_command):
-        far_future = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=10))
-        label = liiga_command._format_date_label(far_future.strftime("%Y-%m-%d"))
-        assert far_future.strftime("%d/%m") in label
-
-    def test_malformed_date_falls_back_to_raw_string(self, liiga_command):
-        assert liiga_command._format_date_label("not-a-date") == "not-a-date"
 
 
 class TestFormatClock:

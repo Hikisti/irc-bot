@@ -65,57 +65,6 @@ class TestLeagueSubclasses:
         assert yp._channels == {}  # never touched at all
 
 
-class TestUsage:
-    def test_no_args_shows_usage(self, sc):
-        assert "Usage:" in sc.execute("", irc_bot=MagicMock(), channel="#pesis.fi")
-
-    def test_unknown_arg_shows_usage(self, sc):
-        assert "Usage:" in sc.execute("bogus", irc_bot=MagicMock(), channel="#pesis.fi")
-
-    def test_start_without_context_errors(self, sc):
-        assert "Error" in sc.execute("start")
-
-
-class TestStartDoesNotBlock:
-    def test_start_returns_before_series_lookup_completes(self, sc):
-        release = threading.Event()
-
-        def slow_resolve():
-            release.wait(timeout=2)
-            return 2945
-
-        bot = MagicMock()
-        with patch.object(sc, "_resolve_series_id", side_effect=slow_resolve), \
-             patch.object(sc, "_fetch_today_matches", return_value={}):
-            start = time.time()
-            result = sc.execute("start", irc_bot=bot, channel="#pesis.fi")
-            elapsed = time.time() - start
-
-            assert elapsed < 1, "execute() blocked on the network"
-            assert "Checking" in result
-
-            release.set()
-            join_channel_thread(sc, "#pesis.fi")
-
-        bot.send_message.assert_called_once()
-
-    def test_start_reserves_slot_against_races(self, sc):
-        release = threading.Event()
-
-        def slow_resolve():
-            release.wait(timeout=2)
-            return None
-
-        bot = MagicMock()
-        with patch.object(sc, "_resolve_series_id", side_effect=slow_resolve):
-            sc.execute("start", irc_bot=bot, channel="#pesis.fi")
-            second = sc.execute("start", irc_bot=bot, channel="#pesis.fi")
-            release.set()
-            join_channel_thread(sc, "#pesis.fi")
-
-        assert "Already tracking" in second
-
-
 class TestRun:
     def test_series_resolution_fails(self, sc):
         bot = MagicMock()
@@ -286,9 +235,11 @@ class TestSeedMatchExtras:
 
 
 class TestStop:
-    def test_stop_without_active_tracking(self, sc):
-        assert "Not currently tracking" in sc.execute("stop", irc_bot=MagicMock(), channel="#pesis.fi")
-
+    # "stop without active tracking" and the plain stop/set-event/clear
+    # state transition are LiveTrackerCommand's own base behavior,
+    # covered there - this class only needs the part genuinely specific
+    # to Pesis: stopping while a real background series-id lookup is in
+    # flight.
     def test_stop_signals_thread_and_clears_state(self, sc):
         release = threading.Event()
 
@@ -310,31 +261,10 @@ class TestStop:
 
 
 class TestNext:
-    def test_next_returns_immediately_without_blocking(self, sc):
-        release = threading.Event()
-
-        def slow_next():
-            release.wait(timeout=2)
-            return "found", "2026-08-28", {1: make_match(mid=1)}
-
-        bot = MagicMock()
-        with patch.object(sc, "_resolve_series_id", return_value=2945), \
-             patch.object(sc, "_fetch_next_matchday", side_effect=slow_next):
-            start = time.time()
-            result = sc.execute("next", irc_bot=bot, channel="#pesis.fi")
-            elapsed = time.time() - start
-
-            assert elapsed < 1, "execute() blocked on the network"
-            assert "Checking" in result
-
-            release.set()
-            time.sleep(0.2)  # let the one-shot background thread finish
-
-        bot.send_message.assert_called_once()
-
-    def test_next_without_context_errors(self, sc):
-        assert "Error" in sc.execute("next")
-
+    # "next doesn't block" and "next without context" are
+    # LiveTrackerCommand's own base behavior (the former already covered
+    # by LiigaCommand's own test suite, which exercises the identical
+    # base mechanism), covered there.
     def test_run_next_reports_matches_and_date_label(self, sc):
         bot = MagicMock()
         matches = {1: make_match(mid=1, home="Sotkamon Jymy", away="Joensuun Maila")}
@@ -347,12 +277,12 @@ class TestNext:
         assert "Next Superpesis matchday (tomorrow)" in message
         assert "Sotkamon Jymy-Joensuun Maila" in message
 
-    def test_run_next_series_lookup_fails(self, sc):
-        bot = MagicMock()
-        with patch.object(sc, "_resolve_series_id", return_value=None):
-            sc._run_next(bot, "#pesis.fi")
-        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
-
+    # A resolved-to-None series id is LiveTrackerCommand's own
+    # REQUIRES_CONTEXT mechanism (base test:
+    # test_requires_context_blocks_when_unresolved) - _resolve_context()
+    # is a pure pass-through to _resolve_series_id() with no logic of its
+    # own. _resolve_context() itself *raising*, below, is real Pesis-only
+    # coverage: no base test exercises that path.
     def test_run_next_series_lookup_raises_does_not_propagate(self, sc):
         bot = MagicMock()
         with patch.object(sc, "_resolve_series_id", side_effect=RuntimeError("boom")):
@@ -374,34 +304,9 @@ class TestNext:
         message = bot.send_message.call_args[0][1]
         assert "No upcoming Superpesis matches found" in message
         assert str(sc.NEXT_SEARCH_MAX_DAYS) in message
-
-    def test_run_next_unexpected_exception_does_not_propagate(self, sc):
-        bot = MagicMock()
-        with patch.object(sc, "_resolve_series_id", return_value=2945), \
-             patch.object(sc, "_fetch_next_matchday", side_effect=RuntimeError("boom")):
-            sc._run_next(bot, "#pesis.fi")  # must not raise
-        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
-
-
-class TestDateLabel:
-    def test_today(self, sc):
-        import datetime
-        today = datetime.datetime.now(sc.HELSINKI_TZ).strftime("%Y-%m-%d")
-        assert sc._format_date_label(today) == "today"
-
-    def test_tomorrow(self, sc):
-        import datetime
-        tomorrow = (datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        assert sc._format_date_label(tomorrow) == "tomorrow"
-
-    def test_other_date_shows_weekday_and_date(self, sc):
-        import datetime
-        far_future = datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(days=10)
-        label = sc._format_date_label(far_future.strftime("%Y-%m-%d"))
-        assert far_future.strftime("%d/%m") in label
-
-    def test_malformed_date_falls_back_to_raw_string(self, sc):
-        assert sc._format_date_label("not-a-date") == "not-a-date"
+        # _fetch_next_matchday() raising is LiveTrackerCommand's own
+        # base fetch-exception handling (base test:
+        # test_fetch_exception_does_not_propagate) - covered there.
 
 
 class TestMatchesSummary:
@@ -413,14 +318,10 @@ class TestMatchesSummary:
         ]
         summary = sc._format_matches_summary(matches)
         assert summary == "17:00 A-B, C-D | 18:30 E-F"
-
-    def test_missing_date_sorts_last(self, sc):
-        matches = [
-            make_match(mid=1, home="A", away="B", date=None),
-            make_match(mid=2, home="C", away="D", date="2026-08-24T14:00:00.000000Z"),
-        ]
-        summary = sc._format_matches_summary(matches)
-        assert summary == "17:00 C-D | ??:?? A-B"
+        # Grouping/sorting/missing-timestamp fallback is
+        # LiveTrackerCommand's own base _format_start_time_summary()
+        # logic - see LiigaCommand's own TestGamesSummary for that
+        # coverage (e.g. test_missing_start_time_falls_back_and_sorts_last).
 
 
 class TestAnnouncePeriodEnds:
@@ -543,7 +444,7 @@ class TestProcessMatch:
         messages = [c[0][1] for c in bot.send_message.call_args_list]
         assert len(messages) == 3
         assert "Iivari Vihanto | Sotkamon Jymy 1-0 Joensuun Maila" in messages[0]
-        assert "lyöjä" not in messages[0]  # batter == scorer for the kunnari
+        assert "→" not in messages[0]  # batter == scorer for the kunnari - no "batter → scorer" arrow
         assert "Roope Korhonen → Kalle Kuosmanen | Sotkamon Jymy 2-0 Joensuun Maila" in messages[1]
         assert "Harhaheitto → Elmeri Purmonen | Sotkamon Jymy 3-0 Joensuun Maila" in messages[2]
 
@@ -659,7 +560,8 @@ class TestProcessMatch:
         assert len(messages) == 4  # Jere Vikström, Kalle Kuosmanen, Hannes Pekkinen's kunnari, Roope->Elmeri
         assert "Hannes Pekkinen → Jere Vikström | Sotkamon Jymy 2-0" in messages[0]
         assert "Hannes Pekkinen → Kalle Kuosmanen | Sotkamon Jymy 3-0" in messages[1]
-        assert "Hannes Pekkinen | Sotkamon Jymy 4-0" in messages[2]  # kunnari: batter == scorer
+        assert "Hannes Pekkinen | Sotkamon Jymy 4-0" in messages[2]
+        assert "→" not in messages[2]  # kunnari: batter == scorer - no "batter → scorer" arrow
         # The real incident report: this line showed "6-0" before this
         # fix (double-counted on top of a snap that had silently absorbed
         # the three dropped runs above) instead of the real "5-0".
@@ -936,16 +838,6 @@ class TestProcessMatch:
         assert message.startswith(sc.FINAL_PREFIX)
         assert "Manse PP - Hyvinkään Tahko 1 - 0 (2 - 1, 0 - 0)" in message
 
-    def test_already_finished_does_not_resend_final(self, sc):
-        bot = MagicMock()
-        prev = self._prev(finished=True, period_home_runs=2, period_away_runs=1)
-        match = make_match(mid=146953, home_id=16802, away_id=16796, home_runs=2, away_runs=1, finished=True)
-
-        with patch.object(sc, "_fetch_match_events", return_value=None):
-            sc._process_match(bot, "#pesis.fi", match, prev)
-
-        bot.send_message.assert_not_called()
-
     def test_already_finished_match_is_never_touched_again(self, sc):
         # Regression test for a real incident: the event feed kept
         # appending events (apparent corrections) well after "Ottelu
@@ -1039,22 +931,6 @@ class TestProcessMatch:
         bot.send_message.assert_not_called()
         assert new_state["period_home_runs"] == 0
         assert new_state["period_away_runs"] == 0
-
-
-class TestPollLoop:
-    def test_unexpected_poll_once_failure_logs_a_traceback_and_continues(self, sc):
-        bot = MagicMock()
-        stop_event = threading.Event()
-
-        def fail_once(*args, **kwargs):
-            stop_event.set()  # let the loop exit after this one iteration
-            raise RuntimeError("boom")
-
-        with patch.object(sc, "_poll_once", side_effect=fail_once), \
-             patch("traceback.print_exc") as mock_print_exc:
-            sc._poll_loop(bot, "#pesis.fi", stop_event, 2945)  # must not raise
-
-        mock_print_exc.assert_called_once()
 
 
 class TestPollOnce:

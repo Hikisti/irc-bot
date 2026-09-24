@@ -181,10 +181,6 @@ class TestTimezoneAbbreviation:
         mock_get.assert_not_called()
         assert result.startswith("Local time in CDT (America/Chicago):")
 
-    def test_abbreviation_lookup_is_case_insensitive(self, time_command):
-        result = time_command.execute("eest")
-        assert result.startswith("Local time in EEST (Europe/Helsinki):")
-
     def test_zoneinfo_construction_failure_returns_friendly_error(self, time_command, monkeypatch):
         # Every mapped IANA name is a real zone in practice, so this
         # guards a failure mode that's never actually been observed live

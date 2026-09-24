@@ -90,16 +90,13 @@ class TestAllMatchesFinished:
 
 class TestSeriesResolution:
     def test_finds_mens_superpesis_in_latest_season(self, sc):
+        # 2945 not 2946 ("Naisten Superpesis" - same level name, different
+        # series name) or 2810 (last season) - series_list_payload()'s
+        # entries also have no "shortcut" key at all, so this doubles as
+        # coverage for falling back to the first match when none has one.
         with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
             series_id = sc._resolve_series_id()
-        assert series_id == 2945  # not 2946 (women's) or 2810 (last season)
-
-    def test_does_not_confuse_womens_superpesis(self, sc):
-        payload = series_list_payload()
-        with patch.object(sc.session, "get", return_value=make_response(payload)):
-            series_id = sc._resolve_series_id()
-        # 2946 is "Naisten Superpesis" - same level name, different series name.
-        assert series_id != 2946
+        assert series_id == 2945
 
     def test_prefers_the_shortcut_entry_when_level_series_matches_more_than_one(self, sc):
         # Regression test built from real data (Ykköspesis): the same
@@ -119,12 +116,6 @@ class TestSeriesResolution:
         with patch.object(sc.session, "get", return_value=make_response(payload)):
             series_id = sc._resolve_series_id()
         assert series_id == 2954  # not 3050, even though it sorts first
-
-    def test_falls_back_to_the_first_match_when_none_has_shortcut(self, sc):
-        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
-            series_id = sc._resolve_series_id()
-        # series_list_payload()'s entries have no "shortcut" key at all.
-        assert series_id == 2945
 
     def test_missing_series_returns_none(self, sc):
         with patch.object(sc.session, "get", return_value=make_response({"seasons": [{"season": {"season": 2026}, "seasonSerieses": []}]})):

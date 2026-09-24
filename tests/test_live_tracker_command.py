@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -33,6 +34,25 @@ class MinimalTracker(LiveTrackerCommand):
 @pytest.fixture
 def tracker():
     return MinimalTracker()
+
+
+class TestUsage:
+    """execute()'s own dispatch, including its usage-string fallback and
+    what happens when "start"/"next" are called without channel context -
+    lives only on LiveTrackerCommand, previously tested identically in
+    both LiigaCommand's and PesisCommand's own test files."""
+
+    def test_no_args_shows_usage(self, tracker):
+        assert "Usage:" in tracker.execute("", irc_bot=MagicMock(), channel="#chan")
+
+    def test_unknown_arg_shows_usage(self, tracker):
+        assert "Usage:" in tracker.execute("bogus", irc_bot=MagicMock(), channel="#chan")
+
+    def test_start_without_context_errors(self, tracker):
+        assert "Error" in tracker.execute("start")
+
+    def test_next_without_context_errors(self, tracker):
+        assert "Error" in tracker.execute("next")
 
 
 class TestLifecycle:
@@ -135,7 +155,7 @@ class TestPollLoop:
         tracker._poll_loop(bot, "#chan", stop_event, "extra-context")
         assert seen == [("extra-context",)]
 
-    def test_poll_loop_survives_exception_and_keeps_polling(self, tracker):
+    def test_poll_loop_survives_exception_logs_traceback_and_keeps_polling(self, tracker):
         bot = MagicMock()
         tracker._start(bot, "#chan")
         stop_event = tracker._channels["#chan"]["stop_event"]
@@ -150,19 +170,41 @@ class TestPollLoop:
 
         tracker._poll_once = flaky_poll_once
         tracker.POLL_INTERVAL_SECONDS = 0
-        tracker._poll_loop(bot, "#chan", stop_event)
+        with patch("live_tracker_command.traceback.print_exc") as mock_print_exc:
+            tracker._poll_loop(bot, "#chan", stop_event)
+
         assert calls["count"] == 2
+        mock_print_exc.assert_called_once()
 
 
-class TestSafeSendAndDateLabel:
+class TestSafeSend:
     def test_safe_send_swallows_exceptions(self, tracker):
         bot = MagicMock()
         bot.send_message.side_effect = RuntimeError("disconnected")
         tracker._safe_send(bot, "#chan", "hi")  # must not raise
 
-    def test_format_date_label_handles_bad_input(self, tracker):
+
+class TestDateLabel:
+    """_format_date_label() lives only on LiveTrackerCommand - neither
+    LiigaCommand nor PesisCommand overrides it (previously tested
+    identically in both subclasses' own test files)."""
+
+    def test_none_and_malformed_input_falls_back_to_raw_string(self, tracker):
         assert tracker._format_date_label(None) == "unknown date"
         assert tracker._format_date_label("not-a-date") == "not-a-date"
+
+    def test_today(self, tracker):
+        today = datetime.datetime.now(tracker.HELSINKI_TZ).strftime("%Y-%m-%d")
+        assert tracker._format_date_label(today) == "today"
+
+    def test_tomorrow(self, tracker):
+        tomorrow = (datetime.datetime.now(tracker.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        assert tracker._format_date_label(tomorrow) == "tomorrow"
+
+    def test_other_date_shows_weekday_and_date(self, tracker):
+        far_future = datetime.datetime.now(tracker.HELSINKI_TZ) + datetime.timedelta(days=10)
+        label = tracker._format_date_label(far_future.strftime("%Y-%m-%d"))
+        assert far_future.strftime("%d/%m") in label
 
 
 class TestStartTimeLabel:

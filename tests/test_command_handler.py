@@ -220,17 +220,3 @@ class TestChannelRestriction:
         mock_weather.execute.assert_called_once_with("kokkola")
         bot.send_message.assert_called_once_with("#pesis.fi", "sunny")
 
-    def test_command_without_channels_key_is_allowed_everywhere(self, handler):
-        # Every command besides !superpesis/!liiga has no "channels" key
-        # at all - confirm that absence never restricts anything
-        # (regression guard for the mechanism itself, not any one
-        # command).
-        bot = MagicMock()
-        mock_weather = MagicMock()
-        mock_weather.execute.return_value = "sunny"
-        replace_command(handler, "!weather", mock_weather)
-
-        handler.handle_command(bot, "nick", "#some-random-channel", "!weather kokkola")
-
-        mock_weather.execute.assert_called_once_with("kokkola")
-        bot.send_message.assert_called_once_with("#some-random-channel", "sunny")

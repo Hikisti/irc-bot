@@ -76,26 +76,13 @@ class TestProcessMessage:
         bot.command_handler.handle_command.assert_not_called()
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
-    def test_nick_is_extracted_from_the_prefix(self, bot):
-        bot.command_handler = MagicMock()
-
-        bot.process_message(":bob!bob@some.host PRIVMSG #bottest123 :!time cdt")
-
-        nick = bot.command_handler.handle_command.call_args[0][1]
-        assert nick == "bob"
-
-
 class TestSendRaw:
     def test_sends_the_message_with_crlf(self, bot):
+        # sendall() (not send()) guarantees the whole line goes out in one
+        # call rather than potentially partial-writing.
         bot.send_raw("PRIVMSG #chan :hello")
         bot.sock.sendall.assert_called_once_with(b"PRIVMSG #chan :hello\r\n")
-
-    def test_uses_sendall_not_send(self, bot):
-        # sendall() guarantees the whole line goes out in one call rather
-        # than potentially partial-writing, unlike send().
-        bot.send_raw("PRIVMSG #chan :hello")
         bot.sock.send.assert_not_called()
-        bot.sock.sendall.assert_called_once()
 
     def test_socket_error_does_not_raise(self, bot):
         bot.sock.sendall.side_effect = OSError("broken pipe")

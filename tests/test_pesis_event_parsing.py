@@ -362,13 +362,11 @@ class TestPeriodRuns:
 
     def test_different_period_gives_a_different_total(self, sc):
         # This is the actual bug: summing (_sum_runs) would give 11 for
-        # home here (2+9), not jakso 2's own 9.
+        # home here (2+9), not jakso 2's own 9. jakso 2's arrays also
+        # contain None for innings not yet played - ignored, not summed
+        # as 0 contributions that would still be "found".
         assert sc._period_runs(self.LIVE, "home", 1) == 9
         assert sc._period_runs(self.LIVE, "away", 1) == 0
-
-    def test_none_values_in_the_period_are_ignored(self, sc):
-        # jakso 2's arrays contain None for innings not yet played.
-        assert sc._period_runs(self.LIVE, "home", 1) == 9
 
     def test_none_period_index_returns_none(self, sc):
         assert sc._period_runs(self.LIVE, "home", None) is None
@@ -435,12 +433,16 @@ class TestFormatRun:
     def test_omits_batter_when_same_as_scorer(self, sc):
         event = {"period": 1}
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Same Person", "Same Person")
-        assert "lyöjä" not in msg
+        # No "batter → scorer" arrow when they're the same person (e.g. a
+        # home run) - just the name once, not repeated on both sides.
+        assert "→" not in msg
+        assert msg.count("Same Person") == 1
 
     def test_omits_batter_when_unresolved(self, sc):
         event = {"period": 1}
         msg = sc._format_run(event, "Home", "Away", 1, 0, 16802, 16802, "Scorer", None)
-        assert "lyöjä" not in msg
+        assert "→" not in msg
+        assert "Scorer" in msg
 
     def test_includes_vuoropari_alongside_the_period(self, sc):
         # Regression coverage built directly from real matches (147202,

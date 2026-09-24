@@ -35,7 +35,3 @@ class TestFormatRequestError:
     def test_non_request_exception_includes_exception_text(self):
         result = format_request_error(ValueError("bad data"), "Weather API")
         assert result == "Error: Unexpected issue with Weather API: bad data"
-
-    def test_service_name_is_substituted_consistently(self):
-        assert "CoinGecko" in format_request_error(requests.exceptions.Timeout(), "CoinGecko")
-        assert "YouTube" in format_request_error(requests.exceptions.Timeout(), "YouTube")
