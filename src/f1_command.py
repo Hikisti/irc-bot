@@ -1,8 +1,8 @@
-import requests
 import datetime
 import pytz
 
 from base_command import BaseCommand
+from http_session import make_session
 from request_errors import format_request_error
 
 
@@ -32,11 +32,7 @@ class F1Command(BaseCommand):
     ]
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "KukistiBot-F1/1.0",
-            "Accept": "application/json",
-        })
+        self.session = make_session("KukistiBot-F1/1.0")
 
     def execute(self, args=None) -> str:
         try:

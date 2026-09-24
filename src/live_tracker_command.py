@@ -3,9 +3,9 @@ import threading
 import traceback
 
 import pytz
-import requests
 
 from base_command import BaseCommand
+from http_session import make_session
 
 
 class LiveTrackerCommand(BaseCommand):
@@ -50,11 +50,7 @@ class LiveTrackerCommand(BaseCommand):
     REQUIRES_CONTEXT = False
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": f"KukistiBot-{self.CACHE_SLUG}/1.0",
-            "Accept": "application/json",
-        })
+        self.session = make_session(f"KukistiBot-{self.CACHE_SLUG}/1.0")
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", STATE_KEY: ...}
 

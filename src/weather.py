@@ -1,8 +1,8 @@
 import os
 from dotenv import load_dotenv
-import requests
 
 from base_command import BaseCommand
+from http_session import make_session
 from request_errors import format_request_error
 
 class WeatherCommand(BaseCommand):
@@ -14,11 +14,7 @@ class WeatherCommand(BaseCommand):
         load_dotenv()  # Load environment variables from .env
         self.api_key = os.getenv("WEATHER_API_KEY")
         self.base_url = "http://api.weatherapi.com/v1/current.json"
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "KukistiBot-Weather/1.0",
-            "Accept": "application/json",
-        })
+        self.session = make_session("KukistiBot-Weather/1.0")
 
     def execute(self, args):
         if not args:

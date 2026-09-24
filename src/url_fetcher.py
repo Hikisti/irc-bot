@@ -1,8 +1,8 @@
 import re
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
+from http_session import make_session
 from request_errors import format_request_error
 
 
@@ -29,10 +29,7 @@ class URLFetcher:
         Sets up a session with a common browser user-agent to avoid being blocked.
         """
         self.bot = bot
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        })
+        self.session = make_session("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", accept_json=False)
 
     def detect_and_fetch(self, nick, channel, message):
         """

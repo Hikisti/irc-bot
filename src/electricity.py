@@ -1,9 +1,9 @@
-import requests
 import datetime
 import pytz
 from decimal import Decimal, ROUND_HALF_UP
 
 from base_command import BaseCommand
+from http_session import make_session
 from request_errors import format_request_error
 
 
@@ -16,6 +16,7 @@ class ElectricityCommand(BaseCommand):
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
 
     def __init__(self):
+        self.session = make_session("KukistiBot-Electricity/1.0")
         # Only one ElectricityCommand instance ever exists (command_handler.py
         # creates it once), so an instance-level cache behaves identically
         # to the class-level one this used to be - just without the
@@ -42,7 +43,7 @@ class ElectricityCommand(BaseCommand):
             url = f"https://api.porssisahko.net/v2/price.json?date={iso_timestamp}"
 
             # Fetch data from API with a timeout
-            response = requests.get(url, timeout=5)
+            response = self.session.get(url, timeout=5)
             response.raise_for_status()  # Raise exception for HTTP errors
             
             # Parse JSON response safely

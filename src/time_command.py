@@ -2,10 +2,10 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests
 from dotenv import load_dotenv
 
 from base_command import BaseCommand
+from http_session import make_session
 from request_errors import format_request_error
 
 class TimeCommand(BaseCommand):
@@ -80,10 +80,10 @@ class TimeCommand(BaseCommand):
     def __init__(self):
         load_dotenv()  # Load environment variables from .env
         self.api_key = os.getenv("TIME_API_KEY")
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "KukistiBot-Time/1.0"
-        })
+        # No explicit Accept header (unlike most other commands' sessions)
+        # - matches this command's pre-existing behavior, never verified
+        # as necessary either way against the real API.
+        self.session = make_session("KukistiBot-Time/1.0", accept_json=False)
 
     def execute(self, city_name: str) -> str:
         city_name = city_name.strip()

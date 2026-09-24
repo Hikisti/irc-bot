@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 from base_command import BaseCommand
+from http_session import make_session
 from request_errors import format_request_error
 
 
@@ -39,14 +40,11 @@ class DistanceCommand(BaseCommand):
     def __init__(self):
         load_dotenv()
         self.api_key = os.getenv("ORS_API_KEY")
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "KukistiBot-Distance/1.0",
-        })
         # Deliberately no explicit Accept header: ORS's directions endpoint
         # currently only serves GeoJSON for driving-car and returns 406 for
         # a bare "application/json" Accept, so we let requests' default
         # (Accept: */*) through and just parse whatever comes back.
+        self.session = make_session("KukistiBot-Distance/1.0", accept_json=False)
         if self.api_key:
             self.session.headers["Authorization"] = self.api_key
 
