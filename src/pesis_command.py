@@ -1,4 +1,3 @@
-import datetime
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -260,11 +259,8 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         state = {mid: self._seed_snapshot(m) for mid, m in matches.items()}
         self._seed_match_extras(state)
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is None or entry["stop_event"] is not stop_event:
-                return  # stopped (or superseded) before the lookup finished
-            entry["matches"] = state
+        if not self._commit_initial_state(channel, stop_event, state):
+            return  # stopped (or superseded) before the lookup finished
 
         summary = self._format_matches_summary(matches.values())
         self._safe_send(
@@ -309,11 +305,9 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         if matches is None:
             return False
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is None:
-                return True
-            prev_state = entry["matches"]
+        prev_state = self._get_state(channel)
+        if prev_state is None:
+            return True
 
         all_ended = bool(prev_state)
         new_state = {}
@@ -343,11 +337,7 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
             if not new_state[mid].get("finished"):
                 all_ended = False
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None:
-                entry["matches"] = new_state
-
+        self._set_state(channel, new_state)
         return all_ended
 
     def _process_match(self, irc_bot, channel, match, prev):
@@ -487,31 +477,13 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
 
     # ---- match summary (start message) ---------------------------------
 
-    def _match_start_label(self, match):
-        date_str = match.get("date")
-        if not date_str:
-            return None
-        try:
-            dt = datetime.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            return None
-        return dt.astimezone(self.HELSINKI_TZ).strftime("%H:%M")
-
     def _format_matches_summary(self, matches) -> str:
-        groups = {}
-        order = []
-        for match in matches:
-            label = self._match_start_label(match) or "??:??"
+        def name(match):
             home = (match.get("home") or {}).get("name") or "?"
             away = (match.get("away") or {}).get("name") or "?"
-            name = f"{home}-{away}"
-            if label not in groups:
-                groups[label] = []
-                order.append(label)
-            groups[label].append(name)
+            return f"{home}-{away}"
 
-        order.sort(key=lambda label: (label == "??:??", label))
-        return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
+        return self._format_start_time_summary(matches, "date", name)
 
     def _seed_snapshot(self, match):
         live = match.get("liveResult") or {}

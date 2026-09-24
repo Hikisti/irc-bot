@@ -72,11 +72,9 @@ class LiigaCommand(LiveTrackerCommand):
             self._safe_send(irc_bot, channel, "No Liiga games scheduled today.")
             return
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is None or entry["stop_event"] is not stop_event:
-                return  # stopped (or superseded) before the lookup finished
-            entry["games"] = {gid: self._snapshot(g) for gid, g in games.items()}
+        state = {gid: self._snapshot(g) for gid, g in games.items()}
+        if not self._commit_initial_state(channel, stop_event, state):
+            return  # stopped (or superseded) before the lookup finished
 
         summary = self._format_games_summary(games.values())
         self._safe_send(irc_bot, channel, f"Tracking {len(games)} Liiga game(s) today: {summary}")
@@ -92,11 +90,9 @@ class LiigaCommand(LiveTrackerCommand):
         if games is None:
             return False
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is None:
-                return True
-            prev_state = entry["games"]
+        prev_state = self._get_state(channel)
+        if prev_state is None:
+            return True
 
         all_ended = bool(games)
         new_state = {}
@@ -132,42 +128,18 @@ class LiigaCommand(LiveTrackerCommand):
                 new_state[gid] = prev_state.get(gid) or self._snapshot(game)
                 all_ended = False
 
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None:
-                entry["games"] = new_state
-
+        self._set_state(channel, new_state)
         return all_ended
 
     # ---- start-time summary -------------------------------------------
 
-    def _game_start_label(self, game):
-        """Scheduled start time in Helsinki local time as 'HH:MM', or None
-        if the game has no usable start timestamp."""
-        start = game.get("start")
-        if not start:
-            return None
-        try:
-            dt = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            return None
-        return dt.astimezone(self.HELSINKI_TZ).strftime("%H:%M")
-
     def _format_games_summary(self, games) -> str:
         """Groups games by scheduled start time, e.g.
         '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30 JYP-Lukko'."""
-        groups = {}
-        order = []
-        for game in games:
-            label = self._game_start_label(game) or "??:??"
-            name = f"{self._team_name(game, 'homeTeam')}-{self._team_name(game, 'awayTeam')}"
-            if label not in groups:
-                groups[label] = []
-                order.append(label)
-            groups[label].append(name)
-
-        order.sort(key=lambda label: (label == "??:??", label))
-        return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
+        return self._format_start_time_summary(
+            games, "start",
+            lambda g: f"{self._team_name(g, 'homeTeam')}-{self._team_name(g, 'awayTeam')}",
+        )
 
     # ---- announcements --------------------------------------------------
 

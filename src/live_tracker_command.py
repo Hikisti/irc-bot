@@ -166,6 +166,38 @@ class LiveTrackerCommand:
             if entry is not None and entry["stop_event"] is stop_event:
                 del self._channels[channel]
 
+    # ---- per-channel tracked-item state (STATE_KEY), lock-guarded ------
+
+    def _commit_initial_state(self, channel, stop_event, state) -> bool:
+        """Stores `state` (the just-seeded initial snapshot) as the
+        channel's tracked state - but only if this _run() is still the
+        current one for it (a stop, or a second start superseding it, can
+        already have happened while the initial fetch was in flight).
+        Returns False if the caller should bail out without announcing or
+        polling; True if it's safe to continue."""
+        with self._lock:
+            entry = self._channels.get(channel)
+            if entry is None or entry["stop_event"] is not stop_event:
+                return False
+            entry[self.STATE_KEY] = state
+            return True
+
+    def _get_state(self, channel):
+        """Returns the channel's current tracked state, or None if it's no
+        longer being tracked (stopped, or superseded, since the last
+        poll) - distinct from an empty-but-still-tracked state ({})."""
+        with self._lock:
+            entry = self._channels.get(channel)
+            return entry[self.STATE_KEY] if entry is not None else None
+
+    def _set_state(self, channel, state):
+        """Stores `state` as the channel's new tracked state, if it's
+        still being tracked (a no-op otherwise, e.g. stopped mid-poll)."""
+        with self._lock:
+            entry = self._channels.get(channel)
+            if entry is not None:
+                entry[self.STATE_KEY] = state
+
     def _safe_send(self, irc_bot, channel, message):
         """Never let a broken connection/socket take the polling thread down."""
         try:
@@ -199,6 +231,36 @@ class LiveTrackerCommand:
 
     def _poll_once(self, irc_bot, channel, *context_args) -> bool:
         raise NotImplementedError
+
+    # ---- start-time summary (e.g. "17:00 A-B, C-D | 18:30 E-F") --------
+
+    def _start_time_label(self, iso_str):
+        """Scheduled start time in Helsinki local time as 'HH:MM', or None
+        if there's no usable ISO-8601 timestamp."""
+        if not iso_str:
+            return None
+        try:
+            dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+        return dt.astimezone(self.HELSINKI_TZ).strftime("%H:%M")
+
+    def _format_start_time_summary(self, items, start_key, name_fn) -> str:
+        """Groups items by scheduled start time (items[start_key], an
+        ISO-8601 string), e.g. '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30
+        JYP-Lukko'. name_fn(item) builds each item's own display name."""
+        groups = {}
+        order = []
+        for item in items:
+            label = self._start_time_label(item.get(start_key)) or "??:??"
+            name = name_fn(item)
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append(name)
+
+        order.sort(key=lambda label: (label == "??:??", label))
+        return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
 
     # ---- date label (byte-identical between subclasses) ----------------
 
