@@ -207,6 +207,15 @@ class TestSeriesResolution:
             sc._resolve_series_id()
         assert mock_get.call_count == 2  # no successful id to cache, so it keeps retrying
 
+    def test_cache_write_failure_does_not_break_the_lookup(self, sc):
+        # A disk write failure (e.g. read-only filesystem) shouldn't stop
+        # the resolved id from being returned - it just means this run's
+        # cache stays in-memory-only instead of also surviving a restart.
+        sc.SERIES_CACHE_FILE = "/nonexistent-dir/cache.json"
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
+            series_id = sc._resolve_series_id()
+        assert series_id == 2945
+
 
 class TestFetchMatches:
     def test_flattens_nested_groups(self, sc):
@@ -272,5 +281,22 @@ class TestFetchMatchRoster:
         with patch.object(sc.session, "get", return_value=make_response(payload)):
             roster = sc._fetch_match_roster(146949)
         assert roster == {16798: {}, 16804: {}}
+
+    def test_team_missing_id_is_skipped_entirely(self, sc):
+        payload = {
+            "home": {"players": [{"number": 1, "name": "No Team Id"}]},  # no "id" key
+            "away": {"id": 16804, "players": [{"number": 1, "name": "Elmeri Purmonen"}]},
+        }
+        with patch.object(sc.session, "get", return_value=make_response(payload)):
+            roster = sc._fetch_match_roster(146949)
+        assert roster == {16804: {1: "Elmeri Purmonen"}}
+
+    def test_non_dict_player_entry_is_skipped_not_fatal(self, sc):
+        payload = {
+            "home": {"id": 16798, "players": ["not-a-dict", {"number": 1, "name": "Real Player"}]},
+        }
+        with patch.object(sc.session, "get", return_value=make_response(payload)):
+            roster = sc._fetch_match_roster(146949)
+        assert roster == {16798: {1: "Real Player"}}
 
 

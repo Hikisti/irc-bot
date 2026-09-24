@@ -27,6 +27,23 @@ def frozen_now(monkeypatch):
     monkeypatch.setattr("f1_command.datetime.datetime", FrozenDateTime)
 
 
+# Far past every session in RACE_JSON, so nothing resolves as ongoing or next.
+FAR_FUTURE_UTC_NOW = datetime.datetime(2099, 1, 1, tzinfo=pytz.UTC)
+
+
+class FarFutureDateTime(datetime.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        if tz is None:
+            return FAR_FUTURE_UTC_NOW.replace(tzinfo=None)
+        return FAR_FUTURE_UTC_NOW.astimezone(tz)
+
+
+@pytest.fixture
+def far_future_now(monkeypatch):
+    monkeypatch.setattr("f1_command.datetime.datetime", FarFutureDateTime)
+
+
 @pytest.fixture
 def f1_command():
     return F1Command()
@@ -98,6 +115,42 @@ class TestExecute:
         with patch.object(f1_command.session, "get", return_value=make_response(bad)):
             result = f1_command.execute()
         assert "Invalid race data received" in result
+
+    def test_invalid_json_returns_friendly_error(self, f1_command):
+        resp = make_response({})
+        resp.json.side_effect = ValueError("bad json")
+        with patch.object(f1_command.session, "get", return_value=resp):
+            result = f1_command.execute()
+        assert "Could not parse F1 API response" in result
+
+    def test_races_with_no_parseable_dates_returns_no_sessions_message(self, f1_command):
+        no_dates = {"MRData": {"RaceTable": {"Races": [{"raceName": "Mystery GP"}]}}}
+        with patch.object(f1_command.session, "get", return_value=make_response(no_dates)):
+            result = f1_command.execute()
+        assert result == "No F1 sessions found for current season."
+
+    def test_all_events_in_the_past_returns_no_upcoming_events_message(self, f1_command, far_future_now):
+        with patch.object(f1_command.session, "get", return_value=make_response(RACE_JSON)):
+            result = f1_command.execute()
+        assert result == "No upcoming F1 events found."
+
+    def test_schedule_processing_exception_returns_friendly_error(self, f1_command, frozen_now):
+        with patch.object(f1_command, "_collect_events", side_effect=RuntimeError("boom")), \
+             patch.object(f1_command.session, "get", return_value=make_response(RACE_JSON)):
+            result = f1_command.execute()
+        assert "Failed to process F1 schedule" in result
+
+    def test_find_ongoing_exception_returns_friendly_error(self, f1_command, frozen_now):
+        with patch.object(f1_command, "_find_ongoing_and_next", side_effect=RuntimeError("boom")), \
+             patch.object(f1_command.session, "get", return_value=make_response(RACE_JSON)):
+            result = f1_command.execute()
+        assert "Failed to determine next F1 event" in result
+
+    def test_format_event_exception_returns_friendly_error(self, f1_command, frozen_now):
+        with patch.object(f1_command, "_format_event", side_effect=RuntimeError("boom")), \
+             patch.object(f1_command.session, "get", return_value=make_response(RACE_JSON)):
+            result = f1_command.execute()
+        assert "Failed to format F1 event" in result
 
 
 class TestCollectEvents:

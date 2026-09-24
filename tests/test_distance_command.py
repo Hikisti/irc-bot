@@ -124,6 +124,37 @@ class TestGeocoding:
             result = distance_command.execute("Kokkola,Vimpeli")
         assert "rate limit" in result.lower()
 
+    def test_destination_geocode_failure_is_reported(self, distance_command):
+        # Regression coverage: every other geocoding test's mock fails on
+        # the very first call (the origin), so the destination's own
+        # error-return branch was never actually reached.
+        responses = [
+            make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
+            make_response({"features": []}),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("Kokkola,Nonexistentville")
+        assert "Could not find a location" in result
+        assert "Nonexistentville" in result
+
+    def test_geocode_invalid_json_returns_friendly_error(self, distance_command):
+        resp = make_response({})
+        resp.json.side_effect = ValueError("bad json")
+        with patch.object(distance_command.session, "get", return_value=resp):
+            result = distance_command.execute("Kokkola,Vimpeli")
+        assert "Invalid response from distance service" in result
+
+    def test_geocode_unresolvable_coordinates_returns_error(self, distance_command):
+        payload = {"features": [{"geometry": {"coordinates": [23.13]}, "properties": {}}]}  # only 1 of 2
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result = distance_command.execute("Kokkola,Vimpeli")
+        assert "Could not resolve coordinates" in result
+
+    def test_geocode_generic_http_error_falls_through_to_shared_formatter(self, distance_command):
+        with patch.object(distance_command.session, "get", return_value=make_response({}, status_code=500)):
+            result = distance_command.execute("Kokkola,Vimpeli")
+        assert "500" in result
+
 
 class TestAmbiguousCityDisambiguation:
     """Regression coverage for a real incident, captured directly from
@@ -330,3 +361,52 @@ class TestDrivingDistance:
         with patch.object(distance_command.session, "get", side_effect=responses):
             result = distance_command.execute("A,B")
         assert "rate limit" in result.lower()
+
+    def test_directions_invalid_json_returns_friendly_error(self, distance_command):
+        bad_json_resp = make_response({})
+        bad_json_resp.json.side_effect = ValueError("bad json")
+        responses = [
+            make_response(geocode_payload("A", 1, 2)),
+            make_response(geocode_payload("B", 3, 4)),
+            bad_json_resp,
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("A,B")
+        assert "Invalid response from distance service" in result
+
+    def test_non_dict_route_data_treated_as_no_route(self, distance_command):
+        responses = [
+            make_response(geocode_payload("A", 1, 2)),
+            make_response(geocode_payload("B", 3, 4)),
+            make_response(["not", "a", "dict"]),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("A,B")
+        assert "No driving route found" in result
+
+    def test_summary_missing_distance_returns_unexpected_data_error(self, distance_command):
+        payload = {
+            "features": [{"properties": {"summary": {"duration": 100}}, "geometry": {}}],  # no "distance"
+        }
+        responses = [
+            make_response(geocode_payload("A", 1, 2)),
+            make_response(geocode_payload("B", 3, 4)),
+            make_response(payload),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses):
+            result = distance_command.execute("A,B")
+        assert "unexpected data" in result.lower()
+
+
+class TestFormatDuration:
+    def test_none_duration_returns_none(self, distance_command):
+        assert distance_command._format_duration(None) is None
+
+    def test_hours_and_minutes(self, distance_command):
+        assert distance_command._format_duration(4320) == "1h 12min"
+
+    def test_whole_hours_only(self, distance_command):
+        assert distance_command._format_duration(7200) == "2h"
+
+    def test_minutes_only(self, distance_command):
+        assert distance_command._format_duration(300) == "5min"

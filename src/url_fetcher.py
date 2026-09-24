@@ -53,16 +53,19 @@ class URLFetcher:
         """
         return self.URL_PATTERN.findall(text)
 
+    def _matches_domain(self, domain: str, candidate: str) -> bool:
+        """True if `domain` is exactly `candidate` or one of its
+        subdomains - not just a substring match, which would also treat
+        e.g. "notyoutube.com" as youtube.com."""
+        return domain == candidate or domain.endswith("." + candidate)
+
     def is_blacklisted(self, domain: str) -> bool:
         """
         Returns True if the domain is blacklisted.
         Matches both exact domains and their subdomains.
         """
         domain = domain.lower()
-        for blocked in self.BLACKLISTED_DOMAINS:
-            if domain == blocked or domain.endswith("." + blocked):
-                return True
-        return False
+        return any(self._matches_domain(domain, blocked) for blocked in self.BLACKLISTED_DOMAINS)
 
     def get_title(self, url):
         """
@@ -77,7 +80,7 @@ class URLFetcher:
             return None  # Silently skip blacklisted domains
 
         try:
-            if "youtube.com" in domain or "youtu.be" in domain:
+            if self._matches_domain(domain, "youtube.com") or self._matches_domain(domain, "youtu.be"):
                 return self.get_youtube_info(url)
             # Instagram often blocks scraping - falling through to the
             # generic handler (which may return a basic page title) is

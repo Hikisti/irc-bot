@@ -163,3 +163,31 @@ class TestSafeSendAndDateLabel:
     def test_format_date_label_handles_bad_input(self, tracker):
         assert tracker._format_date_label(None) == "unknown date"
         assert tracker._format_date_label("not-a-date") == "not-a-date"
+
+
+class TestStartTimeLabel:
+    def test_missing_timestamp_returns_none(self, tracker):
+        assert tracker._start_time_label(None) is None
+        assert tracker._start_time_label("") is None
+
+    def test_malformed_timestamp_returns_none(self, tracker):
+        assert tracker._start_time_label("not-a-timestamp") is None
+
+
+class TestAbstractHooks:
+    """Every subclass must override these - a base-class instance raising
+    NotImplementedError (rather than silently doing nothing wrong) is the
+    contract itself, same reasoning as BaseCommand.execute()'s own
+    default."""
+
+    def test_fetch_today_items_is_not_implemented(self, tracker):
+        with pytest.raises(NotImplementedError):
+            tracker._fetch_today_items(None)
+
+    def test_build_initial_state_is_not_implemented(self, tracker):
+        with pytest.raises(NotImplementedError):
+            tracker._build_initial_state({})
+
+    def test_poll_once_is_not_implemented(self, tracker):
+        with pytest.raises(NotImplementedError):
+            tracker._poll_once(MagicMock(), "#chan")

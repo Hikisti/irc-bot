@@ -240,6 +240,32 @@ class TestPollOnce:
         assert "HIFK" in message and "1-0" in message and "Ilves" in message
         assert "02:05" in message  # 125s -> 2:05 into period 1
 
+    def test_new_game_appearing_mid_tracking_is_seeded_silently(self, liiga_command):
+        # A game not in the previously-tracked set (e.g. added to the
+        # schedule after !liiga start already ran) must be seeded as a
+        # fresh baseline, not have its already-existing goals replayed as
+        # new GOAL: announcements.
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {})  # nothing tracked yet
+
+        new_game = make_game(gid=2, home_goals=[goal_event(home_score=1, away_score=0)], ended=False)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={2: new_game}):
+            all_ended = liiga_command._poll_once(bot, "#chan")
+
+        bot.send_message.assert_not_called()
+        assert all_ended is False
+        assert liiga_command._channels["#chan"]["games"][2]["home_goals"] == 1
+
+    def test_new_game_that_already_ended_counts_toward_all_ended(self, liiga_command):
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {})
+
+        finished_game = make_game(gid=3, ended=True)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={3: finished_game}):
+            all_ended = liiga_command._poll_once(bot, "#chan")
+
+        assert all_ended is True
+
     def test_goal_and_final_use_mirc_colors(self, liiga_command):
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
@@ -801,6 +827,28 @@ class TestFetchNextGameday:
 
         assert games == {1: finished, 2: still_live}
 
+    def test_malformed_next_game_date_hint_falls_back_to_day_by_day_search(self, liiga_command):
+        # Regression coverage: an unparseable nextGameDate hint must not
+        # crash the lookup - it should just be discarded in favor of the
+        # bounded day-by-day fallback search.
+        tomorrow_game = make_game(gid=5)
+        tomorrow_str = (
+            datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
+        def fake_get(url, params=None, timeout=None):
+            if params["tournament"] == "runkosarja" and params["date"] != tomorrow_str:
+                return self._make_response(next_game_date="not-a-real-date")
+            if params["date"] == tomorrow_str and params["tournament"] == "runkosarja":
+                return self._make_response(games=[tomorrow_game])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert date_str == tomorrow_str
+        assert games == {5: tomorrow_game}
+
 
 class TestAllGamesEnded:
     def test_true_when_every_game_ended(self, liiga_command):
@@ -830,6 +878,30 @@ class TestDateLabel:
 
     def test_malformed_date_falls_back_to_raw_string(self, liiga_command):
         assert liiga_command._format_date_label("not-a-date") == "not-a-date"
+
+
+class TestFormatClock:
+    def test_computes_elapsed_time_into_the_period(self, liiga_command):
+        game = make_game()  # periods: index 1 starts at 0, index 2 at 1200, index 3 at 2400
+        event = goal_event(period=2, game_time=1325)  # 125s into period 2
+        assert liiga_command._format_clock(game, event) == "02:05"
+
+    def test_missing_game_time_returns_empty_string(self, liiga_command):
+        game = make_game()
+        event = goal_event(period=1)
+        del event["gameTime"]
+        assert liiga_command._format_clock(game, event) == ""
+
+    def test_missing_period_returns_empty_string(self, liiga_command):
+        game = make_game()
+        event = goal_event(game_time=125)
+        del event["period"]
+        assert liiga_command._format_clock(game, event) == ""
+
+    def test_unmatched_period_defaults_start_to_zero(self, liiga_command):
+        game = make_game()
+        event = goal_event(period=99, game_time=45)  # no periods entry has index 99
+        assert liiga_command._format_clock(game, event) == "00:45"
 
 
 class TestGamesSummary:

@@ -353,6 +353,12 @@ class TestNext:
             sc._run_next(bot, "#pesis.fi")
         bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
 
+    def test_run_next_series_lookup_raises_does_not_propagate(self, sc):
+        bot = MagicMock()
+        with patch.object(sc, "_resolve_series_id", side_effect=RuntimeError("boom")):
+            sc._run_next(bot, "#pesis.fi")  # must not raise
+        bot.send_message.assert_called_once_with("#pesis.fi", "Error: could not reach the Superpesis API.")
+
     def test_run_next_api_error(self, sc):
         bot = MagicMock()
         with patch.object(sc, "_resolve_series_id", return_value=2945), \
@@ -415,6 +421,35 @@ class TestMatchesSummary:
         ]
         summary = sc._format_matches_summary(matches)
         assert summary == "17:00 C-D | ??:?? A-B"
+
+
+class TestAnnouncePeriodEnds:
+    def test_already_ended_period_is_not_reannounced(self, sc):
+        bot = MagicMock()
+        ended_periods = {0}
+        sc._announce_period_ends(
+            bot, "#pesis.fi", "A", "B",
+            period_end_by_period={0: "Ensimmäinen jakso päättyi"},
+            ended_periods=ended_periods,
+            announced={},
+        )
+        bot.send_message.assert_not_called()
+        assert ended_periods == {0}  # unchanged, not re-added
+
+    def test_new_period_end_is_announced_and_recorded(self, sc):
+        bot = MagicMock()
+        ended_periods = set()
+        sc._announce_period_ends(
+            bot, "#pesis.fi", "A", "B",
+            period_end_by_period={0: "Ensimmäinen jakso päättyi"},
+            ended_periods=ended_periods,
+            announced={(0, "home"): 2, (0, "away"): 1},
+        )
+        bot.send_message.assert_called_once()
+        message = bot.send_message.call_args[0][1]
+        assert "Ensimmäinen jakso päättyi" in message
+        assert "A 2-1 B" in message
+        assert ended_periods == {0}
 
 
 class TestProcessMatch:

@@ -260,6 +260,13 @@ class TestPeriodEndDetection:
         event = match_event(1, team_id=16798, sub_events=[])
         assert sc._extract_period_end_text(event) is None
 
+    def test_periodend_marker_with_no_text_falls_back(self, sc):
+        # The "periodend" stat marker present but no accompanying "event"
+        # text of its own - confirmed live this combination exists.
+        sub_event = {"texts": [{"type": "stat", "periodend": 1}], "runnersAtBases": [None] * 5}
+        event = match_event(1, team_id=16798, sub_events=[sub_event])
+        assert sc._extract_period_end_text(event) == sc.PERIOD_END_FALLBACK_TEXT
+
 
 class TestFormatPeriodEnd:
     def test_format(self, sc):
@@ -330,6 +337,12 @@ class TestSumRuns:
 
     def test_malformed_runs_returns_none(self, sc):
         assert sc._sum_runs({"runs": "not a list"}, "home") is None
+
+    def test_malformed_per_period_values_are_skipped_not_fatal(self, sc):
+        # "runs" itself is a real list, but one period's own side value
+        # isn't - shouldn't crash or block the other (valid) period.
+        live = {"runs": [{"home": "not-a-list"}, {"home": [3]}]}
+        assert sc._sum_runs(live, "home") == 3
 
 
 class TestPeriodRuns:

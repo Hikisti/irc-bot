@@ -15,6 +15,76 @@ def bot():
     return b
 
 
+class TestPong:
+    def test_responds_with_pong_to_the_same_server(self, bot):
+        # Note: the server token is echoed back exactly as split() gives
+        # it, leading ":" included (real PING lines are "PING
+        # :servername") - this is the bot's existing, working-in-
+        # production behavior, not a new design choice.
+        bot.pong("PING :irc.example.net")
+        bot.sock.sendall.assert_called_once_with(b"PONG :irc.example.net\r\n")
+
+    def test_prints_which_server_it_responded_to(self, bot, capsys):
+        bot.pong("PING :irc.example.net")
+        captured = capsys.readouterr()
+        assert "Responding to PING from :irc.example.net" in captured.out
+
+
+class TestProcessMessage:
+    """process_message() has no direct tests until now - only exercised
+    indirectly through listen()'s dispatch tests, which don't cover its
+    own parsing/routing (channel membership, command vs URL, malformed
+    lines)."""
+
+    def test_command_message_dispatches_to_command_handler(self, bot):
+        bot.command_handler = MagicMock()
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #bottest123 :!weather austin")
+
+        bot.command_handler.handle_command.assert_called_once_with(
+            bot, "alice", "#bottest123", "!weather austin"
+        )
+        bot.url_fetcher.detect_and_fetch.assert_not_called()
+
+    def test_non_command_message_dispatches_to_url_fetcher(self, bot):
+        bot.command_handler = MagicMock()
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #bottest123 :check this out")
+
+        bot.url_fetcher.detect_and_fetch.assert_called_once_with(
+            "alice", "#bottest123", "check this out"
+        )
+        bot.command_handler.handle_command.assert_not_called()
+
+    def test_message_in_an_unjoined_channel_is_ignored(self, bot):
+        bot.command_handler = MagicMock()
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #some-other-channel :!weather austin")
+
+        bot.command_handler.handle_command.assert_not_called()
+        bot.url_fetcher.detect_and_fetch.assert_not_called()
+
+    def test_malformed_line_is_silently_ignored(self, bot):
+        bot.command_handler = MagicMock()
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG")  # missing the trailing message part
+
+        bot.command_handler.handle_command.assert_not_called()
+        bot.url_fetcher.detect_and_fetch.assert_not_called()
+
+    def test_nick_is_extracted_from_the_prefix(self, bot):
+        bot.command_handler = MagicMock()
+
+        bot.process_message(":bob!bob@some.host PRIVMSG #bottest123 :!time cdt")
+
+        nick = bot.command_handler.handle_command.call_args[0][1]
+        assert nick == "bob"
+
+
 class TestSendRaw:
     def test_sends_the_message_with_crlf(self, bot):
         bot.send_raw("PRIVMSG #chan :hello")
@@ -164,6 +234,13 @@ class TestListenDispatch:
             bot.listen()
         mock_join.assert_not_called()
         mock_process.assert_called_once()
+
+    def test_ping_dispatches_to_pong(self, bot):
+        line = b"PING :irc.example.net\r\n"
+        self._stop_after_one_line(bot, line)
+        with patch.object(bot, "pong") as mock_pong:
+            bot.listen()
+        mock_pong.assert_called_once_with("PING :irc.example.net")
 
     def test_privmsg_dispatches_to_process_message(self, bot):
         line = b":alice!a@host PRIVMSG #chan :hello\r\n"

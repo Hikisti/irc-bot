@@ -1,4 +1,6 @@
+import datetime
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 import requests
@@ -11,6 +13,24 @@ from tests.conftest import make_json_response as make_response
 def time_command(monkeypatch):
     monkeypatch.setenv("TIME_API_KEY", "test-key")
     return TimeCommand()
+
+
+class FrozenDateTime(datetime.datetime):
+    """Freezes _time_for_abbreviation()'s "now" to a specific instant -
+    without this, whether a requested abbreviation (e.g. "CST") matches
+    what's actually currently observed depends on the real calendar date
+    the suite happens to run on (DST makes America/Chicago's real
+    abbreviation flip between CST and CDT across the year)."""
+    _frozen_utc = None
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._frozen_utc.astimezone(tz) if tz else cls._frozen_utc.replace(tzinfo=None)
+
+
+def freeze_at(monkeypatch, year, month, day):
+    FrozenDateTime._frozen_utc = datetime.datetime(year, month, day, 12, 0, tzinfo=ZoneInfo("UTC"))
+    monkeypatch.setattr("time_command.datetime", FrozenDateTime)
 
 
 class TestCityLookup:
@@ -132,6 +152,27 @@ class TestCityLookup:
             result = time_command.execute("austin")
         assert result.startswith("Error:")
 
+    def test_invalid_json_returns_friendly_error(self, time_command):
+        resp = make_response({})
+        resp.json.side_effect = ValueError("bad json")
+        with patch.object(time_command.session, "get", return_value=resp):
+            result = time_command.execute("austin")
+        assert "Invalid response from time service" in result
+
+    def test_api_error_message_is_surfaced(self, time_command):
+        with patch.object(
+            time_command.session, "get", return_value=make_response({"error": "location not found"})
+        ):
+            result = time_command.execute("nowhereville")
+        assert result == "Error: location not found"
+
+    def test_api_message_field_is_surfaced(self, time_command):
+        with patch.object(
+            time_command.session, "get", return_value=make_response({"message": "quota exceeded"})
+        ):
+            result = time_command.execute("austin")
+        assert result == "Error: quota exceeded"
+
 
 class TestTimezoneAbbreviation:
     def test_known_abbreviation_skips_api_call(self, time_command):
@@ -143,6 +184,33 @@ class TestTimezoneAbbreviation:
     def test_abbreviation_lookup_is_case_insensitive(self, time_command):
         result = time_command.execute("eest")
         assert result.startswith("Local time in EEST (Europe/Helsinki):")
+
+    def test_zoneinfo_construction_failure_returns_friendly_error(self, time_command, monkeypatch):
+        # Every mapped IANA name is a real zone in practice, so this
+        # guards a failure mode that's never actually been observed live
+        # - still worth a direct test since _time_for_abbreviation()
+        # can't otherwise fail this way.
+        def boom(name):
+            raise KeyError(name)
+
+        monkeypatch.setattr("time_command.ZoneInfo", boom)
+        result = time_command.execute("cdt")
+        assert result == "Error: Could not resolve timezone for CDT."
+
+    def test_no_mismatch_note_when_actually_observing_the_requested_abbreviation(
+        self, time_command, monkeypatch
+    ):
+        freeze_at(monkeypatch, 2026, 1, 15)  # winter -> Chicago really is on CST
+        result = time_command.execute("cst")
+        assert result.startswith("Local time in CST (America/Chicago):")
+        assert "currently observing" not in result
+
+    def test_mismatch_note_when_dst_means_a_different_abbreviation_is_active(
+        self, time_command, monkeypatch
+    ):
+        freeze_at(monkeypatch, 2026, 7, 15)  # summer -> Chicago is on CDT, not CST
+        result = time_command.execute("cst")
+        assert "(currently observing CDT, not CST)" in result
 
     def test_unknown_abbreviation_falls_back_to_city_lookup(self, time_command):
         # A 3-letter string that isn't a known abbreviation should still be

@@ -85,6 +85,11 @@ class TestStockCommand:
             result = stock_command.execute("tsla")
         assert "Could not retrieve stock data" in result
 
+    def test_invalid_symbol_value_error_returns_friendly_message(self, stock_command):
+        with patch("stock.yf.Ticker", side_effect=ValueError("bad symbol")):
+            result = stock_command.execute("!!!")
+        assert "Invalid stock symbol" in result
+
     def test_connection_error_returns_friendly_error(self, stock_command):
         # Regression test: yfinance's real network errors are
         # requests.exceptions.* (it uses requests internally), not the

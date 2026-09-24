@@ -120,6 +120,39 @@ class TestGetTitle:
         result = fetcher.get_title("https://www.youtube.com/watch")
         assert "Invalid YouTube URL" in result
 
+    def test_youtu_be_short_link_uses_oembed(self, fetcher):
+        with patch.object(fetcher.session, "get") as mock_get:
+            mock_get.return_value = make_response()
+            mock_get.return_value.json.return_value = {"title": "T", "author_name": "A"}
+            result = fetcher.get_title("https://youtu.be/xyz789")
+        called_url = mock_get.call_args[0][0]
+        assert "v=xyz789" in called_url
+        assert result == "YouTube: T (by A)"
+
+    def test_domain_containing_youtube_as_a_substring_is_not_treated_as_youtube(self, fetcher):
+        # Regression test: "youtube.com" in domain (a plain substring
+        # check) would also match "notyoutube.com" - must require an
+        # exact match or a real subdomain, like is_blacklisted() already
+        # does for its own domain list.
+        html = "<html><head><title>Not YouTube At All</title></head></html>"
+        with patch.object(fetcher.session, "get", return_value=make_response(html)) as mock_get:
+            result = fetcher.get_title("https://notyoutube.com/watch?v=abc123")
+        assert result == "Not YouTube At All"
+        assert "oembed" not in mock_get.call_args[0][0]
+
+    def test_youtube_oembed_request_failure_returns_friendly_error(self, fetcher):
+        with patch.object(fetcher.session, "get", side_effect=requests.exceptions.Timeout):
+            result = fetcher.get_title("https://www.youtube.com/watch?v=abc123")
+        assert "timed out" in result
+
+    def test_unexpected_exception_in_dispatch_returns_error_message(self, fetcher):
+        # get_title()'s own catch-all, distinct from get_generic_title's/
+        # get_youtube_info's own (format_request_error-based) handling -
+        # this one guards the dispatch/blacklist logic itself.
+        with patch.object(fetcher, "get_generic_title", side_effect=RuntimeError("boom")):
+            result = fetcher.get_title("https://example.com/page")
+        assert "Error fetching title: boom" in result
+
 
 class TestDetectAndFetch:
     def test_sends_title_for_each_url(self, fetcher, bot):

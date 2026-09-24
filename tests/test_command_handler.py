@@ -27,16 +27,18 @@ def handler(monkeypatch, tmp_path):
 
 def replace_command(handler, alias, mock_command):
     """Swap the real command object registered for `alias` with a mock,
-    carrying over its ALLOW_ARGS/CHANNELS so CommandHandler enforces the
-    same restrictions against the mock - and swap every OTHER alias
-    pointing at that same real instance too (e.g. !weather and !w both
-    need to route to the same mock)."""
+    carrying over its ALLOW_ARGS/CHANNELS/needs_irc_context so
+    CommandHandler enforces the same restrictions and dispatch shape
+    against the mock - and swap every OTHER alias pointing at that same
+    real instance too (e.g. !weather and !w both need to route to the
+    same mock)."""
     real_command = handler.commands_by_alias.get(alias)
     if real_command is None:
         raise AssertionError(f"No command registered for alias {alias}")
 
     mock_command.ALLOW_ARGS = real_command.ALLOW_ARGS
     mock_command.CHANNELS = real_command.CHANNELS
+    mock_command.needs_irc_context = real_command.needs_irc_context
     for other_alias, command in list(handler.commands_by_alias.items()):
         if command is real_command:
             handler.commands_by_alias[other_alias] = mock_command
@@ -119,6 +121,19 @@ class TestCommandHandler:
         handler.handle_command(bot, "nick", "#chan", "!weather austin")
 
         bot.send_message.assert_not_called()
+
+    def test_needs_irc_context_command_receives_bot_and_channel(self, handler):
+        # LiigaCommand/PesisCommand's own dispatch shape - the only
+        # branch in handle_command() that passes irc_bot/channel through
+        # to execute() at all.
+        bot = MagicMock()
+        mock_liiga = MagicMock()
+        mock_liiga.execute.return_value = "Checking today's Liiga games..."
+        replace_command(handler, "!liiga", mock_liiga)
+
+        handler.handle_command(bot, "nick", "#smliiga", "!liiga start")
+
+        mock_liiga.execute.assert_called_once_with("start", irc_bot=bot, channel="#smliiga")
 
 
 class TestChannelRestriction:
