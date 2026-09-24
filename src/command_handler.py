@@ -11,7 +11,14 @@ from distance_command import DistanceCommand
 from pesis_command import SuperpesisCommand, YkkospesisCommand
 
 class CommandHandler:
-    """Handles IRC bot commands and delegates them to specific classes."""
+    """Handles IRC bot commands and delegates them to specific classes.
+
+    See base_command.py for the interface every command class here is
+    expected to follow (execute()'s signature, the optional
+    needs_irc_context attribute) - dispatch below is still plain
+    duck-typing (getattr(), not isinstance()), so nothing here actually
+    requires a command to subclass it.
+    """
     
     def __init__(self):
         # Define aliases and argument restrictions

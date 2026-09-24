@@ -37,7 +37,7 @@ class TestWeatherCommand:
                 "humidity": 45,
             },
         }
-        with patch("src.weather.requests.get", return_value=make_response(data)):
+        with patch.object(weather_command.session, "get", return_value=make_response(data)):
             result = weather_command.execute("austin")
 
         assert result == (
@@ -59,7 +59,7 @@ class TestWeatherCommand:
                 "humidity": 60,
             },
         }
-        with patch("src.weather.requests.get", return_value=make_response(data)) as mock_get:
+        with patch.object(weather_command.session, "get", return_value=make_response(data)) as mock_get:
             weather_command.execute("paris, france")
 
         params = mock_get.call_args.kwargs["params"]
@@ -78,28 +78,28 @@ class TestWeatherCommand:
                 "wind_dir": "NE",
             },
         }
-        with patch("src.weather.requests.get", return_value=make_response(data)):
+        with patch.object(weather_command.session, "get", return_value=make_response(data)):
             result = weather_command.execute("austin")
 
         assert "Humidity: ?%." in result
 
     def test_unexpected_payload_returns_error(self, weather_command):
-        with patch("src.weather.requests.get", return_value=make_response({"foo": "bar"})):
+        with patch.object(weather_command.session, "get", return_value=make_response({"foo": "bar"})):
             result = weather_command.execute("austin")
         assert result.startswith("Error:")
 
     def test_timeout_returns_friendly_error(self, weather_command):
-        with patch("src.weather.requests.get", side_effect=requests.exceptions.Timeout):
+        with patch.object(weather_command.session, "get", side_effect=requests.exceptions.Timeout):
             result = weather_command.execute("austin")
         assert "timed out" in result
 
     def test_connection_error_returns_friendly_error(self, weather_command):
-        with patch("src.weather.requests.get", side_effect=requests.exceptions.ConnectionError):
+        with patch.object(weather_command.session, "get", side_effect=requests.exceptions.ConnectionError):
             result = weather_command.execute("austin")
         assert "Could not connect" in result
 
     def test_http_error_returns_status_in_message(self, weather_command):
         error_response = make_response({}, status_code=404)
-        with patch("src.weather.requests.get", return_value=error_response):
+        with patch.object(weather_command.session, "get", return_value=error_response):
             result = weather_command.execute("nonexistent-city")
         assert "404" in result

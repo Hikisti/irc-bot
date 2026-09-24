@@ -7,17 +7,6 @@ from src.electricity import ElectricityCommand
 from tests.conftest import make_json_response as make_response
 
 
-@pytest.fixture(autouse=True)
-def reset_cache():
-    # The command caches its result at class level until the next quarter
-    # hour, which would leak between tests - clear it before and after.
-    ElectricityCommand._cached_result = None
-    ElectricityCommand._cache_until_timestamp = 0
-    yield
-    ElectricityCommand._cached_result = None
-    ElectricityCommand._cache_until_timestamp = 0
-
-
 @pytest.fixture
 def electricity_command():
     return ElectricityCommand()

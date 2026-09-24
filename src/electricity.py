@@ -9,9 +9,14 @@ from request_errors import format_request_error
 class ElectricityCommand:
     """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
 
-    # Class-level cache
-    _cached_result = None
-    _cache_until_timestamp = 0  # Use timestamp for faster comparison
+    def __init__(self):
+        # Only one ElectricityCommand instance ever exists (command_handler.py
+        # creates it once), so an instance-level cache behaves identically
+        # to the class-level one this used to be - just without the
+        # self.__class__ indirection, which read as sharing across
+        # instances that was never actually relevant here.
+        self._cached_result = None
+        self._cache_until_timestamp = 0  # Use timestamp for faster comparison
 
     def execute(self, args=None):
         try:
@@ -66,8 +71,8 @@ class ElectricityCommand:
                 next_time = now.replace(minute=next_quarter, second=0, microsecond=0)
             
             # Store result and expiration as timestamp for faster comparison
-            self.__class__._cached_result = result
-            self.__class__._cache_until_timestamp = next_time.timestamp()
+            self._cached_result = result
+            self._cache_until_timestamp = next_time.timestamp()
             
             return result
 

@@ -11,6 +11,11 @@ class WeatherCommand:
         load_dotenv()  # Load environment variables from .env
         self.api_key = os.getenv("WEATHER_API_KEY")
         self.base_url = "http://api.weatherapi.com/v1/current.json"
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "KukistiBot-Weather/1.0",
+            "Accept": "application/json",
+        })
 
     def execute(self, args):
         if not args:
@@ -29,7 +34,7 @@ class WeatherCommand:
             query = f"{city},{country}" if country else city
             params = {"key": self.api_key, "q": query, "aqi": "no"}
 
-            response = requests.get(self.base_url, params=params, timeout=5)
+            response = self.session.get(self.base_url, params=params, timeout=5)
             response.raise_for_status()  # Raises error for HTTP 4xx and 5xx responses
             data = response.json()
 
