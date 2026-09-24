@@ -3,6 +3,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
+from irc_format import GREEN, ORANGE, PURPLE, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
 from pesis_event_parsing import PesisEventParsingMixin
 from pesis_player_names import PesisPlayerNamesMixin
@@ -169,11 +170,6 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
     STATE_KEY = "matches"
     REQUIRES_CONTEXT = True
 
-    # How far forward "<command> next" searches, day by day, for the next
-    # scheduled matchday - the API has no "next date with matches" hint
-    # like liiga.fi does, so this is a bounded linear search instead.
-    NEXT_SEARCH_MAX_DAYS = 21
-
     # /public/series-list is ~1MB even filtered to the current season alone
     # (5.6MB unfiltered, across 82+ historical seasons) - confirmed live
     # this was the single biggest cost in "<command> start". The resolved
@@ -187,14 +183,9 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
     # other's cached series id.
     SERIES_CACHE_TTL_SECONDS = 6 * 3600
 
-    BOLD = "\x02"
-    COLOR_RESET = "\x0F"
-    GREEN = "\x0303"
-    ORANGE = "\x0307"
-    PURPLE = "\x0306"
-    RUN_PREFIX = f"{BOLD}{GREEN}RUN:{COLOR_RESET}"
-    FINAL_PREFIX = f"{BOLD}{ORANGE}FINAL:{COLOR_RESET}"
-    PERIOD_END_PREFIX = f"{BOLD}{PURPLE}JAKSO:{COLOR_RESET}"
+    RUN_PREFIX = irc_prefix("RUN:", GREEN)
+    FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
+    PERIOD_END_PREFIX = irc_prefix("JAKSO:", PURPLE)
 
     # The event feed's "period" field is 0-indexed - confirmed live via a
     # "Ensimmäinen jakso päättyi" (first period ended) event carrying

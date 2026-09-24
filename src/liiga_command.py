@@ -3,6 +3,7 @@ import traceback
 
 import requests
 
+from irc_format import BOLD, RESET, GREEN, ORANGE, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
 
 
@@ -36,22 +37,10 @@ class LiigaCommand(LiveTrackerCommand):
     BASE_URL = "https://www.liiga.fi/api/v2/games"
     TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]
 
-    # Fallback bound for !liiga next's day-by-day search when today had
-    # games but they're all already finished (so the API's own
-    # "nextGameDate" hint isn't available - it's only given when a date
-    # has no games at all, see _fetch_next_gameday()).
-    NEXT_SEARCH_MAX_DAYS = 21
-
     PERIOD_LABELS = {1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO"}
 
-    # mIRC formatting codes. Bold + a mid-saturation color so the prefix
-    # stays legible regardless of the viewer's background (black/white/blue/etc).
-    BOLD = "\x02"
-    COLOR_RESET = "\x0F"
-    GREEN = "\x0303"
-    ORANGE = "\x0307"
-    GOAL_PREFIX = f"{BOLD}{GREEN}GOAL:{COLOR_RESET}"
-    FINAL_PREFIX = f"{BOLD}{ORANGE}FINAL:{COLOR_RESET}"
+    GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
+    FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
 
     # ---- "next" lookup hooks (see LiveTrackerCommand._run_next) --------
 
@@ -221,7 +210,7 @@ class LiigaCommand(LiveTrackerCommand):
         # number everyone actually wants is the first thing read; scorer
         # and assist detail trail after the pipe.
         return (
-            f"{self.GOAL_PREFIX} {self.BOLD}{home} {home_score}-{away_score} {away}{self.COLOR_RESET}"
+            f"{self.GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
             f"{time_str} | {scoring_team} — {scorer_name}{tag_str}{assist_str}"
         )
 
@@ -297,8 +286,11 @@ class LiigaCommand(LiveTrackerCommand):
     # ---- data fetching --------------------------------------------------
 
     def _current_season(self, now_helsinki) -> int:
-        # Liiga seasons start in September and are labelled by the year
-        # they run into (Sept 2024 -> season 2025).
+        # Liiga seasons are labelled by the year they run into (e.g. the
+        # 2024-2025 season is season 2025). The July cutoff (not
+        # September, when the regular season itself starts) accounts for
+        # "valmistavat_ottelut" (preseason games), which already belong
+        # to the upcoming season's numbering and start earlier.
         return now_helsinki.year + 1 if now_helsinki.month >= 7 else now_helsinki.year
 
     def _fetch_today_games(self):

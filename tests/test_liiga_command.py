@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from irc_format import BOLD, RESET, GREEN, ORANGE
 from liiga_command import LiigaCommand
 
 
@@ -261,13 +262,13 @@ class TestPollOnce:
         final_msg = next(m for m in messages if "FINAL:" in m)
 
         assert goal_msg.startswith(liiga_command.GOAL_PREFIX)
-        assert liiga_command.GREEN in goal_msg
+        assert GREEN in goal_msg
         assert final_msg.startswith(liiga_command.FINAL_PREFIX)
-        assert liiga_command.ORANGE in final_msg
+        assert ORANGE in final_msg
         # Both prefixes must reset formatting so the rest of the line isn't
         # left bold/colored on the user's client.
-        assert liiga_command.COLOR_RESET in goal_msg
-        assert liiga_command.COLOR_RESET in final_msg
+        assert RESET in goal_msg
+        assert RESET in final_msg
 
     def test_goal_leads_with_the_bolded_score_final_does_not(self, liiga_command):
         # Explicitly the behavior asked for: the score (bolded) leads a
@@ -287,13 +288,12 @@ class TestPollOnce:
         goal_msg = next(m for m in messages if "GOAL:" in m)
         final_msg = next(m for m in messages if "FINAL:" in m)
 
-        bold, reset = liiga_command.BOLD, liiga_command.COLOR_RESET
         assert goal_msg == (
-            f"{liiga_command.GOAL_PREFIX} {bold}HIFK 1-0 Ilves{reset} 02:05 1st | "
+            f"{liiga_command.GOAL_PREFIX} {BOLD}HIFK 1-0 Ilves{RESET} 02:05 1st | "
             f"HIFK — Kristian Vesalainen"
         )
         # Only the GOAL: prefix's own bold code, not the score too.
-        assert final_msg.count(bold) == 1
+        assert final_msg.count(BOLD) == 1
 
     def test_goal_with_assists_and_tag(self, liiga_command):
         bot = MagicMock()

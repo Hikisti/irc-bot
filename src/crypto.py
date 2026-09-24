@@ -1,7 +1,6 @@
 from pycoingecko import CoinGeckoAPI
-import requests
 
-from irc_format import signed_change_color
+from irc_format import BOLD, RESET, signed_change_color
 from request_errors import format_request_error
 
 class CryptoCommand:
@@ -32,24 +31,23 @@ class CryptoCommand:
                 return f"Error: Cryptocurrency '{crypto_name}' not found. Check the name and try again."
 
             # Extract values safely
-            try:
-                price = data[crypto_name].get(currency)
-                change_percent = data[crypto_name].get(f"{currency}_24h_change")
-                volume = data[crypto_name].get(f"{currency}_24h_vol", 0) / 1_000_000_000  # Convert to billions
+            price = data[crypto_name].get(currency)
+            change_percent = data[crypto_name].get(f"{currency}_24h_change")
+            volume = data[crypto_name].get(f"{currency}_24h_vol", 0) / 1_000_000_000  # Convert to billions
 
-                if price is None or change_percent is None:
-                    return f"Error: Incomplete data for '{crypto_name}'. Try again later."
-                
-                # Correct absolute change calculation
-                change_currency = (price * change_percent) / 100
+            if price is None or change_percent is None:
+                return f"Error: Incomplete data for '{crypto_name}'. Try again later."
 
-            except KeyError:
-                return f"Error: Unexpected API response for '{crypto_name}'."
+            # Correct absolute change calculation
+            change_currency = (price * change_percent) / 100
 
             # Choose IRC color formatting
             color = signed_change_color(change_currency)
 
-            return f"\x02{crypto_name.capitalize()} {currency.upper()}:\x02 {price:.2f} {currency.upper()}, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}B."
+            return (
+                f"{BOLD}{crypto_name.capitalize()} {currency.upper()}:{BOLD} {price:.2f} {currency.upper()}, "
+                f"today {color}{change_currency:+.2f} ({change_percent:+.2f}%){RESET}. Volume {volume:.2f}B."
+            )
 
         except Exception as e:
             return format_request_error(e, "CoinGecko")
