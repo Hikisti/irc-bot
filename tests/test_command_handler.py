@@ -19,14 +19,19 @@ def handler(monkeypatch):
 
 def replace_command(handler, alias, mock_command):
     """Swap the real command object registered for `alias` with a mock,
-    keeping its original allow_args setting."""
-    for cmd_obj, cmd_data in list(handler.command_aliases.items()):
-        if alias in cmd_data["aliases"]:
-            cmd_data_copy = dict(cmd_data)
-            del handler.command_aliases[cmd_obj]
-            handler.command_aliases[mock_command] = cmd_data_copy
-            return
-    raise AssertionError(f"No command registered for alias {alias}")
+    carrying over its ALLOW_ARGS/CHANNELS so CommandHandler enforces the
+    same restrictions against the mock - and swap every OTHER alias
+    pointing at that same real instance too (e.g. !weather and !w both
+    need to route to the same mock)."""
+    real_command = handler.commands_by_alias.get(alias)
+    if real_command is None:
+        raise AssertionError(f"No command registered for alias {alias}")
+
+    mock_command.ALLOW_ARGS = real_command.ALLOW_ARGS
+    mock_command.CHANNELS = real_command.CHANNELS
+    for other_alias, command in list(handler.commands_by_alias.items()):
+        if command is real_command:
+            handler.commands_by_alias[other_alias] = mock_command
 
 
 class TestCommandHandler:

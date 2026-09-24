@@ -5,9 +5,10 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
+from base_command import BaseCommand
 from request_errors import format_request_error
 
-class TimeCommand:
+class TimeCommand(BaseCommand):
     """
     Fetches local time for a given city, or a given timezone abbreviation,
     for IRC bot usage. City lookups use the IPGeolocation Timezone API
@@ -19,6 +20,8 @@ class TimeCommand:
       !time cdt
       -> Local time in CDT (America/Chicago): 02/01/26 06:00:39.
     """
+
+    ALIASES = ("!time",)
 
     API_URL = "https://api.ipgeolocation.io/timezone"
 

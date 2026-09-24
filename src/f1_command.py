@@ -2,10 +2,11 @@ import requests
 import datetime
 import pytz
 
+from base_command import BaseCommand
 from request_errors import format_request_error
 
 
-class F1Command:
+class F1Command(BaseCommand):
     """
     Returns the ongoing and/or next F1 event (practice, qualifying, sprint or race)
     with location, date and time in Finnish timezone.
@@ -14,6 +15,9 @@ class F1Command:
       !f1
       -> Ongoing: Chinese GP (Race) - Shanghai, China | Sun 15/03/26 09:00 EET || Next: Japanese GP (Practice 1) - Suzuka, Japan | Fri 27/03/26 04:30 EET
     """
+
+    ALIASES = ("!f1",)
+    ALLOW_ARGS = False
 
     JOLPICA_URL = "https://api.jolpi.ca/ergast/f1"
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")

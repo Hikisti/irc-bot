@@ -3,10 +3,11 @@ import os
 from dotenv import load_dotenv
 import requests
 
+from base_command import BaseCommand
 from request_errors import format_request_error
 
 
-class DistanceCommand:
+class DistanceCommand(BaseCommand):
     """
     Calculates driving distance (and drive time) between two cities
     anywhere in the world, via OpenRouteService - one API key covers both
@@ -23,6 +24,8 @@ class DistanceCommand:
       -> Driving distance from Kokkola, Finland to Vimpeli, Finland:
          88.4 km (54.9 mi), ~1h 12min drive.
     """
+
+    ALIASES = ("!distance",)
 
     GEOCODE_URL = "https://api.openrouteservice.org/geocode/search"
     DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car"

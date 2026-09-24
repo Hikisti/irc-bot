@@ -1,14 +1,19 @@
 import os
 import random
 
+from base_command import BaseCommand
 
-class AijaMattoCommand:
+
+class AijaMattoCommand(BaseCommand):
     """Returns one random line from aijamatto.txt (an old in-joke/copypasta
     collection) - one per !bjorck call.
 
     Usage:
       !bjorck
     """
+
+    ALIASES = ("!bjorck",)
+    ALLOW_ARGS = False
 
     # Resolved relative to this file, not the process's current working
     # directory - a bare "aijamatto.txt" only worked by coincidence of the

@@ -1,10 +1,13 @@
 from pycoingecko import CoinGeckoAPI
 
+from base_command import BaseCommand
 from irc_format import BOLD, RESET, signed_change_color
 from request_errors import format_request_error
 
-class CryptoCommand:
+class CryptoCommand(BaseCommand):
     """Handles cryptocurrency price queries using CoinGecko API."""
+
+    ALIASES = ("!crypto",)
 
     def __init__(self):
         self.cg = CoinGeckoAPI()

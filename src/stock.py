@@ -1,11 +1,14 @@
 import requests
 import yfinance as yf
 
+from base_command import BaseCommand
 from irc_format import BOLD, RESET, signed_change_color
 from request_errors import format_request_error
 
-class StockCommand:
+class StockCommand(BaseCommand):
     """Fetches stock price and market data for a given ticker symbol."""
+
+    ALIASES = ("!stock",)
 
     def execute(self, args):
         """Handles stock queries with improved error handling and currency support."""

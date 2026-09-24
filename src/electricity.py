@@ -3,11 +3,15 @@ import datetime
 import pytz
 from decimal import Decimal, ROUND_HALF_UP
 
+from base_command import BaseCommand
 from request_errors import format_request_error
 
 
-class ElectricityCommand:
+class ElectricityCommand(BaseCommand):
     """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
+
+    ALIASES = ("!sähkö", "!sahko")
+    ALLOW_ARGS = False
 
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
 

@@ -27,6 +27,9 @@ class LiigaCommand(LiveTrackerCommand):
     _fetch_next_period, ...) is Liiga-specific.
     """
 
+    ALIASES = ("!liiga",)
+    CHANNELS = ("#smliiga",)
+
     DISPLAY_NAME = "Liiga"
     COMMAND_NAME = "!liiga"
     CACHE_SLUG = "Liiga"

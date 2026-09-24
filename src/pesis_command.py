@@ -522,6 +522,8 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
 class SuperpesisCommand(PesisCommand):
     """Live-tracks Miesten Superpesis (pesäpallo, men's top division) - see
     PesisCommand for the shared implementation."""
+    ALIASES = ("!superpesis",)
+    CHANNELS = ("#pesis.fi",)
     SERIES_LEVEL_NAME = "Superpesis"
     SERIES_NAME = "Miehet"
     DISPLAY_NAME = "Superpesis"
@@ -534,6 +536,8 @@ class YkkospesisCommand(PesisCommand):
     see PesisCommand for the shared implementation. Confirmed live against
     real matches (147197, 2026-09-03) that the API, event/roster shapes,
     and scoring vocabulary are identical to Superpesis's."""
+    ALIASES = ("!ykkospesis",)
+    CHANNELS = ("#pesis.fi",)
     SERIES_LEVEL_NAME = "Ykköspesis"
     SERIES_NAME = "Miehet"
     DISPLAY_NAME = "Ykköspesis"

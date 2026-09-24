@@ -5,8 +5,10 @@ import traceback
 import pytz
 import requests
 
+from base_command import BaseCommand
 
-class LiveTrackerCommand:
+
+class LiveTrackerCommand(BaseCommand):
     """Shared engine behind LiigaCommand and PesisCommand: both live-track
     "today's games/matches" in a channel via a background polling thread,
     with an identical start/stop/next lifecycle around a sport-specific
@@ -18,7 +20,9 @@ class LiveTrackerCommand:
     per-match state that Liiga has no equivalent of; their _poll_once
     also differ in iteration direction and new/missing-item handling).
 
-    A subclass must set: DISPLAY_NAME, COMMAND_NAME, CACHE_SLUG,
+    A subclass must set: ALIASES/CHANNELS (BaseCommand's own contract -
+    every subclass here restricts itself to specific channels, unlike
+    most other commands), DISPLAY_NAME, COMMAND_NAME, CACHE_SLUG,
     TRACKED_NOUN (plural, e.g. "games"/"matches"), PERIOD_NOUN (e.g.
     "gameday"/"matchday"), STATE_KEY (the per-channel dict key holding
     tracked-item state, e.g. "games"/"matches" - kept distinct rather

@@ -2,10 +2,13 @@ import os
 from dotenv import load_dotenv
 import requests
 
+from base_command import BaseCommand
 from request_errors import format_request_error
 
-class WeatherCommand:
+class WeatherCommand(BaseCommand):
     """Fetches current weather for a given city."""
+
+    ALIASES = ("!weather", "!w")
 
     def __init__(self):
         load_dotenv()  # Load environment variables from .env
