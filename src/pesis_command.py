@@ -165,6 +165,7 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
     COMMAND_NAME = None
 
     TRACKED_NOUN = "matches"
+    TRACKED_NOUN_COUNTED = "match(es)"
     PERIOD_NOUN = "matchday"
     STATE_KEY = "matches"
     REQUIRES_CONTEXT = True
@@ -226,48 +227,15 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
     def _format_period_summary(self, items):
         return self._format_matches_summary(items)
 
-    # ---- background thread entry point --------------------------------
+    # ---- "run" lookup hooks (see LiveTrackerCommand._run) ---------------
 
-    def _run(self, irc_bot, channel, stop_event):
-        try:
-            series_id = self._resolve_series_id()
-        except Exception as e:
-            print(f"{self.DISPLAY_NAME} series lookup error: {e}")
-            series_id = None
+    def _fetch_today_items(self, context):
+        return self._fetch_today_matches(context)
 
-        if series_id is None:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
-            return
-
-        try:
-            matches = self._fetch_today_matches(series_id)
-        except Exception as e:
-            print(f"{self.DISPLAY_NAME} initial fetch error: {e}")
-            matches = None
-
-        if matches is None:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
-            return
-
-        if not matches:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, f"No {self.DISPLAY_NAME} matches scheduled today.")
-            return
-
-        state = {mid: self._seed_snapshot(m) for mid, m in matches.items()}
+    def _build_initial_state(self, items) -> dict:
+        state = {mid: self._seed_snapshot(m) for mid, m in items.items()}
         self._seed_match_extras(state)
-
-        if not self._commit_initial_state(channel, stop_event, state):
-            return  # stopped (or superseded) before the lookup finished
-
-        summary = self._format_matches_summary(matches.values())
-        self._safe_send(
-            irc_bot, channel, f"Tracking {len(matches)} {self.DISPLAY_NAME} match(es) today: {summary}"
-        )
-
-        self._poll_loop(irc_bot, channel, stop_event, series_id)
+        return state
 
     def _seed_match_extras(self, state):
         """Fills in each match's event-count baseline, roster, and

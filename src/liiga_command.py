@@ -34,6 +34,7 @@ class LiigaCommand(LiveTrackerCommand):
     COMMAND_NAME = "!liiga"
     CACHE_SLUG = "Liiga"
     TRACKED_NOUN = "games"
+    TRACKED_NOUN_COUNTED = "game(s)"
     PERIOD_NOUN = "gameday"
     STATE_KEY = "games"
 
@@ -45,7 +46,7 @@ class LiigaCommand(LiveTrackerCommand):
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
 
-    # ---- "next" lookup hooks (see LiveTrackerCommand._run_next) --------
+    # ---- "next"/"run" lookup hooks (see LiveTrackerCommand._run_next / _run) --
 
     def _fetch_next_period(self, context):
         return self._fetch_next_gameday()
@@ -53,36 +54,13 @@ class LiigaCommand(LiveTrackerCommand):
     def _format_period_summary(self, items):
         return self._format_games_summary(items)
 
-    # ---- background thread entry point --------------------------------
+    def _fetch_today_items(self, context):
+        return self._fetch_today_games()
 
-    def _run(self, irc_bot, channel, stop_event):
-        """Runs entirely on a background thread: does the initial lookup,
-        reports what's being tracked (or bails out), then polls until the
-        games are done or !liiga stop is called."""
-        try:
-            games = self._fetch_today_games()
-        except Exception as e:
-            print(f"Liiga initial fetch error: {e}")
-            games = None
+    def _build_initial_state(self, items) -> dict:
+        return {gid: self._snapshot(g) for gid, g in items.items()}
 
-        if games is None:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, "Error: could not reach the Liiga API.")
-            return
-
-        if not games:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, "No Liiga games scheduled today.")
-            return
-
-        state = {gid: self._snapshot(g) for gid, g in games.items()}
-        if not self._commit_initial_state(channel, stop_event, state):
-            return  # stopped (or superseded) before the lookup finished
-
-        summary = self._format_games_summary(games.values())
-        self._safe_send(irc_bot, channel, f"Tracking {len(games)} Liiga game(s) today: {summary}")
-
-        self._poll_loop(irc_bot, channel, stop_event)
+    # ---- polling ---------------------------------------------------------
 
     def _poll_once(self, irc_bot, channel, *context_args) -> bool:
         """Fetch current game states and announce diffs since the last poll.

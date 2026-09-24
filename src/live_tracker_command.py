@@ -11,29 +11,32 @@ from http_session import make_session
 class LiveTrackerCommand(BaseCommand):
     """Shared engine behind LiigaCommand and PesisCommand: both live-track
     "today's games/matches" in a channel via a background polling thread,
-    with an identical start/stop/next lifecycle around a sport-specific
-    fetch+announce core. This class holds exactly the parts confirmed
-    (by close side-by-side reading of both, before this existed) to be
-    either byte-identical or trivially parameterized by a class attribute;
-    _run and _poll_once stay on each subclass since they genuinely differ
-    in shape (Pesis resolves+threads a series_id and seeds extra
-    per-match state that Liiga has no equivalent of; their _poll_once
-    also differ in iteration direction and new/missing-item handling).
+    with an identical start/stop/next lifecycle, initial-lookup shape
+    (_run) and next-period lookup (_run_next) around a sport-specific
+    fetch+announce core. Only _poll_once stays entirely on each subclass
+    - confirmed, by close side-by-side reading of both, to genuinely
+    differ in shape (Pesis resolves+threads a series_id that Liiga has no
+    equivalent of; they also differ in iteration direction and
+    new/missing-item handling).
 
     A subclass must set: ALIASES/CHANNELS (BaseCommand's own contract -
     every subclass here restricts itself to specific channels, unlike
     most other commands), DISPLAY_NAME, COMMAND_NAME, CACHE_SLUG,
-    TRACKED_NOUN (plural, e.g. "games"/"matches"), PERIOD_NOUN (e.g.
+    TRACKED_NOUN (plural, e.g. "games"/"matches"), TRACKED_NOUN_COUNTED
+    (the same, but with an irregular count suffix for _run's "Tracking N
+    ..." message, e.g. "game(s)"/"match(es)"), PERIOD_NOUN (e.g.
     "gameday"/"matchday"), STATE_KEY (the per-channel dict key holding
     tracked-item state, e.g. "games"/"matches" - kept distinct rather
     than unified since existing tests key into it directly), and
     REQUIRES_CONTEXT (True if _resolve_context() must succeed before
     _run/_run_next can proceed - Pesis's series_id lookup; Liiga has no
-    such step). It must implement _run(irc_bot, channel, stop_event) and
-    _poll_once(irc_bot, channel, *context_args), and the _run_next hooks
-    below: _fetch_next_period(context), _format_period_summary(items),
-    and (only if the default doesn't fit) _format_not_found_message()
-    and _resolve_context().
+    such step). It must implement _poll_once(irc_bot, channel,
+    *context_args), the _run hooks _fetch_today_items(context) and
+    _build_initial_state(items), and the _run_next hooks
+    _fetch_next_period(context) and _format_period_summary(items) (both
+    _run and _run_next also share _format_period_summary); only if the
+    default doesn't fit, _format_not_found_message() and
+    _resolve_context().
     """
 
     needs_irc_context = True
@@ -155,9 +158,67 @@ class LiveTrackerCommand(BaseCommand):
         summary = self._format_period_summary(items.values())
         self._safe_send(irc_bot, channel, f"Next {self.DISPLAY_NAME} {self.PERIOD_NOUN} ({label}): {summary}")
 
-    # ---- background thread entry point (subclass-specific) -------------
+    # ---- background thread entry point ---------------------------------
 
     def _run(self, irc_bot, channel, stop_event):
+        """Runs entirely on a background thread: resolves context (if
+        REQUIRES_CONTEXT), does the initial lookup, reports what's being
+        tracked (or bails out), then polls until everything's done or
+        <command> stop is called."""
+        context = None
+        if self.REQUIRES_CONTEXT:
+            try:
+                context = self._resolve_context()
+            except Exception as e:
+                print(f"{self.DISPLAY_NAME} context resolution error: {e}")
+                context = None
+
+            if context is None:
+                self._drop_if_current(channel, stop_event)
+                self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
+                return
+
+        try:
+            items = self._fetch_today_items(context)
+        except Exception as e:
+            print(f"{self.DISPLAY_NAME} initial fetch error: {e}")
+            items = None
+
+        if items is None:
+            self._drop_if_current(channel, stop_event)
+            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
+            return
+
+        if not items:
+            self._drop_if_current(channel, stop_event)
+            self._safe_send(irc_bot, channel, f"No {self.DISPLAY_NAME} {self.TRACKED_NOUN} scheduled today.")
+            return
+
+        state = self._build_initial_state(items)
+        if not self._commit_initial_state(channel, stop_event, state):
+            return  # stopped (or superseded) before the lookup finished
+
+        summary = self._format_period_summary(items.values())
+        self._safe_send(
+            irc_bot, channel,
+            f"Tracking {len(items)} {self.DISPLAY_NAME} {self.TRACKED_NOUN_COUNTED} today: {summary}",
+        )
+
+        poll_args = (context,) if self.REQUIRES_CONTEXT else ()
+        self._poll_loop(irc_bot, channel, stop_event, *poll_args)
+
+    def _fetch_today_items(self, context):
+        """Returns {item_id: item_dict} for today, or None on failure (API
+        unreachable). `context` is whatever _resolve_context() returned
+        (None if REQUIRES_CONTEXT is False)."""
+        raise NotImplementedError
+
+    def _build_initial_state(self, items) -> dict:
+        """Builds the {item_id: state_dict} to seed as the channel's
+        initial tracked state from `items` (the dict _fetch_today_items()
+        just returned) - e.g. Liiga's per-game goal-count snapshot, or
+        Pesis's per-match snapshot plus its extra seeded event/roster
+        data."""
         raise NotImplementedError
 
     def _drop_if_current(self, channel, stop_event):
