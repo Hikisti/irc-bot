@@ -52,10 +52,11 @@ class IrcBot:
 
     def listen(self):
         """Listen for messages from the server."""
+        buffer = ""
         while self.running:
             try:
-                response = self.sock.recv(2048).decode("utf-8", errors="ignore").strip()
-                if not response:
+                data = self.sock.recv(2048).decode("utf-8", errors="ignore")
+                if not data:
                     # "DISCONNECTED: ..." wording matches the exception
                     # branch below - a single, consistent, greppable
                     # prefix for every way the connection can end.
@@ -63,16 +64,37 @@ class IrcBot:
                     self.running = False
                     break
 
-                for line in response.split("\n"):
+                # A single IRC line isn't guaranteed to arrive in one
+                # recv() call - it can be split across the 2048-byte
+                # boundary. Buffer across calls and only process complete
+                # "\n"-terminated lines, keeping a trailing partial line
+                # (if any) for the next recv() to complete.
+                buffer += data
+                *complete_lines, buffer = buffer.split("\n")
+
+                for line in complete_lines:
                     line = line.strip()
+                    if not line:
+                        continue
                     print(f"< {line}")  # Debugging
 
                     if line.startswith("PING"):
                         self.pong(line)
-                    elif " 001 " in line:  # Server welcome message
+                        continue
+
+                    # Every real server line is ":prefix COMMAND ...", so
+                    # the actual command is parts[1] - matching a command
+                    # name as a substring of the whole line (the previous
+                    # approach) means chat text that happens to contain
+                    # "001" or "PRIVMSG" gets misdispatched as if it were
+                    # that server event.
+                    parts = line.split(" ", 2)
+                    command = parts[1] if line.startswith(":") and len(parts) > 1 else None
+
+                    if command == "001":  # Server welcome message
                         print("Server welcome message received. Joining channels...")
                         self.join_channels()  # Join multiple channels
-                    elif "PRIVMSG" in line:
+                    elif command == "PRIVMSG":
                         self.process_message(line)
             except Exception as e:
                 # The catch-all here is the last line of defense against

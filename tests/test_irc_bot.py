@@ -127,6 +127,100 @@ class TestListen:
         assert "DISCONNECTED: error" not in captured.out
 
 
+class TestListenDispatch:
+    """Regression coverage for dispatching on the parsed command (parts[1]
+    of a ":prefix COMMAND ..." line) rather than a substring match against
+    the whole line - the previous "001" in line / "PRIVMSG" in line checks
+    would misfire on ordinary chat text containing those words."""
+
+    def _stop_after_one_line(self, bot, line_bytes):
+        call_count = 0
+
+        def recv_then_stop(bufsize):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return line_bytes
+            bot.running = False
+            return b""
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+
+    def test_welcome_reply_triggers_join(self, bot):
+        self._stop_after_one_line(bot, b":irc.example.net 001 KukistiBot :Welcome\r\n")
+        with patch.object(bot, "join_channels") as mock_join:
+            bot.listen()
+        mock_join.assert_called_once()
+
+    def test_chat_message_containing_001_does_not_trigger_join(self, bot):
+        # Regression test: a real report of chat text containing "001"
+        # (e.g. "order 001 arrived") getting misdispatched as the server's
+        # welcome reply because of a substring match on " 001 ".
+        line = b":alice!a@host PRIVMSG #chan :order 001 arrived\r\n"
+        self._stop_after_one_line(bot, line)
+        with patch.object(bot, "join_channels") as mock_join, \
+             patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+        mock_join.assert_not_called()
+        mock_process.assert_called_once()
+
+    def test_privmsg_dispatches_to_process_message(self, bot):
+        line = b":alice!a@host PRIVMSG #chan :hello\r\n"
+        self._stop_after_one_line(bot, line)
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+        mock_process.assert_called_once_with(line.decode().strip())
+
+
+class TestListenBuffering:
+    """Regression coverage for lines split across two recv() calls (e.g.
+    at the 2048-byte boundary) - a naive per-call split("\n") would
+    process each half as its own broken line."""
+
+    def test_line_split_across_two_recv_calls_is_reassembled(self, bot):
+        first_half, second_half = b":alice!a@host PRIVMSG #ch", b"an :hello\r\n"
+        call_count = 0
+
+        def recv_then_stop(bufsize):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return first_half
+            if call_count == 2:
+                return second_half
+            bot.running = False
+            return b""
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+
+        mock_process.assert_called_once_with(":alice!a@host PRIVMSG #chan :hello")
+
+    def test_multiple_complete_lines_in_one_recv_are_all_processed(self, bot):
+        chunk = b":a!a@h PRIVMSG #c :one\r\n:a!a@h PRIVMSG #c :two\r\n"
+        call_count = 0
+
+        def recv_then_stop(bufsize):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return chunk
+            bot.running = False
+            return b""
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+
+        assert mock_process.call_count == 2
+
+
 class TestConnect:
     def test_prints_a_startup_banner_with_the_pid(self, bot, capsys):
         bot.sock.connect.side_effect = OSError("unreachable")  # short-circuits before the blocking loop

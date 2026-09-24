@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
+from dotenv import load_dotenv
 
 from request_errors import format_request_error
 
@@ -74,6 +75,7 @@ class TimeCommand:
     }
 
     def __init__(self):
+        load_dotenv()  # Load environment variables from .env
         self.api_key = os.getenv("TIME_API_KEY")
         self.session = requests.Session()
         self.session.headers.update({
@@ -108,7 +110,7 @@ class TimeCommand:
             return "Error: Invalid response from time service"
 
         if not isinstance(data, dict) or "time_24" not in data:
-            error_msg = data.get("error") or data.get("message")
+            error_msg = (data.get("error") or data.get("message")) if isinstance(data, dict) else None
             if error_msg:
                 return f"Error: {error_msg}"
             return "Error: Time service returned unexpected data"

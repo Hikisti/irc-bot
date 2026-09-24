@@ -19,7 +19,8 @@ class TestCityLookup:
 
     def test_missing_api_key_returns_error(self, monkeypatch):
         monkeypatch.delenv("TIME_API_KEY", raising=False)
-        tc = TimeCommand()
+        with patch("src.time_command.load_dotenv"):
+            tc = TimeCommand()
         assert "TIME_API_KEY is not set" in tc.execute("austin")
 
     def test_happy_path_with_seconds_in_time(self, time_command):
@@ -120,6 +121,14 @@ class TestCityLookup:
 
     def test_unexpected_payload_returns_error(self, time_command):
         with patch.object(time_command.session, "get", return_value=make_response({"foo": "bar"})):
+            result = time_command.execute("austin")
+        assert result.startswith("Error:")
+
+    def test_non_dict_payload_does_not_crash(self, time_command):
+        # Regression test: a list payload used to reach data.get("error")
+        # unconditionally and raise AttributeError instead of returning an
+        # error message.
+        with patch.object(time_command.session, "get", return_value=make_response(["not", "a", "dict"])):
             result = time_command.execute("austin")
         assert result.startswith("Error:")
 
