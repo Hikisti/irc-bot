@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.electricity import ElectricityCommand
+from electricity import ElectricityCommand
 from tests.conftest import make_json_response as make_response
 
 

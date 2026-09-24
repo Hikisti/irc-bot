@@ -4,16 +4,24 @@ import pytest
 
 # Bare import to match command_handler.py's own sibling-import style (see
 # tests/conftest.py for the sys.path setup that makes this resolve).
+from aijamatto import AijaMattoCommand
 from command_handler import CommandHandler
 
 
 @pytest.fixture
-def handler(monkeypatch):
+def handler(monkeypatch, tmp_path):
     # No command constructor raises or makes a network call on a missing
     # API key (see base_command.py's contract) - setting this isn't
     # strictly required, but keeps WeatherCommand's own tests' env
     # expectations consistent with a real CommandHandler being built here.
     monkeypatch.setenv("WEATHER_API_KEY", "test-key")
+    # AijaMattoCommand.__init__ reads its real ~36MB aijamatto.txt in
+    # full - harmless for the bot itself (once, at startup) but real,
+    # unnecessary I/O on every single test in this file, none of which
+    # exercise !bjorck itself. Point it at a tiny stand-in instead.
+    lines_file = tmp_path / "aijamatto.txt"
+    lines_file.write_text("placeholder line\n")
+    monkeypatch.setattr(AijaMattoCommand, "LINES_FILE", str(lines_file))
     return CommandHandler()
 
 

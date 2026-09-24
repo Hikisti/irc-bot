@@ -115,12 +115,6 @@ def match_event(event_id, team_id, period=1, sub_events=None, batter=None, innin
     }
 
 
-def join_channel_thread(sc, channel, timeout=2):
-    entry = sc._channels.get(channel)
-    if entry and entry.get("thread"):
-        entry["thread"].join(timeout=timeout)
-
-
 @pytest.fixture
 def sc(tmp_path):
     # Isolate every test from the real on-disk series-id cache: without

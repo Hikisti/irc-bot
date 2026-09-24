@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.stock import StockCommand
+from stock import StockCommand
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ class TestStockCommand:
             "currency": "USD",
             "shortName": "Tesla Inc.",
         }
-        with patch("src.stock.yf.Ticker", return_value=make_ticker(info)):
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)):
             result = stock_command.execute("tsla")
 
         assert "Tesla Inc. (TSLA):" in result
@@ -44,7 +44,7 @@ class TestStockCommand:
             "regularMarketPreviousClose": 1.0,
             "shortName": "x",
         }
-        with patch("src.stock.yf.Ticker", return_value=make_ticker(info)) as mock_ticker:
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)) as mock_ticker:
             stock_command.execute("tsla")
         mock_ticker.assert_called_once_with("TSLA")
 
@@ -54,19 +54,19 @@ class TestStockCommand:
             "regularMarketPreviousClose": 100.0,
             "shortName": "Tesla Inc.",
         }
-        with patch("src.stock.yf.Ticker", return_value=make_ticker(info)):
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)):
             result = stock_command.execute("tsla")
         assert "\x0304" in result
         assert "-10.00 (-10.00%)" in result
 
     def test_missing_price_field_returns_error(self, stock_command):
-        with patch("src.stock.yf.Ticker", return_value=make_ticker({})):
+        with patch("stock.yf.Ticker", return_value=make_ticker({})):
             result = stock_command.execute("bogus")
         assert "unavailable" in result
 
     def test_none_price_returns_error(self, stock_command):
         info = {"regularMarketPrice": None, "regularMarketPreviousClose": 100.0}
-        with patch("src.stock.yf.Ticker", return_value=make_ticker(info)):
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)):
             result = stock_command.execute("tsla")
         assert "incomplete" in result
 
@@ -76,12 +76,12 @@ class TestStockCommand:
             "regularMarketPreviousClose": 0,
             "shortName": "x",
         }
-        with patch("src.stock.yf.Ticker", return_value=make_ticker(info)):
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)):
             result = stock_command.execute("tsla")
         assert "(+0.00%)" in result
 
     def test_unexpected_exception_returns_error(self, stock_command):
-        with patch("src.stock.yf.Ticker", side_effect=RuntimeError("boom")):
+        with patch("stock.yf.Ticker", side_effect=RuntimeError("boom")):
             result = stock_command.execute("tsla")
         assert "Could not retrieve stock data" in result
 
@@ -91,11 +91,11 @@ class TestStockCommand:
         # builtin ConnectionError/TimeoutError this used to (uselessly)
         # catch - this used to fall through to the generic exception
         # branch instead of a network-specific message.
-        with patch("src.stock.yf.Ticker", side_effect=requests.exceptions.ConnectionError):
+        with patch("stock.yf.Ticker", side_effect=requests.exceptions.ConnectionError):
             result = stock_command.execute("tsla")
         assert "Could not connect" in result
 
     def test_timeout_returns_friendly_error(self, stock_command):
-        with patch("src.stock.yf.Ticker", side_effect=requests.exceptions.Timeout):
+        with patch("stock.yf.Ticker", side_effect=requests.exceptions.Timeout):
             result = stock_command.execute("tsla")
         assert "timed out" in result

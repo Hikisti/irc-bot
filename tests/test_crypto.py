@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.crypto import CryptoCommand
+from crypto import CryptoCommand
 from tests.conftest import make_json_response
 
 

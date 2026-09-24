@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from src.aijamatto import AijaMattoCommand
+from aijamatto import AijaMattoCommand
 
 
 class TestInit:

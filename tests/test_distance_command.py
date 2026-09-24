@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.distance_command import DistanceCommand
+from distance_command import DistanceCommand
 from tests.conftest import make_json_response as make_response
 
 
@@ -47,7 +47,7 @@ def distance_command(monkeypatch):
 class TestMissingApiKey:
     def test_missing_api_key_returns_error_without_crashing(self, monkeypatch):
         monkeypatch.delenv("ORS_API_KEY", raising=False)
-        with patch("src.distance_command.load_dotenv"):
+        with patch("distance_command.load_dotenv"):
             dc = DistanceCommand()
         assert "ORS_API_KEY is not set" in dc.execute("Kokkola,Vimpeli")
 

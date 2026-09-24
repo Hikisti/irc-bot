@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.weather import WeatherCommand
+from weather import WeatherCommand
 from tests.conftest import make_json_response as make_response
 
 
@@ -16,7 +16,7 @@ def weather_command(monkeypatch):
 class TestWeatherCommand:
     def test_missing_api_key_returns_error_without_crashing(self, monkeypatch):
         monkeypatch.delenv("WEATHER_API_KEY", raising=False)
-        with patch("src.weather.load_dotenv"):
+        with patch("weather.load_dotenv"):
             wc = WeatherCommand()
         assert "WEATHER_API_KEY is not set" in wc.execute("austin")
 

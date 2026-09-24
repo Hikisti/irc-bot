@@ -8,6 +8,7 @@ import requests
 
 from irc_format import BOLD, RESET, GREEN, ORANGE
 from liiga_command import LiigaCommand
+from tests.conftest import join_channel_thread
 
 
 def make_game(gid=1, home="HIFK", away="Ilves", home_goals=None, away_goals=None,
@@ -48,13 +49,6 @@ def goal_event(period=1, game_time=125, home_score=1, away_score=0,
         "assistantPlayers": assists or [],
         "goalTypes": tags or [],
     }
-
-
-def join_channel_thread(liiga_command, channel, timeout=2):
-    """Wait for the background thread started for `channel` to finish."""
-    entry = liiga_command._channels.get(channel)
-    if entry and entry.get("thread"):
-        entry["thread"].join(timeout=timeout)
 
 
 @pytest.fixture

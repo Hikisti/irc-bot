@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import requests
 
-from src.request_errors import format_request_error
+from request_errors import format_request_error
 
 
 class TestFormatRequestError:

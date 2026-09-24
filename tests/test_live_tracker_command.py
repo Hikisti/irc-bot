@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.live_tracker_command import LiveTrackerCommand
+from live_tracker_command import LiveTrackerCommand
 
 
 class MinimalTracker(LiveTrackerCommand):

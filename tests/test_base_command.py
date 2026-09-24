@@ -1,6 +1,6 @@
 import pytest
 
-from src.base_command import BaseCommand
+from base_command import BaseCommand
 
 
 class TestBaseCommand:

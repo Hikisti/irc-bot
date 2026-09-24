@@ -9,7 +9,11 @@ import requests
 # (e.g. "from electricity import ElectricityCommand") rather than
 # "from src.electricity import ...", which only resolves when the src/
 # directory itself is on sys.path (as it is when the bot is run from
-# within src/). Add it here so tests can import command_handler too.
+# within src/). Add it here so tests can import command_handler too -
+# and so every test file's own imports (bare, matching this style) load
+# the exact same module object command_handler.py itself uses, rather
+# than "src.X" and "X" ending up as two independent module instances
+# with two independent copies of the same class.
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
@@ -32,3 +36,13 @@ def make_json_response(json_data, status_code=200, reason="Not Found"):
     if status_code >= 400:
         resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
     return resp
+
+
+def join_channel_thread(command, channel, timeout=2):
+    """Waits for the background thread LiveTrackerCommand._start() spawned
+    for `channel` to finish - used by LiigaCommand/PesisCommand tests that
+    exercise a real !command start end-to-end rather than calling _run()
+    directly (previously redefined identically in both test files)."""
+    entry = command._channels.get(channel)
+    if entry and entry.get("thread"):
+        entry["thread"].join(timeout=timeout)

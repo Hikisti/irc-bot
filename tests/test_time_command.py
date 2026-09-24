@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.time_command import TimeCommand
+from time_command import TimeCommand
 from tests.conftest import make_json_response as make_response
 
 
@@ -19,7 +19,7 @@ class TestCityLookup:
 
     def test_missing_api_key_returns_error(self, monkeypatch):
         monkeypatch.delenv("TIME_API_KEY", raising=False)
-        with patch("src.time_command.load_dotenv"):
+        with patch("time_command.load_dotenv"):
             tc = TimeCommand()
         assert "TIME_API_KEY is not set" in tc.execute("austin")
 

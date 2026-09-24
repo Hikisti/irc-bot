@@ -3,7 +3,8 @@ import time
 from unittest.mock import MagicMock, patch
 
 from pesis_command import SuperpesisCommand, YkkospesisCommand
-from tests.pesis_test_helpers import make_match, match_event, run_sub_event, run_sub_event_by_number, join_channel_thread, sc
+from tests.conftest import join_channel_thread
+from tests.pesis_test_helpers import make_match, match_event, run_sub_event, run_sub_event_by_number, sc
 
 
 class TestLeagueSubclasses:

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.url_fetcher import URLFetcher
+from url_fetcher import URLFetcher
 
 
 def make_response(text="", status_code=200, apparent_encoding="utf-8"):

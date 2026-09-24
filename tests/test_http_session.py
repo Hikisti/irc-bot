@@ -1,4 +1,4 @@
-from src.http_session import make_session
+from http_session import make_session
 
 
 class TestMakeSession:

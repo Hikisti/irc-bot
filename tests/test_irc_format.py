@@ -1,4 +1,4 @@
-from src.irc_format import BOLD, RESET, LIGHT_GREEN, RED, prefix, signed_change_color
+from irc_format import BOLD, RESET, LIGHT_GREEN, RED, prefix, signed_change_color
 
 
 class TestSignedChangeColor:

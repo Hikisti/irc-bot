@@ -5,7 +5,7 @@ import pytest
 import pytz
 import requests
 
-from src.f1_command import F1Command
+from f1_command import F1Command
 from tests.conftest import make_json_response as make_response
 
 
@@ -24,7 +24,7 @@ class FrozenDateTime(datetime.datetime):
 
 @pytest.fixture
 def frozen_now(monkeypatch):
-    monkeypatch.setattr("src.f1_command.datetime.datetime", FrozenDateTime)
+    monkeypatch.setattr("f1_command.datetime.datetime", FrozenDateTime)
 
 
 @pytest.fixture
