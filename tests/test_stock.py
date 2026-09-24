@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.stock import StockCommand
 
@@ -83,3 +84,18 @@ class TestStockCommand:
         with patch("src.stock.yf.Ticker", side_effect=RuntimeError("boom")):
             result = stock_command.execute("tsla")
         assert "Could not retrieve stock data" in result
+
+    def test_connection_error_returns_friendly_error(self, stock_command):
+        # Regression test: yfinance's real network errors are
+        # requests.exceptions.* (it uses requests internally), not the
+        # builtin ConnectionError/TimeoutError this used to (uselessly)
+        # catch - this used to fall through to the generic exception
+        # branch instead of a network-specific message.
+        with patch("src.stock.yf.Ticker", side_effect=requests.exceptions.ConnectionError):
+            result = stock_command.execute("tsla")
+        assert "Could not connect" in result
+
+    def test_timeout_returns_friendly_error(self, stock_command):
+        with patch("src.stock.yf.Ticker", side_effect=requests.exceptions.Timeout):
+            result = stock_command.execute("tsla")
+        assert "timed out" in result

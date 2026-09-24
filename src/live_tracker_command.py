@@ -37,6 +37,10 @@ class LiveTrackerCommand:
     HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
+    # Bound for "<command> next"'s day-by-day search when today's own
+    # games/matches are all already finished (or there's an API-specific
+    # hint that doesn't apply) - see each subclass's own next-period fetch
+    # for the exact search it bounds.
     NEXT_SEARCH_MAX_DAYS = 21
 
     REQUIRES_CONTEXT = False

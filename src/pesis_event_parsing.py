@@ -205,6 +205,21 @@ class PesisEventParsingMixin:
             return "Jakso päättyi"  # marker present but no text - fallback
         return None
 
+    def _sum_values(self, values):
+        """Sums a list of per-play run counts, treating a missing/non-list
+        value or one with no numeric entries as "no data" (None) rather
+        than 0 - shared inner loop for _sum_runs() (whole match) and
+        _period_runs() (single period)."""
+        if not isinstance(values, list):
+            return None
+        total = 0
+        found_any = False
+        for v in values:
+            if isinstance(v, (int, float)):
+                total += v
+                found_any = True
+        return total if found_any else None
+
     def _sum_runs(self, live_result, side):
         runs = live_result.get("runs")
         if not isinstance(runs, list):
@@ -212,13 +227,10 @@ class PesisEventParsingMixin:
         total = 0
         found_any = False
         for period_runs in runs:
-            values = (period_runs or {}).get(side)
-            if not isinstance(values, list):
-                continue
-            for v in values:
-                if isinstance(v, (int, float)):
-                    total += v
-                    found_any = True
+            period_total = self._sum_values((period_runs or {}).get(side))
+            if period_total is not None:
+                total += period_total
+                found_any = True
         return total if found_any else None
 
     def _period_runs(self, live_result, side, period_index):
@@ -230,16 +242,7 @@ class PesisEventParsingMixin:
         runs = live_result.get("runs")
         if not isinstance(runs, list) or not (0 <= period_index < len(runs)):
             return None
-        values = (runs[period_index] or {}).get(side)
-        if not isinstance(values, list):
-            return None
-        total = 0
-        found_any = False
-        for v in values:
-            if isinstance(v, (int, float)):
-                total += v
-                found_any = True
-        return total if found_any else None
+        return self._sum_values((runs[period_index] or {}).get(side))
 
     def _group_runs_and_period_ends(self, events, home_id, away_id):
         """Full-rescan helper shared by _process_match() and

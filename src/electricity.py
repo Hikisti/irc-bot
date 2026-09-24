@@ -9,6 +9,8 @@ from request_errors import format_request_error
 class ElectricityCommand:
     """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
 
+    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
+
     def __init__(self):
         # Only one ElectricityCommand instance ever exists (command_handler.py
         # creates it once), so an instance-level cache behaves identically
@@ -20,11 +22,8 @@ class ElectricityCommand:
 
     def execute(self, args=None):
         try:
-            # Define Helsinki timezone (do this once at class level if possible)
-            helsinki_tz = pytz.timezone("Europe/Helsinki")
-
             # Get current time in Helsinki timezone
-            now = datetime.datetime.now(helsinki_tz)
+            now = datetime.datetime.now(self.HELSINKI_TZ)
             now_timestamp = now.timestamp()
             
             # Fast cache check using timestamp comparison

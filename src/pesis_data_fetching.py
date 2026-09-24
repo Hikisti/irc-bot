@@ -138,7 +138,9 @@ class PesisDataFetchingMixin:
         starting today) for the next date with scheduled matches *that
         aren't all already finished* - so checking !superpesis next hours
         after today's matches ended reports the actual next matchday
-        instead of repeating today's now-stale result.
+        instead of repeating today's now-stale result. Unlike liiga.fi,
+        this API has no "next date with matches" hint to jump straight
+        to, hence the bounded linear search rather than a single lookup.
 
         Returns a ("found", date_str, matches_dict) / ("not_found", None,
         None) / ("error", None, None) triple - kept distinct from a plain

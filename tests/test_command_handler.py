@@ -9,9 +9,10 @@ from command_handler import CommandHandler
 
 @pytest.fixture
 def handler(monkeypatch):
-    # WeatherCommand.__init__ raises if WEATHER_API_KEY is unset; the other
-    # command constructors don't make network calls, so a real
-    # CommandHandler can be built safely as long as this is set.
+    # No command constructor raises or makes a network call on a missing
+    # API key (see base_command.py's contract) - setting this isn't
+    # strictly required, but keeps WeatherCommand's own tests' env
+    # expectations consistent with a real CommandHandler being built here.
     monkeypatch.setenv("WEATHER_API_KEY", "test-key")
     return CommandHandler()
 

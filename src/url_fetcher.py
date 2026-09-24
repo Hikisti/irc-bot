@@ -11,6 +11,8 @@ class URLFetcher:
 
     MAX_TITLE_LENGTH = 300        # Max allowed title length to avoid excess flood kicks
 
+    URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
+
     # Domains that should be ignored (no title fetching)
     BLACKLISTED_DOMAINS = {
         "maps.google.com",
@@ -52,8 +54,7 @@ class URLFetcher:
         Extracts valid HTTP/HTTPS URLs using regex.
         This avoids issues with malformed or weird characters.
         """
-        url_pattern = re.compile(r"https?://[^\s<>\"']+")
-        return url_pattern.findall(text)
+        return self.URL_PATTERN.findall(text)
 
     def is_blacklisted(self, domain: str) -> bool:
         """
@@ -81,10 +82,11 @@ class URLFetcher:
         try:
             if "youtube.com" in domain or "youtu.be" in domain:
                 return self.get_youtube_info(url)
-            elif "instagram.com" in domain:
-                return self.get_instagram_title(url)
-            else:
-                return self.get_generic_title(url)
+            # Instagram often blocks scraping - falling through to the
+            # generic handler (which may return a basic page title) is
+            # already the whole "Instagram-specific" behavior, so there's
+            # no separate method for it.
+            return self.get_generic_title(url)
         except Exception as e:
             return f"Error fetching title: {e}"
 
@@ -143,13 +145,6 @@ class URLFetcher:
 
         except Exception as e:
             return format_request_error(e, "YouTube")
-
-    def get_instagram_title(self, url):
-        """
-        Instagram often blocks scraping.
-        Fall back to generic title method, which may return a basic page title.
-        """
-        return self.get_generic_title(url)
 
     def trim_message(self, text):
         """
