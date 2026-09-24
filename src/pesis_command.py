@@ -309,6 +309,11 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         return all_ended
 
     def _process_match(self, irc_bot, channel, match, prev):
+        """One poll's worth of work for a single in-progress match: fetch
+        its events, announce whatever's newly detected (delegated to
+        _announce_runs()/_announce_period_ends(), both mutating
+        `announced`/`ended_periods` in place), then return the new state
+        to replace `prev` with."""
         if prev.get("finished"):
             # Confirmed live: the event feed can keep appending events
             # (apparent corrections/re-syncs to a period's tally) well
@@ -334,76 +339,13 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
             runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
                 events, home_id, away_id,
             )
-
-            # Sorted so a poll that finds new runs in more than one
-            # period/side announces them in a sensible (period, then
-            # side) order rather than arbitrary dict order.
-            for period, side in sorted(runs_by_period_side, key=lambda k: (k[0] if k[0] is not None else -1, k[1])):
-                items = runs_by_period_side[(period, side)]
-                # Pesäpallo scores each jakso independently, not as a
-                # match-long running total (the API's own result object
-                # bears this out: it has separate per-period run arrays,
-                # not one cumulative count) - so this is scoped to a
-                # single period, not the whole match. Never let the
-                # announced count for a side exceed pesistulokset.fi's
-                # own authoritative period total: confirmed live (match
-                # 147201) that a play can apparently get retracted and
-                # reissued mid-game with different content (e.g.
-                # correcting who was actually at bat), which would
-                # otherwise risk a double-announced or over-the-real-total
-                # score. The authoritative total is always eventually
-                # correct (confirmed against real final results), so
-                # capping against it is a safe invariant regardless of
-                # what's actually happening in the raw feed.
-                authoritative = self._period_runs(live, side, period)
-                already = announced.get((period, side), 0)
-                limit = len(items) if authoritative is None else min(len(items), authoritative)
-                scoring_team_id = home_id if side == "home" else away_id
-                for idx in range(already, limit):
-                    event, player_ref, batter = items[idx]
-                    announced[(period, side)] = idx + 1
-                    scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
-                    # The batter ("lyöjä") who put the ball in play is a
-                    # separate person from the runner who scored
-                    # ("etenijä") - resolved the same way (roster first,
-                    # since it's just as likely to be a jersey number).
-                    batter_name = (
-                        self._resolve_scorer_name(None, scoring_team_id, batter, roster)
-                        if batter is not None else None
-                    )
-                    self._safe_send(irc_bot, channel, self._format_run(
-                        event, home_name, away_name, announced.get((period, "home"), 0),
-                        announced.get((period, "away"), 0), scoring_team_id, home_id,
-                        scorer_name, batter_name,
-                    ))
-                if authoritative is not None and len(items) > limit:
-                    # Diagnostic, not an error: means more run-shaped
-                    # sub-events have been detected for this side/period
-                    # than pesistulokset.fi's own authoritative total
-                    # currently confirms - either that total simply hasn't
-                    # caught up yet (this will resolve itself once it
-                    # does, since `already` is never advanced past
-                    # `limit`) or one of the detected ones is a retraction
-                    # artifact that will never be confirmed. Either way,
-                    # logged so a recurrence leaves hard evidence.
-                    print(
-                        f"{self.DISPLAY_NAME}: match {prev['match_id']} period {period} ({side}) has "
-                        f"{len(items)} detected run(s) but authoritative total is only "
-                        f"{authoritative} - holding back {len(items) - limit}"
-                    )
-
-            for period, text in period_end_by_period.items():
-                if period in ended_periods:
-                    continue
-                ended_periods.add(period)
-                # The period's own final tally, using whatever was
-                # actually announced for it above (capped at
-                # authoritative the same way, so this can't show a number
-                # pesistulokset.fi's own page wouldn't).
-                self._safe_send(irc_bot, channel, self._format_period_end(
-                    text, home_name, away_name,
-                    announced.get((period, "home"), 0), announced.get((period, "away"), 0),
-                ))
+            self._announce_runs(
+                irc_bot, channel, prev["match_id"], live, home_id, away_id,
+                home_name, away_name, roster, runs_by_period_side, announced,
+            )
+            self._announce_period_ends(
+                irc_bot, channel, home_name, away_name, period_end_by_period, ended_periods, announced,
+            )
 
         # Informational only (e.g. for anyone inspecting state) - nothing
         # above is gated by this; monotonic so a transiently shorter API
@@ -442,6 +384,84 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
             "announced": announced,
             "ended_periods": ended_periods,
         }
+
+    def _announce_runs(self, irc_bot, channel, match_id, live, home_id, away_id,
+                        home_name, away_name, roster, runs_by_period_side, announced):
+        """Announces every newly-detected run for each (period, side)
+        bucket in `runs_by_period_side`, advancing `announced` (mutated in
+        place, {(period, side): count}) as it goes."""
+        # Sorted so a poll that finds new runs in more than one
+        # period/side announces them in a sensible (period, then side)
+        # order rather than arbitrary dict order.
+        for period, side in sorted(runs_by_period_side, key=lambda k: (k[0] if k[0] is not None else -1, k[1])):
+            items = runs_by_period_side[(period, side)]
+            # Pesäpallo scores each jakso independently, not as a
+            # match-long running total (the API's own result object bears
+            # this out: it has separate per-period run arrays, not one
+            # cumulative count) - so this is scoped to a single period,
+            # not the whole match. Never let the announced count for a
+            # side exceed pesistulokset.fi's own authoritative period
+            # total: confirmed live (match 147201) that a play can
+            # apparently get retracted and reissued mid-game with
+            # different content (e.g. correcting who was actually at
+            # bat), which would otherwise risk a double-announced or
+            # over-the-real-total score. The authoritative total is
+            # always eventually correct (confirmed against real final
+            # results), so capping against it is a safe invariant
+            # regardless of what's actually happening in the raw feed.
+            authoritative = self._period_runs(live, side, period)
+            already = announced.get((period, side), 0)
+            limit = len(items) if authoritative is None else min(len(items), authoritative)
+            scoring_team_id = home_id if side == "home" else away_id
+            for idx in range(already, limit):
+                event, player_ref, batter = items[idx]
+                announced[(period, side)] = idx + 1
+                scorer_name = self._resolve_scorer_name(player_ref, scoring_team_id, batter, roster)
+                # The batter ("lyöjä") who put the ball in play is a
+                # separate person from the runner who scored ("etenijä")
+                # - resolved the same way (roster first, since it's just
+                # as likely to be a jersey number).
+                batter_name = (
+                    self._resolve_scorer_name(None, scoring_team_id, batter, roster)
+                    if batter is not None else None
+                )
+                self._safe_send(irc_bot, channel, self._format_run(
+                    event, home_name, away_name, announced.get((period, "home"), 0),
+                    announced.get((period, "away"), 0), scoring_team_id, home_id,
+                    scorer_name, batter_name,
+                ))
+            if authoritative is not None and len(items) > limit:
+                # Diagnostic, not an error: means more run-shaped
+                # sub-events have been detected for this side/period than
+                # pesistulokset.fi's own authoritative total currently
+                # confirms - either that total simply hasn't caught up
+                # yet (this will resolve itself once it does, since
+                # `already` is never advanced past `limit`) or one of the
+                # detected ones is a retraction artifact that will never
+                # be confirmed. Either way, logged so a recurrence leaves
+                # hard evidence.
+                print(
+                    f"{self.DISPLAY_NAME}: match {match_id} period {period} ({side}) has "
+                    f"{len(items)} detected run(s) but authoritative total is only "
+                    f"{authoritative} - holding back {len(items) - limit}"
+                )
+
+    def _announce_period_ends(self, irc_bot, channel, home_name, away_name,
+                               period_end_by_period, ended_periods, announced):
+        """Announces every newly-ended period in `period_end_by_period`,
+        advancing `ended_periods` (mutated in place) as it goes."""
+        for period, text in period_end_by_period.items():
+            if period in ended_periods:
+                continue
+            ended_periods.add(period)
+            # The period's own final tally, using whatever was actually
+            # announced for it above (capped at authoritative the same
+            # way, so this can't show a number pesistulokset.fi's own
+            # page wouldn't).
+            self._safe_send(irc_bot, channel, self._format_period_end(
+                text, home_name, away_name,
+                announced.get((period, "home"), 0), announced.get((period, "away"), 0),
+            ))
 
     # ---- match summary (start message) ---------------------------------
 
