@@ -121,55 +121,9 @@ class TimeCommand(BaseCommand):
         date_str = data.get("date", "")
         time_str = data.get("time_24", "")
 
-        location_info = (
-            data.get("location") or 
-            data.get("geo") or 
-            {}
-        )
-        
-        city_from_api = (
-            location_info.get("city") or
-            location_info.get("location_string") or
-            location_info.get("city_name") or
-            city_name
-        )
-        
-        country_name = (
-            location_info.get("country_name") or
-            location_info.get("country") or
-            data.get("country_name") or
-            None
-        )
-
-        city_display = city_from_api.strip()
-        
-        # Remove trailing country name if city already contains it to avoid duplication
-        if country_name and city_display.lower().endswith(", " + country_name.lower()):
-            city_display = city_display[: -(len(", " + country_name))].rstrip()
-        
-        if city_display:
-            city_display = city_display[0].upper() + city_display[1:]
-
-        if country_name:
-            location = f"{city_display}, {country_name}"
-        else:
-            location = city_display
-
-        formatted_date = date_str
-        if len(date_str) == 10 and date_str.count("-") == 2:
-            yyyy, mm, dd = date_str.split("-")
-            formatted_date = f"{dd}/{mm}/{yyyy[2:]}"
-
-        timezone_name = data.get("timezone")
-        tz_abbr = None
-        if timezone_name and date_str and time_str:
-            time_format = "%H:%M:%S" if time_str.count(":") == 2 else "%H:%M"
-            try:
-                naive_dt = datetime.strptime(f"{date_str} {time_str}", f"%Y-%m-%d {time_format}")
-                tz_abbr = naive_dt.replace(tzinfo=ZoneInfo(timezone_name)).tzname()
-            except Exception as e:
-                print(f"Failed to resolve timezone abbreviation for '{timezone_name}': {e}")
-                tz_abbr = None
+        location = self._format_location(data, city_name)
+        formatted_date = self._format_date(date_str)
+        tz_abbr = self._resolve_tz_abbr(date_str, time_str, data.get("timezone"))
 
         if len(time_str) == 5:
             time_str = time_str + ":00"
@@ -178,6 +132,57 @@ class TimeCommand(BaseCommand):
         timezone_suffix = f" {tz_label}" if tz_label else ""
 
         return f"Local time in {location}: {formatted_date} {time_str}{timezone_suffix}"
+
+    def _format_location(self, data, fallback_city_name) -> str:
+        location_info = (
+            data.get("location") or
+            data.get("geo") or
+            {}
+        )
+
+        city_from_api = (
+            location_info.get("city") or
+            location_info.get("location_string") or
+            location_info.get("city_name") or
+            fallback_city_name
+        )
+
+        country_name = (
+            location_info.get("country_name") or
+            location_info.get("country") or
+            data.get("country_name") or
+            None
+        )
+
+        city_display = city_from_api.strip()
+
+        # Remove trailing country name if city already contains it to avoid duplication
+        if country_name and city_display.lower().endswith(", " + country_name.lower()):
+            city_display = city_display[: -(len(", " + country_name))].rstrip()
+
+        if city_display:
+            city_display = city_display[0].upper() + city_display[1:]
+
+        if country_name:
+            return f"{city_display}, {country_name}"
+        return city_display
+
+    def _format_date(self, date_str) -> str:
+        if len(date_str) == 10 and date_str.count("-") == 2:
+            yyyy, mm, dd = date_str.split("-")
+            return f"{dd}/{mm}/{yyyy[2:]}"
+        return date_str
+
+    def _resolve_tz_abbr(self, date_str, time_str, timezone_name):
+        if not (timezone_name and date_str and time_str):
+            return None
+        time_format = "%H:%M:%S" if time_str.count(":") == 2 else "%H:%M"
+        try:
+            naive_dt = datetime.strptime(f"{date_str} {time_str}", f"%Y-%m-%d {time_format}")
+            return naive_dt.replace(tzinfo=ZoneInfo(timezone_name)).tzname()
+        except Exception as e:
+            print(f"Failed to resolve timezone abbreviation for '{timezone_name}': {e}")
+            return None
 
     @staticmethod
     def _format_tz_label(tz_name):

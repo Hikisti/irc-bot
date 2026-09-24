@@ -100,6 +100,49 @@ class TestExecute:
         assert "Invalid race data received" in result
 
 
+class TestCollectEvents:
+    def test_flattens_sessions_and_race_sorted_by_start_time(self, f1_command):
+        events = f1_command._collect_events(RACE_JSON["MRData"]["RaceTable"]["Races"])
+        labels_in_order = [label for label, _dt, _race in events]
+        # Chinese GP's FirstPractice/Qualifying/Race, then Japanese GP's
+        # FirstPractice/Race - chronological, not grouped by race.
+        assert labels_in_order == ["Practice 1", "Qualifying", "Race", "Practice 1", "Race"]
+
+    def test_skips_non_dict_race_entries(self, f1_command):
+        events = f1_command._collect_events(["not-a-race", None])
+        assert events == []
+
+    def test_race_with_no_parseable_dates_yields_nothing(self, f1_command):
+        events = f1_command._collect_events([{"raceName": "X"}])
+        assert events == []
+
+
+class TestFindOngoingAndNext:
+    def test_finds_ongoing_and_the_event_right_after_it(self, f1_command, frozen_now):
+        events = f1_command._collect_events(RACE_JSON["MRData"]["RaceTable"]["Races"])
+        ongoing, next_ = f1_command._find_ongoing_and_next(events)
+        assert ongoing[0] == "Race"
+        assert ongoing[2]["raceName"] == "Chinese Grand Prix"
+        assert next_[0] == "Practice 1"
+        assert next_[2]["raceName"] == "Japanese Grand Prix"
+
+    def test_nothing_ongoing_returns_first_future_event_as_next(self, f1_command):
+        # "now" is real time here, far outside the fixture data's 2026
+        # session windows below - construct events entirely in the future.
+        far_future = datetime.datetime(2099, 1, 1, tzinfo=pytz.UTC)
+        events = [("Race", far_future, {"raceName": "Future GP"})]
+        ongoing, next_ = f1_command._find_ongoing_and_next(events)
+        assert ongoing is None
+        assert next_[2]["raceName"] == "Future GP"
+
+    def test_everything_in_the_past_returns_nothing(self, f1_command):
+        past = datetime.datetime(2000, 1, 1, tzinfo=pytz.UTC)
+        events = [("Race", past, {"raceName": "Old GP"})]
+        ongoing, next_ = f1_command._find_ongoing_and_next(events)
+        assert ongoing is None
+        assert next_ is None
+
+
 class TestParseDt:
     def test_parses_valid_date_and_time(self, f1_command):
         dt = f1_command._parse_dt("2026-03-15", "07:00:00Z")

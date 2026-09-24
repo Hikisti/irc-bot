@@ -158,6 +158,56 @@ class TestTimezoneAbbreviation:
         mock_get.assert_called_once()
 
 
+class TestFormatLocation:
+    def test_uses_city_and_country_from_location(self, time_command):
+        data = {"location": {"city": "Austin", "country_name": "United States"}}
+        assert time_command._format_location(data, "austin") == "Austin, United States"
+
+    def test_falls_back_to_geo_key(self, time_command):
+        data = {"geo": {"city": "Austin", "country_name": "United States"}}
+        assert time_command._format_location(data, "austin") == "Austin, United States"
+
+    def test_falls_back_to_the_queried_city_name(self, time_command):
+        assert time_command._format_location({}, "austin") == "Austin"
+
+    def test_dedupes_country_already_in_the_city_string(self, time_command):
+        data = {"location": {"city": "Chicago, United States", "country_name": "United States"}}
+        assert time_command._format_location(data, "chicago") == "Chicago, United States"
+
+    def test_no_country_returns_bare_city(self, time_command):
+        data = {"location": {"city": "somewhere"}}
+        assert time_command._format_location(data, "somewhere") == "Somewhere"
+
+
+class TestFormatDate:
+    def test_reformats_iso_date(self, time_command):
+        assert time_command._format_date("2026-01-15") == "15/01/26"
+
+    def test_wrong_length_passes_through_unchanged(self, time_command):
+        assert time_command._format_date("2026-1-1") == "2026-1-1"
+
+    def test_empty_string_passes_through(self, time_command):
+        assert time_command._format_date("") == ""
+
+
+class TestResolveTzAbbr:
+    def test_resolves_named_abbreviation(self, time_command):
+        assert time_command._resolve_tz_abbr("2026-01-15", "13:00:39", "America/Chicago") == "CST"
+
+    def test_resolves_short_time_format(self, time_command):
+        assert time_command._resolve_tz_abbr("2026-01-15", "13:00", "America/Chicago") == "CST"
+
+    def test_missing_timezone_returns_none(self, time_command):
+        assert time_command._resolve_tz_abbr("2026-01-15", "13:00:39", None) is None
+
+    def test_missing_date_or_time_returns_none(self, time_command):
+        assert time_command._resolve_tz_abbr("", "13:00:39", "America/Chicago") is None
+        assert time_command._resolve_tz_abbr("2026-01-15", "", "America/Chicago") is None
+
+    def test_invalid_timezone_name_returns_none(self, time_command):
+        assert time_command._resolve_tz_abbr("2026-01-15", "13:00:39", "Not/AZone") is None
+
+
 class TestFormatTzLabel:
     def test_named_abbreviation_passes_through(self):
         assert TimeCommand._format_tz_label("CDT") == "CDT"

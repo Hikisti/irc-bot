@@ -63,45 +63,15 @@ class F1Command(BaseCommand):
             return "No F1 races found for current season."
 
         try:
-            now = datetime.datetime.now(pytz.UTC)
-            all_events = []
-
-            for race in races:
-                if not isinstance(race, dict):
-                    continue
-                for key, label in self.SESSION_ORDER:
-                    if key in race:
-                        dt = self._parse_session_dt(race[key])
-                        if dt:
-                            all_events.append((label, dt, race))
-                race_dt = self._parse_dt(race.get("date"), race.get("time"))
-                if race_dt:
-                    all_events.append(("Race", race_dt, race))
-
-            all_events.sort(key=lambda x: x[1])
-
+            all_events = self._collect_events(races)
         except Exception as e:
             return f"Error: Failed to process F1 schedule: {e}."
 
         if not all_events:
             return "No F1 sessions found for current season."
 
-        ongoing_event = None
-        next_event = None
-
         try:
-            for i, (label, dt, race_info) in enumerate(all_events):
-                end_dt = dt + datetime.timedelta(hours=self.RACE_DURATION_HOURS)
-
-                if dt <= now < end_dt:
-                    ongoing_event = (label, dt, race_info)
-                    if i + 1 < len(all_events):
-                        next_event = all_events[i + 1]
-                    break
-
-                if dt > now and next_event is None:
-                    next_event = (label, dt, race_info)
-                    break
+            ongoing_event, next_event = self._find_ongoing_and_next(all_events)
         except Exception as e:
             return f"Error: Failed to determine next F1 event: {e}."
 
@@ -119,6 +89,51 @@ class F1Command(BaseCommand):
             return "No upcoming F1 events found."
 
         return " || ".join(parts)
+
+    def _collect_events(self, races):
+        """Flattens every race's own sessions (practice/qualifying/sprint,
+        per SESSION_ORDER, plus the race itself) into one
+        [(label, dt, race_info), ...] list, sorted by start time."""
+        all_events = []
+        for race in races:
+            if not isinstance(race, dict):
+                continue
+            for key, label in self.SESSION_ORDER:
+                if key in race:
+                    dt = self._parse_session_dt(race[key])
+                    if dt:
+                        all_events.append((label, dt, race))
+            race_dt = self._parse_dt(race.get("date"), race.get("time"))
+            if race_dt:
+                all_events.append(("Race", race_dt, race))
+
+        all_events.sort(key=lambda x: x[1])
+        return all_events
+
+    def _find_ongoing_and_next(self, all_events):
+        """Returns (ongoing_event, next_event) from `all_events` (already
+        sorted by start time): the first event whose
+        [start, start + RACE_DURATION_HOURS) window contains right now
+        (or None), and whichever event comes right after it - or, if
+        nothing's ongoing, the first event still in the future."""
+        now = datetime.datetime.now(pytz.UTC)
+        ongoing_event = None
+        next_event = None
+
+        for i, (label, dt, race_info) in enumerate(all_events):
+            end_dt = dt + datetime.timedelta(hours=self.RACE_DURATION_HOURS)
+
+            if dt <= now < end_dt:
+                ongoing_event = (label, dt, race_info)
+                if i + 1 < len(all_events):
+                    next_event = all_events[i + 1]
+                break
+
+            if dt > now and next_event is None:
+                next_event = (label, dt, race_info)
+                break
+
+        return ongoing_event, next_event
 
     def _format_event(self, label, dt, race_info) -> str:
         local_dt = dt.astimezone(self.HELSINKI_TZ)
