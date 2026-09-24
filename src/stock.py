@@ -1,5 +1,7 @@
 import yfinance as yf
 
+from irc_format import signed_change_color
+
 class StockCommand:
     """Fetches stock price and market data for a given ticker symbol."""
 
@@ -34,7 +36,7 @@ class StockCommand:
             volume_k = volume / 1_000 if volume else 0
 
             # IRC color: green or red
-            color = "\x0309" if change_currency >= 0 else "\x0304"
+            color = signed_change_color(change_currency)
 
             return (
                 f"\x02{short_name} ({symbol}):\x02 {price:.2f} {currency}, "

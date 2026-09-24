@@ -1,6 +1,8 @@
 from pycoingecko import CoinGeckoAPI
 import requests
 
+from irc_format import signed_change_color
+
 class CryptoCommand:
     """Handles cryptocurrency price queries using CoinGecko API."""
 
@@ -44,7 +46,7 @@ class CryptoCommand:
                 return f"Error: Unexpected API response for '{crypto_name}'."
 
             # Choose IRC color formatting
-            color = "\x0309" if change_currency >= 0 else "\x0304"  # Green for positive, Red for negative
+            color = signed_change_color(change_currency)
 
             return f"\x02{crypto_name.capitalize()} {currency.upper()}:\x02 {price:.2f} {currency.upper()}, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}B."
 
