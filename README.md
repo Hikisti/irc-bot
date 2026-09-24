@@ -133,3 +133,13 @@ All tests mock outgoing network calls, so no API keys are required to run the su
 src/     - bot and command implementations
 tests/   - pytest test suite (mirrors src/, one test file per module)
 ```
+
+## Deployment
+
+`.github/workflows/ci-cd.yml` runs the test suite on every push and pull
+request. A push to `main` (or a manual run from the Actions tab) also
+deploys: it SSHes into the production server as a dedicated, unprivileged
+deploy user, pulls the latest `main`, updates dependencies, and restarts
+the bot's service — that user's `sudo` access is scoped to just restarting
+and checking the one service, nothing more. Server-specific setup details
+aren't kept in this repo.

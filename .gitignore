@@ -131,6 +131,11 @@ celerybeat.pid
 src/.superpesis_series_cache.json
 src/.ykkospesis_series_cache.json
 
+# Server-specific deploy notes (real paths/usernames/sudoers wording -
+# kept local-only, not meant for the public repo; see chat history for
+# the reasoning). Back this up somewhere private, not here.
+DEPLOY.md
+
 # Environments
 .env
 .venv
