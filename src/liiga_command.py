@@ -1,12 +1,12 @@
 import datetime
-import threading
 import traceback
 
-import pytz
 import requests
 
+from live_tracker_command import LiveTrackerCommand
 
-class LiigaCommand:
+
+class LiigaCommand(LiveTrackerCommand):
     """
     Live-tracks today's Finnish Liiga (ice hockey) games in a channel,
     announcing goals and final scores as they happen. Uses the unofficial
@@ -20,16 +20,21 @@ class LiigaCommand:
     All network I/O (the initial lookup and every later poll) happens on a
     background thread, never on the caller's thread, so a slow or hanging
     liiga.fi response can't stall the bot's main IRC loop.
+
+    See live_tracker_command.py for the shared start/stop/next lifecycle
+    this inherits; only the actual fetching/announcing (_run, _poll_once,
+    _fetch_next_period, ...) is Liiga-specific.
     """
 
-    # Tells CommandHandler to pass irc_bot/channel into execute().
-    needs_irc_context = True
+    DISPLAY_NAME = "Liiga"
+    COMMAND_NAME = "!liiga"
+    CACHE_SLUG = "Liiga"
+    TRACKED_NOUN = "games"
+    PERIOD_NOUN = "gameday"
+    STATE_KEY = "games"
 
     BASE_URL = "https://www.liiga.fi/api/v2/games"
     TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]
-    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
-    POLL_INTERVAL_SECONDS = 30
-    REQUEST_TIMEOUT_SECONDS = 10
 
     # Fallback bound for !liiga next's day-by-day search when today had
     # games but they're all already finished (so the API's own
@@ -48,93 +53,13 @@ class LiigaCommand:
     GOAL_PREFIX = f"{BOLD}{GREEN}GOAL:{COLOR_RESET}"
     FINAL_PREFIX = f"{BOLD}{ORANGE}FINAL:{COLOR_RESET}"
 
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "KukistiBot-Liiga/1.0",
-            "Accept": "application/json",
-        })
-        self._lock = threading.Lock()
-        self._channels = {}  # channel -> {"stop_event", "thread", "games"}
+    # ---- "next" lookup hooks (see LiveTrackerCommand._run_next) --------
 
-    def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
-        arg = (args or "").strip().lower()
+    def _fetch_next_period(self, context):
+        return self._fetch_next_gameday()
 
-        if arg == "start":
-            return self._start(irc_bot, channel)
-        elif arg == "stop":
-            return self._stop(channel)
-        elif arg == "next":
-            return self._next(irc_bot, channel)
-        return "Usage: !liiga start | !liiga stop | !liiga next"
-
-    # ---- start / stop -----------------------------------------------
-
-    def _start(self, irc_bot, channel):
-        if irc_bot is None or channel is None:
-            return "Error: live tracking is unavailable without channel context."
-
-        with self._lock:
-            if channel in self._channels:
-                return "Already tracking live Liiga games in this channel."
-            # Reserve the slot up front (before any network I/O) so a second
-            # !liiga start can't race in while the first lookup is in flight.
-            stop_event = threading.Event()
-            self._channels[channel] = {"stop_event": stop_event, "thread": None, "games": {}}
-
-        thread = threading.Thread(
-            target=self._run,
-            args=(irc_bot, channel, stop_event),
-            daemon=True,
-        )
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None and entry["stop_event"] is stop_event:
-                entry["thread"] = thread
-        thread.start()
-
-        return "Checking today's Liiga games..."
-
-    def _stop(self, channel):
-        with self._lock:
-            entry = self._channels.pop(channel, None)
-        if not entry:
-            return "Not currently tracking Liiga games in this channel."
-        entry["stop_event"].set()
-        return "Stopped live Liiga tracking."
-
-    def _next(self, irc_bot, channel):
-        if irc_bot is None or channel is None:
-            return "Error: this command needs channel context."
-
-        # A one-shot lookup, not persistent tracking - no need to reserve a
-        # channel slot the way !liiga start does. Still runs on a background
-        # thread so a slow API can't stall the bot.
-        threading.Thread(
-            target=self._run_next,
-            args=(irc_bot, channel),
-            daemon=True,
-        ).start()
-
-        return "Checking the next Liiga gameday..."
-
-    def _run_next(self, irc_bot, channel):
-        try:
-            date_str, games = self._fetch_next_gameday()
-        except Exception as e:
-            print(f"Liiga next-gameday fetch error: {e}")
-            date_str, games = None, None
-
-        if games is None:
-            self._safe_send(irc_bot, channel, "Error: could not reach the Liiga API.")
-            return
-        if not games:
-            self._safe_send(irc_bot, channel, "No upcoming Liiga games found.")
-            return
-
-        label = self._format_date_label(date_str)
-        summary = self._format_games_summary(games.values())
-        self._safe_send(irc_bot, channel, f"Next Liiga gameday ({label}): {summary}")
+    def _format_period_summary(self, items):
+        return self._format_games_summary(items)
 
     # ---- background thread entry point --------------------------------
 
@@ -169,43 +94,7 @@ class LiigaCommand:
 
         self._poll_loop(irc_bot, channel, stop_event)
 
-    def _drop_if_current(self, channel, stop_event):
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None and entry["stop_event"] is stop_event:
-                del self._channels[channel]
-
-    def _safe_send(self, irc_bot, channel, message):
-        """Never let a broken connection/socket take the polling thread down."""
-        try:
-            irc_bot.send_message(channel, message)
-        except Exception as e:
-            print(f"Liiga: failed to send message to {channel}: {e}")
-
-    # ---- polling loop -------------------------------------------------
-
-    def _poll_loop(self, irc_bot, channel, stop_event):
-        while not stop_event.is_set():
-            try:
-                all_ended = self._poll_once(irc_bot, channel)
-            except Exception as e:
-                # Last line of defense against anything not anticipated by
-                # a narrower handler below - print the traceback too, not
-                # just str(e), since nothing more specific caught this one.
-                print(f"Liiga poll error in {channel}: {e}")
-                traceback.print_exc()
-                all_ended = False
-
-            if all_ended:
-                self._drop_if_current(channel, stop_event)
-                self._safe_send(
-                    irc_bot, channel, "All of today's Liiga games have finished. Live tracking stopped."
-                )
-                return
-
-            stop_event.wait(self.POLL_INTERVAL_SECONDS)
-
-    def _poll_once(self, irc_bot, channel) -> bool:
+    def _poll_once(self, irc_bot, channel, *context_args) -> bool:
         """Fetch current game states and announce diffs since the last poll.
 
         Returns True once every tracked game has ended (nothing left to watch).
@@ -290,19 +179,6 @@ class LiigaCommand:
 
         order.sort(key=lambda label: (label == "??:??", label))
         return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
-
-    def _format_date_label(self, date_str) -> str:
-        try:
-            target = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            return date_str or "unknown date"
-
-        today = datetime.datetime.now(self.HELSINKI_TZ).date()
-        if target == today:
-            return "today"
-        if target == today + datetime.timedelta(days=1):
-            return "tomorrow"
-        return target.strftime("%a %d/%m")
 
     # ---- announcements --------------------------------------------------
 

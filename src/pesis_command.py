@@ -1,16 +1,16 @@
 import datetime
 import json
 import os
-import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-import pytz
 import requests
 
+from live_tracker_command import LiveTrackerCommand
 
-class PesisCommand:
+
+class PesisCommand(LiveTrackerCommand):
     """
     Live-tracks today's matches of a Finnish pesäpallo league/division in a
     channel, announcing runs and final results as they happen. Uses
@@ -137,8 +137,6 @@ class PesisCommand:
         mid-match doesn't replay it.
     """
 
-    needs_irc_context = True
-
     BASE_URL = "https://api.pesistulokset.fi/api/v1"
     # Public frontend API key, extracted from pesistulokset.fi's own JS
     # bundle - the same one every visitor's browser uses, not a secret.
@@ -156,14 +154,15 @@ class PesisCommand:
     # CommandHandler's job, driven by its own aliases config).
     COMMAND_NAME = None
 
+    TRACKED_NOUN = "matches"
+    PERIOD_NOUN = "matchday"
+    STATE_KEY = "matches"
+    REQUIRES_CONTEXT = True
+
     # How far forward "<command> next" searches, day by day, for the next
     # scheduled matchday - the API has no "next date with matches" hint
     # like liiga.fi does, so this is a bounded linear search instead.
     NEXT_SEARCH_MAX_DAYS = 21
-
-    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
-    POLL_INTERVAL_SECONDS = 30
-    REQUEST_TIMEOUT_SECONDS = 10
 
     # /public/series-list is ~1MB even filtered to the current season alone
     # (5.6MB unfiltered, across 82+ historical seasons) - confirmed live
@@ -199,13 +198,7 @@ class PesisCommand:
     }
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": f"KukistiBot-{self.CACHE_SLUG}/1.0",
-            "Accept": "application/json",
-        })
-        self._lock = threading.Lock()
-        self._channels = {}  # channel -> {"stop_event", "thread", "matches"}
+        super().__init__()
         self._player_cache = {}  # player id -> display name
         self._series_cache = None  # (series_id, resolved_at_epoch_seconds) or None; see _resolve_series_id()
         # Per-subclass (CACHE_SLUG) file, so !superpesis and !ykkospesis
@@ -214,94 +207,24 @@ class PesisCommand:
             os.path.dirname(os.path.abspath(__file__)), f".{self.CACHE_SLUG}_series_cache.json",
         )
 
-    def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
-        arg = (args or "").strip().lower()
+    # ---- "next" lookup hooks (see LiveTrackerCommand._run_next) --------
 
-        if arg == "start":
-            return self._start(irc_bot, channel)
-        elif arg == "stop":
-            return self._stop(channel)
-        elif arg == "next":
-            return self._next(irc_bot, channel)
-        return f"Usage: {self.COMMAND_NAME} start | {self.COMMAND_NAME} stop | {self.COMMAND_NAME} next"
+    def _resolve_context(self):
+        return self._resolve_series_id()
 
-    # ---- start / stop -----------------------------------------------
+    def _format_not_found_message(self) -> str:
+        return f"No upcoming {self.DISPLAY_NAME} matches found in the next {self.NEXT_SEARCH_MAX_DAYS} days."
 
-    def _start(self, irc_bot, channel):
-        if irc_bot is None or channel is None:
-            return "Error: live tracking is unavailable without channel context."
-
-        with self._lock:
-            if channel in self._channels:
-                return f"Already tracking live {self.DISPLAY_NAME} matches in this channel."
-            stop_event = threading.Event()
-            self._channels[channel] = {"stop_event": stop_event, "thread": None, "matches": {}}
-
-        thread = threading.Thread(
-            target=self._run,
-            args=(irc_bot, channel, stop_event),
-            daemon=True,
-        )
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None and entry["stop_event"] is stop_event:
-                entry["thread"] = thread
-        thread.start()
-
-        return f"Checking today's {self.DISPLAY_NAME} matches..."
-
-    def _stop(self, channel):
-        with self._lock:
-            entry = self._channels.pop(channel, None)
-        if not entry:
-            return f"Not currently tracking {self.DISPLAY_NAME} matches in this channel."
-        entry["stop_event"].set()
-        return f"Stopped live {self.DISPLAY_NAME} tracking."
-
-    def _next(self, irc_bot, channel):
-        if irc_bot is None or channel is None:
-            return "Error: this command needs channel context."
-
-        # One-shot lookup, no persistent state - still backgrounded so a
-        # slow API can't stall the bot.
-        threading.Thread(
-            target=self._run_next,
-            args=(irc_bot, channel),
-            daemon=True,
-        ).start()
-
-        return f"Checking the next {self.DISPLAY_NAME} matchday..."
-
-    def _run_next(self, irc_bot, channel):
-        try:
-            series_id = self._resolve_series_id()
-        except Exception as e:
-            print(f"{self.DISPLAY_NAME} series lookup error: {e}")
-            series_id = None
-
-        if series_id is None:
-            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
-            return
-
-        try:
-            status, date_str, matches = self._fetch_next_matchday(series_id)
-        except Exception as e:
-            print(f"{self.DISPLAY_NAME} next-matchday fetch error: {e}")
-            status, date_str, matches = "error", None, None
-
+    def _fetch_next_period(self, context):
+        status, date_str, matches = self._fetch_next_matchday(context)
         if status == "error":
-            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
-            return
+            return None, None
         if status == "not_found":
-            self._safe_send(
-                irc_bot, channel,
-                f"No upcoming {self.DISPLAY_NAME} matches found in the next {self.NEXT_SEARCH_MAX_DAYS} days.",
-            )
-            return
+            return None, {}
+        return date_str, matches
 
-        label = self._format_date_label(date_str)
-        summary = self._format_matches_summary(matches.values())
-        self._safe_send(irc_bot, channel, f"Next {self.DISPLAY_NAME} matchday ({label}): {summary}")
+    def _format_period_summary(self, items):
+        return self._format_matches_summary(items)
 
     # ---- background thread entry point --------------------------------
 
@@ -379,43 +302,6 @@ class PesisCommand:
                     state[mid]["announced"] = {key: len(items) for key, items in runs_by_period_side.items()}
                     state[mid]["ended_periods"] = set(period_end_by_period.keys())
                 state[mid]["roster"] = roster
-
-    def _drop_if_current(self, channel, stop_event):
-        with self._lock:
-            entry = self._channels.get(channel)
-            if entry is not None and entry["stop_event"] is stop_event:
-                del self._channels[channel]
-
-    def _safe_send(self, irc_bot, channel, message):
-        try:
-            irc_bot.send_message(channel, message)
-        except Exception as e:
-            print(f"{self.DISPLAY_NAME}: failed to send message to {channel}: {e}")
-
-    # ---- polling loop -------------------------------------------------
-
-    def _poll_loop(self, irc_bot, channel, stop_event, series_id):
-        while not stop_event.is_set():
-            try:
-                all_ended = self._poll_once(irc_bot, channel, series_id)
-            except Exception as e:
-                # This is the last line of defense against anything not
-                # anticipated by a narrower handler below - print the
-                # traceback too, not just str(e), since by definition
-                # nothing more specific caught this one.
-                print(f"{self.DISPLAY_NAME} poll error in {channel}: {e}")
-                traceback.print_exc()
-                all_ended = False
-
-            if all_ended:
-                self._drop_if_current(channel, stop_event)
-                self._safe_send(
-                    irc_bot, channel,
-                    f"All of today's {self.DISPLAY_NAME} matches have finished. Live tracking stopped.",
-                )
-                return
-
-            stop_event.wait(self.POLL_INTERVAL_SECONDS)
 
     def _poll_once(self, irc_bot, channel, series_id) -> bool:
         matches = self._fetch_today_matches(series_id)
@@ -977,19 +863,6 @@ class PesisCommand:
 
         order.sort(key=lambda label: (label == "??:??", label))
         return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
-
-    def _format_date_label(self, date_str) -> str:
-        try:
-            target = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            return date_str or "unknown date"
-
-        today = datetime.datetime.now(self.HELSINKI_TZ).date()
-        if target == today:
-            return "today"
-        if target == today + datetime.timedelta(days=1):
-            return "tomorrow"
-        return target.strftime("%a %d/%m")
 
     def _seed_snapshot(self, match):
         live = match.get("liveResult") or {}
