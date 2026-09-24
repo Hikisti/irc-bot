@@ -2,6 +2,7 @@ from pycoingecko import CoinGeckoAPI
 import requests
 
 from irc_format import signed_change_color
+from request_errors import format_request_error
 
 class CryptoCommand:
     """Handles cryptocurrency price queries using CoinGecko API."""
@@ -50,13 +51,5 @@ class CryptoCommand:
 
             return f"\x02{crypto_name.capitalize()} {currency.upper()}:\x02 {price:.2f} {currency.upper()}, today {color}{change_currency:+.2f} ({change_percent:+.2f}%)\x03. Volume {volume:.2f}B."
 
-        except requests.exceptions.HTTPError as e:
-            return f"Error: HTTP error from CoinGecko ({e.response.status_code}). Try again later."
-        except requests.exceptions.ConnectionError:
-            return "Error: Cannot connect to CoinGecko. Check your internet connection."
-        except requests.exceptions.Timeout:
-            return "Error: Request to CoinGecko timed out. Try again later."
-        except requests.exceptions.RequestException:
-            return "Error: Failed to fetch cryptocurrency data. Try again later."
         except Exception as e:
-            return f"Unexpected error: {e}"
+            return format_request_error(e, "CoinGecko")

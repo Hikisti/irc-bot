@@ -3,6 +3,8 @@ import datetime
 import pytz
 from decimal import Decimal, ROUND_HALF_UP
 
+from request_errors import format_request_error
+
 
 class ElectricityCommand:
     """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
@@ -69,13 +71,5 @@ class ElectricityCommand:
             
             return result
 
-        except requests.exceptions.Timeout:
-            return "Error: Electricity price request timed out. Please try again later."
-        except requests.exceptions.ConnectionError:
-            return "Error: Unable to connect to the electricity price API."
-        except requests.exceptions.HTTPError as e:
-            return f"Error: API returned {e.response.status_code} {e.response.reason}."
-        except requests.exceptions.RequestException:
-            return "Error: Failed to retrieve electricity price data."
-        except Exception:
-            return "Error: An unexpected issue occurred while fetching electricity prices."
+        except Exception as e:
+            return format_request_error(e, "Electricity price API")

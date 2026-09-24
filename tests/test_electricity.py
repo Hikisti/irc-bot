@@ -73,7 +73,7 @@ class TestElectricityCommand:
             "src.electricity.requests.get", side_effect=requests.exceptions.ConnectionError
         ):
             result = electricity_command.execute()
-        assert "Unable to connect" in result
+        assert "Could not connect" in result
 
     def test_http_error_includes_status(self, electricity_command):
         with patch("src.electricity.requests.get", return_value=make_response({}, 500)):

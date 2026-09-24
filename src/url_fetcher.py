@@ -3,6 +3,8 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
+from request_errors import format_request_error
+
 
 class URLFetcher:
     """Detects URLs in IRC messages and fetches their titles with service-specific handling."""
@@ -108,16 +110,8 @@ class URLFetcher:
 
             return None  # No usable title found
 
-        except requests.exceptions.Timeout:
-            return "Error: The request timed out."
-        except requests.exceptions.ConnectionError:
-            return "Error: Could not connect to the server."
-        except requests.exceptions.HTTPError:
-            return f"Error: HTTP {response.status_code}"
-        except requests.exceptions.RequestException:
-            return "Error: Failed to fetch webpage."
-        except Exception:
-            return "Error: Unexpected error while fetching the title."
+        except Exception as e:
+            return format_request_error(e, "the webpage")
 
     def get_youtube_info(self, url):
         """
@@ -147,16 +141,8 @@ class URLFetcher:
 
             return f"YouTube: {data['title']} (by {data['author_name']})"
 
-        except requests.exceptions.HTTPError as e:
-            return f"Error: HTTP {e.response.status_code} while retrieving YouTube details."
-        except requests.exceptions.Timeout:
-            return "Error: YouTube request timed out."
-        except requests.exceptions.ConnectionError:
-            return "Error: Could not connect to YouTube."
-        except requests.exceptions.RequestException:
-            return "Error: Failed to fetch YouTube video details."
-        except Exception:
-            return "Error: Unexpected issue while fetching YouTube info."
+        except Exception as e:
+            return format_request_error(e, "YouTube")
 
     def get_instagram_title(self, url):
         """

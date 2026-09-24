@@ -2,6 +2,8 @@ import requests
 import datetime
 import pytz
 
+from request_errors import format_request_error
+
 
 class F1Command:
     """
@@ -41,18 +43,8 @@ class F1Command:
                 timeout=5,
             )
             resp.raise_for_status()
-        except requests.exceptions.Timeout:
-            return "Error: F1 API request timed out."
-        except requests.exceptions.ConnectionError:
-            return "Error: Could not connect to F1 API."
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "unknown"
-            reason = e.response.reason if e.response else "Unknown"
-            return f"Error: F1 API returned HTTP {status} {reason}."
-        except requests.exceptions.RequestException as e:
-            return f"Error: F1 API request failed: {e}."
         except Exception as e:
-            return f"Error: Unexpected issue fetching F1 data: {e}."
+            return format_request_error(e, "F1 API")
 
         try:
             data = resp.json()

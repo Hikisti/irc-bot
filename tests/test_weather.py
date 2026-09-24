@@ -96,7 +96,7 @@ class TestWeatherCommand:
     def test_connection_error_returns_friendly_error(self, weather_command):
         with patch("src.weather.requests.get", side_effect=requests.exceptions.ConnectionError):
             result = weather_command.execute("austin")
-        assert "Unable to connect" in result
+        assert "Could not connect" in result
 
     def test_http_error_returns_status_in_message(self, weather_command):
         error_response = make_response({}, status_code=404)

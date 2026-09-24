@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from src.crypto import CryptoCommand
+from tests.conftest import make_json_response
 
 
 @pytest.fixture
@@ -64,10 +65,10 @@ class TestCryptoCommand:
         assert "Incomplete data" in result
 
     def test_http_error_returns_friendly_message(self, crypto_command):
-        error = requests.exceptions.HTTPError(response=type("R", (), {"status_code": 500})())
+        error = requests.exceptions.HTTPError(response=make_json_response({}, status_code=500))
         with patch.object(crypto_command.cg, "get_price", side_effect=error):
             result = crypto_command.execute("bitcoin")
-        assert "HTTP error" in result
+        assert "500" in result
 
     def test_timeout_returns_friendly_message(self, crypto_command):
         with patch.object(crypto_command.cg, "get_price", side_effect=requests.exceptions.Timeout):
@@ -79,4 +80,4 @@ class TestCryptoCommand:
             crypto_command.cg, "get_price", side_effect=requests.exceptions.ConnectionError
         ):
             result = crypto_command.execute("bitcoin")
-        assert "Cannot connect" in result
+        assert "Could not connect" in result

@@ -4,6 +4,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from request_errors import format_request_error
+
 class TimeCommand:
     """
     Fetches local time for a given city, or a given timezone abbreviation,
@@ -97,18 +99,8 @@ class TimeCommand:
                 timeout=5,
             )
             resp.raise_for_status()
-        except requests.exceptions.Timeout:
-            return "Error: Time service request timed out."
-        except requests.exceptions.ConnectionError:
-            return "Error: Could not connect to time service."
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response is not None else "unknown"
-            reason = e.response.reason if e.response is not None else "Unknown error"
-            return f"Error: Time service returned HTTP {status} {reason}."
-        except requests.exceptions.RequestException as e:
-            return f"Error: Failed to contact time service: {e}."
         except Exception as e:
-            return f"Error: Unexpected issue while fetching time: {e}"
+            return format_request_error(e, "time service")
 
         try:
             data = resp.json()

@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 import requests
 
+from request_errors import format_request_error
+
 class WeatherCommand:
     """Fetches current weather for a given city."""
 
@@ -52,13 +54,5 @@ class WeatherCommand:
                 f"Wind: {wind_dir} {wind_kph / 3.6:.1f} m/s. Humidity: {humidity}%."
             )
 
-        except requests.exceptions.HTTPError as e:
-            return f"Error fetching weather data: {e.response.status_code} {e.response.reason}"
-        except requests.exceptions.Timeout:
-            return "Error: Weather API request timed out. Please try again later."
-        except requests.exceptions.ConnectionError:
-            return "Error: Unable to connect to the weather API."
-        except requests.exceptions.RequestException:
-            return "Error: Failed to retrieve weather data."
-        except Exception:
-            return "Error: An unexpected issue occurred while fetching weather data."
+        except Exception as e:
+            return format_request_error(e, "Weather API")
