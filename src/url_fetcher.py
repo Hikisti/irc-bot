@@ -7,7 +7,6 @@ from urllib.parse import urlparse, parse_qs
 class URLFetcher:
     """Detects URLs in IRC messages and fetches their titles with service-specific handling."""
 
-    MAX_IRC_MESSAGE_LENGTH = 400  # Safe maximum for IRC message length
     MAX_TITLE_LENGTH = 300        # Max allowed title length to avoid excess flood kicks
 
     # Domains that should be ignored (no title fetching)
@@ -164,14 +163,6 @@ class URLFetcher:
         Instagram often blocks scraping.
         Fall back to generic title method, which may return a basic page title.
         """
-        return self.get_generic_title(url)
-
-    def get_x_title(self, url):
-        """Fallback for X (Twitter). Currently unused due to unreliable access."""
-        return self.get_generic_title(url)
-
-    def get_reddit_title(self, url):
-        """Fallback for Reddit. Currently unused due to inconsistent structure."""
         return self.get_generic_title(url)
 
     def trim_message(self, text):

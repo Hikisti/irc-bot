@@ -1,19 +1,10 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
 
 from src.time_command import TimeCommand
-
-
-def make_response(json_data, status_code=200):
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = json_data
-    resp.raise_for_status = MagicMock()
-    if status_code >= 400:
-        resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
-    return resp
+from tests.conftest import make_json_response as make_response
 
 
 @pytest.fixture
