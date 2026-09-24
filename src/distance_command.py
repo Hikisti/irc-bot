@@ -3,6 +3,8 @@ import os
 from dotenv import load_dotenv
 import requests
 
+from request_errors import format_request_error
+
 
 class DistanceCommand:
     """
@@ -109,15 +111,13 @@ class DistanceCommand:
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.Timeout:
-            return None, "Error: Distance service (geocoding) request timed out."
-        except requests.exceptions.ConnectionError:
-            return None, "Error: Could not connect to the distance service (geocoding)."
         except requests.exceptions.HTTPError as e:
             return None, self._describe_http_error(e, "geocoding")
-        except requests.exceptions.RequestException as e:
-            return None, f"Error: Failed to contact distance service: {e}."
+        except Exception as e:
+            return None, format_request_error(e, "Distance service (geocoding)")
+
+        try:
+            data = resp.json()
         except ValueError:
             return None, "Error: Invalid response from distance service (geocoding)."
 
@@ -187,11 +187,6 @@ class DistanceCommand:
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.Timeout:
-            return None, "Error: Distance service (routing) request timed out."
-        except requests.exceptions.ConnectionError:
-            return None, "Error: Could not connect to the distance service (routing)."
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400:
                 print(f"Distance API routing 400: {e.response.text[:500]}")
@@ -200,8 +195,11 @@ class DistanceCommand:
                     f"{origin['label']} and {destination['label']}."
                 )
             return None, self._describe_http_error(e, "routing")
-        except requests.exceptions.RequestException as e:
-            return None, f"Error: Failed to contact distance service: {e}."
+        except Exception as e:
+            return None, format_request_error(e, "Distance service (routing)")
+
+        try:
+            data = resp.json()
         except ValueError:
             return None, "Error: Invalid response from distance service (routing)."
 
@@ -255,8 +253,7 @@ class DistanceCommand:
             return "Error: Distance service rejected the API key."
         if status == 429:
             return "Error: Distance service rate limit exceeded, try again later."
-        reason = error.response.reason if error.response is not None else "Unknown error"
-        return f"Error: Distance service ({stage}) returned HTTP {status or 'unknown'} {reason}."
+        return format_request_error(error, f"Distance service ({stage})")
 
     # ---- formatting -------------------------------------------------
 
