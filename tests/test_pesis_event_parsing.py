@@ -326,30 +326,27 @@ class TestFormatFinal:
         assert result == "Home - Away 1 - 0"
 
 
-class TestSumRuns:
-    def test_sums_across_periods(self, sc):
-        live = {"runs": [{"home": [2, 0], "away": [1]}, {"home": [3], "away": [0, 1]}]}
-        assert sc._sum_runs(live, "home") == 5
-        assert sc._sum_runs(live, "away") == 2
+class TestSumValues:
+    def test_sums_numeric_entries(self, sc):
+        assert sc._sum_values([2, 0, 3]) == 5
 
-    def test_missing_runs_returns_none(self, sc):
-        assert sc._sum_runs({}, "home") is None
+    def test_non_list_returns_none(self, sc):
+        assert sc._sum_values("not-a-list") is None
 
-    def test_malformed_runs_returns_none(self, sc):
-        assert sc._sum_runs({"runs": "not a list"}, "home") is None
+    def test_non_numeric_entries_are_skipped_not_fatal(self, sc):
+        # Real per-period arrays contain None for innings not yet played.
+        assert sc._sum_values([None, 3]) == 3
 
-    def test_malformed_per_period_values_are_skipped_not_fatal(self, sc):
-        # "runs" itself is a real list, but one period's own side value
-        # isn't - shouldn't crash or block the other (valid) period.
-        live = {"runs": [{"home": "not-a-list"}, {"home": [3]}]}
-        assert sc._sum_runs(live, "home") == 3
+    def test_all_non_numeric_returns_none(self, sc):
+        assert sc._sum_values([None, None]) is None
 
 
 class TestPeriodRuns:
     """Regression coverage: pesäpallo scores each jakso independently
     (confirmed live via the API's own runs_home_first_period/
     second_period/etc split), so RUN:/JAKSO: must use only the current
-    period's own tally, not a match-wide cumulative sum like _sum_runs()."""
+    period's own tally, not a naive match-wide cumulative sum across
+    periods."""
 
     LIVE = {"runs": [
         {"home": [0, 0, 2, 0], "away": [0, 1, 1, 0]},   # jakso 1: 2-2
@@ -361,8 +358,8 @@ class TestPeriodRuns:
         assert sc._period_runs(self.LIVE, "away", 0) == 2
 
     def test_different_period_gives_a_different_total(self, sc):
-        # This is the actual bug: summing (_sum_runs) would give 11 for
-        # home here (2+9), not jakso 2's own 9. jakso 2's arrays also
+        # This is the actual bug: summing across periods would give 11
+        # for home here (2+9), not jakso 2's own 9. jakso 2's arrays also
         # contain None for innings not yet played - ignored, not summed
         # as 0 contributions that would still be "found".
         assert sc._period_runs(self.LIVE, "home", 1) == 9

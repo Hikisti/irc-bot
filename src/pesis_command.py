@@ -238,17 +238,17 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         return state
 
     def _seed_match_extras(self, state):
-        """Fills in each match's event-count baseline, roster, and
-        already-announced run/period-end counts in `state` (mutated in
-        place). The "announced"/"ended_periods" counts are what actually
-        gate re-announcing a play (see _process_match) - seeded from
-        every run/period-end already in the match's history so
-        `!superpesis start` on a match already in progress doesn't replay
-        its whole history as fresh RUN:/JAKSO: lines. One match's
-        events+roster fetch doesn't depend on any other's, so all matches
-        are seeded concurrently rather than one at a time - with 2+
-        matches tracked (the common case) this roughly halves the time
-        !superpesis start takes to report back."""
+        """Fills in each match's roster and already-announced run/
+        period-end counts in `state` (mutated in place). The "announced"/
+        "ended_periods" counts are what actually gate re-announcing a
+        play (see _process_match) - seeded from every run/period-end
+        already in the match's history so `!superpesis start` on a match
+        already in progress doesn't replay its whole history as fresh
+        RUN:/JAKSO: lines. One match's events+roster fetch doesn't depend
+        on any other's, so all matches are seeded concurrently rather
+        than one at a time - with 2+ matches tracked (the common case)
+        this roughly halves the time !superpesis start takes to report
+        back."""
         if not state:
             return
 
@@ -260,7 +260,6 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         with ThreadPoolExecutor(max_workers=len(state)) as executor:
             for mid, events, roster in executor.map(seed_one, state.keys()):
                 if events is not None:
-                    state[mid]["event_count"] = len(events)
                     runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
                         events, state[mid]["home_id"], state[mid]["away_id"],
                     )
@@ -347,21 +346,6 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
                 irc_bot, channel, home_name, away_name, period_end_by_period, ended_periods, announced,
             )
 
-        # Informational only (e.g. for anyone inspecting state) - nothing
-        # above is gated by this; monotonic so a transiently shorter API
-        # response can't shrink it.
-        event_count = max(prev["event_count"], len(events)) if events is not None else prev["event_count"]
-
-        # "period" is purely informational/for display continuity here -
-        # doesn't gate anything above, unlike the position/period-reset
-        # tracking this replaced. "lastPeriod" (confirmed live) is the
-        # period currently, or most recently, being played.
-        current_period = live.get("lastPeriod")
-        if current_period is None:
-            current_period = prev.get("period")
-        period_home_runs = announced.get((current_period, "home"), 0)
-        period_away_runs = announced.get((current_period, "away"), 0)
-
         finished = bool(live.get("finished"))
         if finished and not prev.get("finished"):
             self._safe_send(
@@ -375,10 +359,6 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
             "away_id": away_id,
             "home_name": home_name,
             "away_name": away_name,
-            "period": current_period,
-            "period_home_runs": period_home_runs,
-            "period_away_runs": period_away_runs,
-            "event_count": event_count,
             "finished": finished,
             "roster": roster,  # rosters don't change mid-match, carry forward unchanged
             "announced": announced,
@@ -475,23 +455,12 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
 
     def _seed_snapshot(self, match):
         live = match.get("liveResult") or {}
-        # "lastPeriod" is the period currently (or most recently) being
-        # played, confirmed live - e.g. lastPeriod=1 ("2. jakso") with
-        # lastPeriodFinished=False for a match mid-second-period. Falls
-        # back to 0 (1st period) for a match with no liveResult data yet.
-        current_period = live.get("lastPeriod")
-        if current_period is None:
-            current_period = 0
         return {
             "match_id": match.get("id"),
             "home_id": (match.get("home") or {}).get("id"),
             "away_id": (match.get("away") or {}).get("id"),
             "home_name": (match.get("home") or {}).get("name") or "Unknown",
             "away_name": (match.get("away") or {}).get("name") or "Unknown",
-            "period": current_period,
-            "period_home_runs": self._period_runs(live, "home", current_period) or 0,
-            "period_away_runs": self._period_runs(live, "away", current_period) or 0,
-            "event_count": 0,  # seeded from a real fetch below, see _run()
             "finished": bool(live.get("finished")),
             "roster": {},  # seeded from a real fetch below, see _run()
             # Both seeded from a real fetch below too (_seed_match_extras)

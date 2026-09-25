@@ -158,7 +158,7 @@ class PesisEventParsingMixin:
         "aloittava"/"lopettava" labels track. Falls back to just the
         period label if either field is missing (older/incomplete event
         data)."""
-        period_label = self._format_period_suffix(event.get("period"), parens=False)
+        period_label = self._format_period_suffix(event.get("period"))
         inning, bat_turn = event.get("inning"), event.get("batTurn")
         if inning is None or bat_turn not in (0, 1):
             return f" ({period_label})" if period_label else ""
@@ -166,11 +166,10 @@ class PesisEventParsingMixin:
         parts = [p for p in (period_label, vuoropari) if p]
         return f" ({', '.join(parts)})" if parts else ""
 
-    def _format_period_suffix(self, period, parens=True) -> str:
+    def _format_period_suffix(self, period) -> str:
         if period is None:
             return ""
-        label = self.PERIOD_LABELS.get(period, f"jakso {period + 1}")
-        return f" ({label})" if parens else label
+        return self.PERIOD_LABELS.get(period, f"jakso {period + 1}")
 
     def _format_period_end(self, text, home_name, away_name, home_runs, away_runs) -> str:
         return (
@@ -228,8 +227,8 @@ class PesisEventParsingMixin:
     def _sum_values(self, values):
         """Sums a list of per-play run counts, treating a missing/non-list
         value or one with no numeric entries as "no data" (None) rather
-        than 0 - shared inner loop for _sum_runs() (whole match) and
-        _period_runs() (single period)."""
+        than 0 - the inner loop _period_runs() scopes to a single
+        period."""
         if not isinstance(values, list):
             return None
         total = 0
@@ -240,23 +239,11 @@ class PesisEventParsingMixin:
                 found_any = True
         return total if found_any else None
 
-    def _sum_runs(self, live_result, side):
-        runs = live_result.get("runs")
-        if not isinstance(runs, list):
-            return None
-        total = 0
-        found_any = False
-        for period_runs in runs:
-            period_total = self._sum_values((period_runs or {}).get(side))
-            if period_total is not None:
-                total += period_total
-                found_any = True
-        return total if found_any else None
-
     def _period_runs(self, live_result, side, period_index):
-        """Like _sum_runs(), but scoped to a single period rather than
-        summed across the whole match - used for RUN:/JAKSO:, since
-        pesäpallo scores each jakso independently (see _process_match)."""
+        """Scoped to a single period, not summed across the whole match -
+        used for RUN:/JAKSO:, since pesäpallo scores each jakso
+        independently (see _process_match). A naive match-wide cumulative
+        sum would double-count once a match reaches its second period."""
         if period_index is None:
             return None
         runs = live_result.get("runs")
