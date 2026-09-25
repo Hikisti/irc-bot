@@ -1,9 +1,9 @@
 # irc-bot
 
 A simple IRC bot (KukistiBot) with a handful of chat commands: weather, stock, crypto,
-electricity price, local time, F1 schedule, driving distance, and live Liiga (ice hockey) and
-Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles for links
-shared in channel.
+electricity price, local time, F1 schedule, driving distance, IMDb lookups, and live Liiga (ice
+hockey) and Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles for
+links shared in channel.
 
 ## Setup
 
@@ -19,6 +19,7 @@ Create a `.env` file in the project root with your API keys:
 WEATHER_API_KEY=your_weatherapi_com_key
 TIME_API_KEY=your_ipgeolocation_io_key
 ORS_API_KEY=your_openrouteservice_org_key
+OMDB_API_KEY=your_omdbapi_com_key
 ```
 
 - `WEATHER_API_KEY` — from [weatherapi.com](https://www.weatherapi.com/), needed for `!weather`;
@@ -28,6 +29,10 @@ ORS_API_KEY=your_openrouteservice_org_key
 - `ORS_API_KEY` — from [openrouteservice.org](https://openrouteservice.org/dev/#/signup) (free,
   no credit card required as of writing), needed for `!distance`; if unset, `!distance` replies
   with an error but the rest of the bot still starts and works fine.
+- `OMDB_API_KEY` — from [omdbapi.com](https://www.omdbapi.com/apikey.aspx) (free tier: 1,000
+  requests/day, no credit card required), needed for `!imdb`; if unset, `!imdb` replies with an
+  error but the rest of the bot still starts and works fine. OMDb's free tier is licensed
+  CC BY-NC 4.0 (non-commercial use only).
 
 None of these keys are required for the bot to start — each missing key only disables the one
 command that needs it.
@@ -59,6 +64,7 @@ in `src/irc_bot.py`.
 | F1 schedule | `!f1` | none | `!f1` |
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
+| IMDb | `!imdb` | movie/show title | `!imdb terminator 2` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
@@ -79,6 +85,13 @@ JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. 
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
 unless both are a single word, in which case a space works too (`!distance Kokkola Vimpeli`) —
 this avoids silently misreading a multi-word city name as the wrong split.
+
+`!imdb` looks up a movie or show by title via the OMDb API (a third-party service re-publishing
+IMDb's data - IMDb's own official API is an enterprise-only AWS Data Exchange product, not viable
+for a free personal bot) and replies with its year, IMDb rating, a short plot summary, and its
+IMDb URL, e.g. `Terminator 2: Judgment Day (1991) - IMDb: 8.6/10 - A cyborg from the future...
+- https://www.imdb.com/title/tt0103064/`. An unreleased/unrated title shows "not yet rated"
+instead of a score.
 
 `!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches
 every 30s and announces runs and final results as they happen, the same way `!liiga start` does
