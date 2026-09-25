@@ -2,4 +2,4 @@ beautifulsoup4==4.15.0
 pycoingecko==3.2.0
 python-dotenv==1.2.1
 requests==2.34.2
-yfinance==0.2.66
+yfinance==1.7.0
