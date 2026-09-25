@@ -1,6 +1,6 @@
 import datetime
-import pytz
 from decimal import Decimal, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
 from http_session import make_session
@@ -13,7 +13,7 @@ class ElectricityCommand(BaseCommand):
     ALIASES = ("!sähkö", "!sahko")
     ALLOW_ARGS = False
 
-    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
+    HELSINKI_TZ = ZoneInfo("Europe/Helsinki")
 
     def __init__(self):
         self.session = make_session("KukistiBot-Electricity/1.0")
@@ -36,7 +36,7 @@ class ElectricityCommand(BaseCommand):
                 return self._cached_result
 
             # Convert to UTC and format as ISO 8601 with Z suffix
-            now_utc = now.astimezone(pytz.UTC)
+            now_utc = now.astimezone(datetime.timezone.utc)
             iso_timestamp = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
             # API URL with ISO 8601 UTC timestamp

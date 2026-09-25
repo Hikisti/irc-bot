@@ -1,8 +1,7 @@
 import datetime
 import threading
 import traceback
-
-import pytz
+from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
 from http_session import make_session
@@ -41,7 +40,7 @@ class LiveTrackerCommand(BaseCommand):
 
     needs_irc_context = True
 
-    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
+    HELSINKI_TZ = ZoneInfo("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
     # Bound for "<command> next"'s day-by-day search when today's own

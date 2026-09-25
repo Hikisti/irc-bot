@@ -2,7 +2,6 @@ import datetime
 from unittest.mock import patch
 
 import pytest
-import pytz
 import requests
 
 from f1_command import F1Command
@@ -11,7 +10,7 @@ from tests.conftest import make_json_response as make_response
 
 # Chinese GP race session is 07:00-09:00 UTC on 2026-03-15; freeze "now" to
 # fall inside that window so it resolves as the ongoing event.
-FIXED_UTC_NOW = datetime.datetime(2026, 3, 15, 8, 0, tzinfo=pytz.UTC)
+FIXED_UTC_NOW = datetime.datetime(2026, 3, 15, 8, 0, tzinfo=datetime.timezone.utc)
 
 
 class FrozenDateTime(datetime.datetime):
@@ -28,7 +27,7 @@ def frozen_now(monkeypatch):
 
 
 # Far past every session in RACE_JSON, so nothing resolves as ongoing or next.
-FAR_FUTURE_UTC_NOW = datetime.datetime(2099, 1, 1, tzinfo=pytz.UTC)
+FAR_FUTURE_UTC_NOW = datetime.datetime(2099, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 class FarFutureDateTime(datetime.datetime):
@@ -182,14 +181,14 @@ class TestFindOngoingAndNext:
     def test_nothing_ongoing_returns_first_future_event_as_next(self, f1_command):
         # "now" is real time here, far outside the fixture data's 2026
         # session windows below - construct events entirely in the future.
-        far_future = datetime.datetime(2099, 1, 1, tzinfo=pytz.UTC)
+        far_future = datetime.datetime(2099, 1, 1, tzinfo=datetime.timezone.utc)
         events = [("Race", far_future, {"raceName": "Future GP"})]
         ongoing, next_ = f1_command._find_ongoing_and_next(events)
         assert ongoing is None
         assert next_[2]["raceName"] == "Future GP"
 
     def test_everything_in_the_past_returns_nothing(self, f1_command):
-        past = datetime.datetime(2000, 1, 1, tzinfo=pytz.UTC)
+        past = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
         events = [("Race", past, {"raceName": "Old GP"})]
         ongoing, next_ = f1_command._find_ongoing_and_next(events)
         assert ongoing is None

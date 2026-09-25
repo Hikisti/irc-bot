@@ -330,7 +330,7 @@ class LiigaCommand(LiveTrackerCommand):
         # farther than the bounded day-by-day fallback below would reach.
         if next_date:
             try:
-                next_dt = self.HELSINKI_TZ.localize(datetime.datetime.strptime(next_date, "%Y-%m-%d"))
+                next_dt = datetime.datetime.strptime(next_date, "%Y-%m-%d").replace(tzinfo=self.HELSINKI_TZ)
                 hinted_games, _ = self._fetch_games_and_next_date(next_date, self._current_season(next_dt))
                 if hinted_games:
                     return next_date, hinted_games

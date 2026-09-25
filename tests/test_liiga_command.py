@@ -855,11 +855,9 @@ class TestGamesSummary:
 
 class TestSeasonCalculation:
     def test_autumn_date_uses_next_year(self, liiga_command):
-        import datetime
-        dt = liiga_command.HELSINKI_TZ.localize(datetime.datetime(2024, 9, 10))
+        dt = datetime.datetime(2024, 9, 10, tzinfo=liiga_command.HELSINKI_TZ)
         assert liiga_command._current_season(dt) == 2025
 
     def test_spring_date_uses_same_year(self, liiga_command):
-        import datetime
-        dt = liiga_command.HELSINKI_TZ.localize(datetime.datetime(2025, 3, 15))
+        dt = datetime.datetime(2025, 3, 15, tzinfo=liiga_command.HELSINKI_TZ)
         assert liiga_command._current_season(dt) == 2025

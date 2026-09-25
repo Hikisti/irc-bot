@@ -1,5 +1,5 @@
 import datetime
-import pytz
+from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
 from http_session import make_session
@@ -20,7 +20,7 @@ class F1Command(BaseCommand):
     ALLOW_ARGS = False
 
     JOLPICA_URL = "https://api.jolpi.ca/ergast/f1"
-    HELSINKI_TZ = pytz.timezone("Europe/Helsinki")
+    HELSINKI_TZ = ZoneInfo("Europe/Helsinki")
     RACE_DURATION_HOURS = 2
 
     SESSION_ORDER = [
@@ -116,7 +116,7 @@ class F1Command(BaseCommand):
         [start, start + RACE_DURATION_HOURS) window contains right now
         (or None), and whichever event comes right after it - or, if
         nothing's ongoing, the first event still in the future."""
-        now = datetime.datetime.now(pytz.UTC)
+        now = datetime.datetime.now(datetime.timezone.utc)
         ongoing_event = None
         next_event = None
 

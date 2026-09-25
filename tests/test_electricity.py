@@ -1,8 +1,8 @@
 import datetime
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
-import pytz
 import requests
 
 from electricity import ElectricityCommand
@@ -28,8 +28,8 @@ class FrozenDateTime(datetime.datetime):
 
 
 def freeze_at(monkeypatch, hour, minute):
-    tz = pytz.timezone("Europe/Helsinki")
-    FrozenDateTime._frozen = tz.localize(datetime.datetime(2026, 1, 15, hour, minute, 30))
+    tz = ZoneInfo("Europe/Helsinki")
+    FrozenDateTime._frozen = datetime.datetime(2026, 1, 15, hour, minute, 30, tzinfo=tz)
     monkeypatch.setattr("electricity.datetime.datetime", FrozenDateTime)
 
 
@@ -89,9 +89,7 @@ class TestCacheExpiry:
         with patch.object(electricity_command.session, "get", return_value=make_response({"price": 1.0})):
             electricity_command.execute()
 
-        expected = pytz.timezone("Europe/Helsinki").localize(
-            datetime.datetime(2026, 1, 15, 10, 30, 0)
-        )
+        expected = datetime.datetime(2026, 1, 15, 10, 30, 0, tzinfo=ZoneInfo("Europe/Helsinki"))
         assert electricity_command._cache_until_timestamp == expected.timestamp()
 
     def test_cache_expires_at_the_top_of_the_next_hour_past_minute_45(
@@ -101,9 +99,7 @@ class TestCacheExpiry:
         with patch.object(electricity_command.session, "get", return_value=make_response({"price": 1.0})):
             electricity_command.execute()
 
-        expected = pytz.timezone("Europe/Helsinki").localize(
-            datetime.datetime(2026, 1, 15, 11, 0, 0)
-        )
+        expected = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=ZoneInfo("Europe/Helsinki"))
         assert electricity_command._cache_until_timestamp == expected.timestamp()
 
     def test_cache_is_reused_before_expiry_and_refetched_after(self, electricity_command, monkeypatch):
