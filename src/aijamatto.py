@@ -32,7 +32,7 @@ class AijaMattoCommand(BaseCommand):
         # - execute() just reports it instead.
         try:
             with open(self.LINES_FILE, encoding="utf-8") as f:
-                self._lines = f.readlines()
+                self._lines = [line.rstrip("\n") for line in f]
         except OSError as e:
             print(f"AijaMatto: failed to load {self.LINES_FILE}: {e}")
             self._lines = []

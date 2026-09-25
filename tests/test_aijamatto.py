@@ -11,7 +11,11 @@ class TestInit:
         with patch.object(AijaMattoCommand, "LINES_FILE", str(lines_file)):
             command = AijaMattoCommand()
 
-        assert command._lines == ["first line\n", "second line\n", "third line\n"]
+        # Regression test: readlines() keeps each line's trailing "\n" -
+        # without stripping it here, every !bjorck reply ended with a
+        # visible trailing space (IrcBot.send_message() only replaces
+        # "\n"/"\r" with a space, it doesn't strip the result).
+        assert command._lines == ["first line", "second line", "third line"]
 
     def test_missing_file_does_not_raise(self, tmp_path):
         # A broken/missing data file shouldn't crash the whole bot at
@@ -34,7 +38,7 @@ class TestExecute:
         with patch.object(AijaMattoCommand, "LINES_FILE", str(lines_file)):
             command = AijaMattoCommand()
 
-        assert command.execute() == "only line\n"
+        assert command.execute() == "only line"
 
     def test_picks_from_all_loaded_lines(self, tmp_path):
         lines_file = tmp_path / "aijamatto.txt"
@@ -44,7 +48,7 @@ class TestExecute:
             command = AijaMattoCommand()
 
         results = {command.execute() for _ in range(50)}
-        assert results == {"a\n", "b\n", "c\n"}
+        assert results == {"a", "b", "c"}
 
     def test_does_not_reread_the_file_on_execute(self, tmp_path):
         lines_file = tmp_path / "aijamatto.txt"
@@ -73,4 +77,4 @@ class TestExecute:
         with patch.object(AijaMattoCommand, "LINES_FILE", str(lines_file)):
             command = AijaMattoCommand()
 
-        assert command.execute("some ignored args") == "only line\n"
+        assert command.execute("some ignored args") == "only line"
