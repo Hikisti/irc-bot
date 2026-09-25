@@ -4,6 +4,13 @@ User-Agent, usually declaring it only accepts JSON)."""
 
 import requests
 
+# Shared default for commands that don't need a longer budget of their
+# own (see live_tracker_command.py/distance_command.py's own
+# REQUEST_TIMEOUT_SECONDS = 10 for APIs that warrant more slack) - was
+# previously a "timeout=5" literal repeated independently in several
+# command modules.
+DEFAULT_TIMEOUT_SECONDS = 5
+
 
 def make_session(user_agent: str, accept_json: bool = True) -> requests.Session:
     """A requests.Session with `user_agent` set, and (by default)

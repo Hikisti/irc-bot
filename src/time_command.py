@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from base_command import BaseCommand
-from http_session import make_session
+from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
 
 class TimeCommand(BaseCommand):
@@ -101,7 +101,7 @@ class TimeCommand(BaseCommand):
             resp = self.session.get(
                 self.API_URL,
                 params={"apiKey": self.api_key, "location": city_name},
-                timeout=5,
+                timeout=DEFAULT_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
         except Exception as e:
@@ -134,12 +134,18 @@ class TimeCommand(BaseCommand):
         return f"Local time in {location}: {formatted_date} {time_str}{timezone_suffix}"
 
     def _format_location(self, data, fallback_city_name) -> str:
+        # The API's response shape varies by which of its underlying geo
+        # providers answered a given request - "location"/"geo" are the
+        # two top-level keys observed to hold it, in that priority order.
         location_info = (
             data.get("location") or
             data.get("geo") or
             {}
         )
 
+        # Same story for the city name itself: whichever of these three
+        # keys is present, in this priority order, falling back to the
+        # city name we originally asked the API to look up.
         city_from_api = (
             location_info.get("city") or
             location_info.get("location_string") or
@@ -147,6 +153,9 @@ class TimeCommand(BaseCommand):
             fallback_city_name
         )
 
+        # "country_name"/"country" are location_info's own two observed
+        # spellings; data.get("country_name") covers a response shape
+        # with no nested location_info structure at all.
         country_name = (
             location_info.get("country_name") or
             location_info.get("country") or

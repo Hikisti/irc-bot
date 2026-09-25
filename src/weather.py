@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 from base_command import BaseCommand
-from http_session import make_session
+from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
 
 class WeatherCommand(BaseCommand):
@@ -33,7 +33,7 @@ class WeatherCommand(BaseCommand):
             query = f"{city},{country}" if country else city
             params = {"key": self.api_key, "q": query, "aqi": "no"}
 
-            response = self.session.get(self.base_url, params=params, timeout=5)
+            response = self.session.get(self.base_url, params=params, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()  # Raises error for HTTP 4xx and 5xx responses
             data = response.json()
 

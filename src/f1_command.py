@@ -2,7 +2,7 @@ import datetime
 from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
-from http_session import make_session
+from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
 
 
@@ -40,7 +40,7 @@ class F1Command(BaseCommand):
             resp = self.session.get(
                 f"{self.JOLPICA_URL}/{year}/races.json",
                 params={"limit": 30},
-                timeout=5,
+                timeout=DEFAULT_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
         except Exception as e:

@@ -3,7 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
-from http_session import make_session
+from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
 
 
@@ -43,7 +43,7 @@ class ElectricityCommand(BaseCommand):
             url = f"https://api.porssisahko.net/v2/price.json?date={iso_timestamp}"
 
             # Fetch data from API with a timeout
-            response = self.session.get(url, timeout=5)
+            response = self.session.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()  # Raise exception for HTTP errors
             
             # Parse JSON response safely

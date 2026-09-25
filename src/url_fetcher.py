@@ -2,7 +2,7 @@ import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
-from http_session import make_session
+from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
 
 
@@ -97,7 +97,7 @@ class URLFetcher:
         Ensures encoding is properly handled.
         """
         try:
-            response = self.session.get(url, timeout=5)
+            response = self.session.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()
 
             response.encoding = response.apparent_encoding
@@ -137,7 +137,7 @@ class URLFetcher:
                 return "Error: Invalid YouTube URL."
 
             api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-            response = self.session.get(api_url, timeout=5)
+            response = self.session.get(api_url, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()
             data = response.json()
 
