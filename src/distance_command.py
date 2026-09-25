@@ -173,7 +173,7 @@ class DistanceCommand(BaseCommand):
             population = population if isinstance(population, (int, float)) else -1
             return (layer_rank, population)
 
-        return max(candidates, key=rank) or {}
+        return max(candidates, key=rank)
 
     # ---- routing --------------------------------------------------------
 
