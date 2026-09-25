@@ -86,7 +86,7 @@ class TestCommandHandler:
 
         mock_f1.execute.assert_called_once_with("")
 
-    def test_args_rejected_for_no_args_command(self, handler):
+    def test_args_rejected_for_no_args_command(self, handler, capsys):
         bot = MagicMock()
         mock_f1 = MagicMock()
         replace_command(handler, "!f1", mock_f1)
@@ -95,11 +95,13 @@ class TestCommandHandler:
 
         mock_f1.execute.assert_not_called()
         bot.send_message.assert_not_called()
+        assert "!f1 does not allow arguments" in capsys.readouterr().out
 
-    def test_unknown_command_does_nothing(self, handler):
+    def test_unknown_command_does_nothing(self, handler, capsys):
         bot = MagicMock()
         handler.handle_command(bot, "nick", "#chan", "!nonsense")
         bot.send_message.assert_not_called()
+        assert "Unknown command: !nonsense" in capsys.readouterr().out
 
     def test_empty_response_does_not_send_message(self, handler):
         bot = MagicMock()
@@ -111,7 +113,7 @@ class TestCommandHandler:
 
         bot.send_message.assert_not_called()
 
-    def test_exception_in_command_does_not_propagate(self, handler):
+    def test_exception_in_command_does_not_propagate(self, handler, capsys):
         bot = MagicMock()
         mock_weather = MagicMock()
         mock_weather.execute.side_effect = RuntimeError("boom")
@@ -121,6 +123,9 @@ class TestCommandHandler:
         handler.handle_command(bot, "nick", "#chan", "!weather austin")
 
         bot.send_message.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Error handling command !weather austin: boom" in captured.out
+        assert "Traceback" in captured.err
 
     def test_needs_irc_context_command_receives_bot_and_channel(self, handler):
         # LiigaCommand/PesisCommand's own dispatch shape - the only
@@ -142,7 +147,7 @@ class TestChannelRestriction:
     all, so this is also the coverage for "absent = allowed everywhere"
     not regressing."""
 
-    def test_restricted_command_is_silently_ignored_in_other_channels(self, handler):
+    def test_restricted_command_is_silently_ignored_in_other_channels(self, handler, capsys):
         bot = MagicMock()
         mock_superpesis = MagicMock()
         replace_command(handler, "!superpesis", mock_superpesis)
@@ -151,6 +156,8 @@ class TestChannelRestriction:
 
         mock_superpesis.execute.assert_not_called()
         bot.send_message.assert_not_called()
+        out = capsys.readouterr().out
+        assert "!superpesis is not allowed in channel #smliiga" in out
 
     def test_restricted_command_works_in_its_designated_channel(self, handler):
         bot = MagicMock()
