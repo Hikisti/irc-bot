@@ -1,4 +1,4 @@
-beautifulsoup4==4.14.2
+beautifulsoup4==4.15.0
 pycoingecko==3.2.0
 python-dotenv==1.2.1
 requests==2.32.5
