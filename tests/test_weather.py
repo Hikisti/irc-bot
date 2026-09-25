@@ -88,6 +88,18 @@ class TestWeatherCommand:
             result = weather_command.execute("austin")
         assert result.startswith("Error:")
 
+    def test_invalid_json_returns_friendly_error_not_a_contact_failure(self, weather_command):
+        # Regression test: requests.exceptions.JSONDecodeError (raised by
+        # response.json() on a non-JSON body) is also a RequestException,
+        # so without format_request_error's dedicated branch this used to
+        # be misreported as "Failed to contact Weather API" even though
+        # the server did respond.
+        resp = make_response({})
+        resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "not json", 0)
+        with patch.object(weather_command.session, "get", return_value=resp):
+            result = weather_command.execute("austin")
+        assert result == "Error: Invalid response from Weather API."
+
     def test_timeout_returns_friendly_error(self, weather_command):
         with patch.object(weather_command.session, "get", side_effect=requests.exceptions.Timeout):
             result = weather_command.execute("austin")

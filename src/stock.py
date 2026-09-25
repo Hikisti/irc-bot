@@ -1,5 +1,7 @@
+import curl_cffi.requests.exceptions as curl_exceptions
 import requests
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 from base_command import BaseCommand
 from irc_format import BOLD, RESET, signed_change_color
@@ -51,11 +53,15 @@ class StockCommand(BaseCommand):
 
         except (ValueError, TypeError):
             return f"Error: Invalid stock symbol '{symbol}'."
-        except requests.exceptions.RequestException as e:
-            # yfinance makes its actual HTTP calls via requests under the
-            # hood, so its network errors surface as
-            # requests.exceptions.* - not the builtin ConnectionError/
-            # TimeoutError this used to (and could never actually) catch.
+        except YFRateLimitError:
+            return "Error: Yahoo Finance rate limit exceeded, try again later."
+        except (requests.exceptions.RequestException, curl_exceptions.RequestException) as e:
+            # yfinance 1.x does its HTTP via curl_cffi by default, only
+            # falling back to requests if curl_cffi isn't installed - its
+            # network errors can surface as either hierarchy, not the
+            # builtin ConnectionError/TimeoutError this used to (and could
+            # never actually) catch. format_request_error() understands
+            # both (see request_errors.py).
             return format_request_error(e, "Yahoo Finance")
         except Exception as e:
             return f"Error: Could not retrieve stock data for '{symbol}'. ({str(e)})"

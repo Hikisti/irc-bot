@@ -29,13 +29,18 @@ class PesisDataFetchingMixin:
             )
             resp.raise_for_status()
             return resp.json()
+        except ValueError:
+            # Checked before RequestException below: requests'
+            # JSONDecodeError (raised by resp.json() on a non-JSON body)
+            # is *also* a RequestException, so it would otherwise always
+            # be misreported as a request failure even though the server
+            # did respond.
+            suffix = f" for {item}" if item is not None else ""
+            print(f"{self.DISPLAY_NAME} {what} returned invalid JSON{suffix}")
+            return None
         except requests.exceptions.RequestException as e:
             suffix = f" for {item}" if item is not None else ""
             print(f"{self.DISPLAY_NAME} {what} request failed{suffix}: {e}")
-            return None
-        except ValueError:
-            suffix = f" for {item}" if item is not None else ""
-            print(f"{self.DISPLAY_NAME} {what} returned invalid JSON{suffix}")
             return None
 
     def _resolve_series_id(self):

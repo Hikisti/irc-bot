@@ -589,6 +589,22 @@ class TestFetchTodayGames:
 
         assert result == {7: good_game}
 
+    def test_invalid_json_is_logged_as_unexpected_data_not_a_request_failure(self, liiga_command, capsys):
+        # Regression test: requests.exceptions.JSONDecodeError (raised by
+        # resp.json() on a non-JSON body) is also a RequestException, so
+        # without checking ValueError first this used to be logged (and
+        # treated) as a request failure even though the server did
+        # respond.
+        resp = self._make_response()
+        resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "not json", 0)
+        with patch.object(liiga_command.session, "get", return_value=resp):
+            result = liiga_command._fetch_today_games()
+
+        assert result is None  # every tournament hit the same invalid-JSON response
+        captured = capsys.readouterr()
+        assert "returned unexpected data" in captured.out
+        assert "request failed" not in captured.out
+
 
 class TestNext:
     def test_next_returns_immediately_without_blocking(self, liiga_command):

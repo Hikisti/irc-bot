@@ -299,10 +299,15 @@ class LiigaCommand(LiveTrackerCommand):
                 if next_game_date and next_game_date > date_str:
                     next_dates.append(next_game_date)
                 any_success = True
+            except (ValueError, AttributeError, TypeError) as e:
+                # Checked before RequestException below: requests'
+                # JSONDecodeError (raised by resp.json() on a non-JSON
+                # body) is *also* a RequestException, so it would
+                # otherwise always be misreported as a request failure
+                # even though the server did respond.
+                print(f"Liiga API returned unexpected data for tournament={tournament}: {e}")
             except requests.exceptions.RequestException as e:
                 print(f"Liiga API request failed for tournament={tournament}: {e}")
-            except (ValueError, AttributeError, TypeError) as e:
-                print(f"Liiga API returned unexpected data for tournament={tournament}: {e}")
 
         if not any_success:
             return None, None

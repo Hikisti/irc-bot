@@ -145,6 +145,18 @@ class TestGetTitle:
             result = fetcher.get_title("https://www.youtube.com/watch?v=abc123")
         assert "timed out" in result
 
+    def test_youtube_oembed_invalid_json_is_not_a_contact_failure(self, fetcher):
+        # Regression test: requests.exceptions.JSONDecodeError (raised by
+        # response.json() on a non-JSON body) is also a RequestException,
+        # so without format_request_error's dedicated branch this used to
+        # be misreported as "Failed to contact YouTube" even though the
+        # server did respond.
+        resp = make_response()
+        resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "not json", 0)
+        with patch.object(fetcher.session, "get", return_value=resp):
+            result = fetcher.get_title("https://www.youtube.com/watch?v=abc123")
+        assert result == "Error: Invalid response from YouTube."
+
     def test_unexpected_exception_in_dispatch_returns_error_message(self, fetcher):
         # get_title()'s own catch-all, distinct from get_generic_title's/
         # get_youtube_info's own (format_request_error-based) handling -

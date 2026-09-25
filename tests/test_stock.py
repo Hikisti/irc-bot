@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock, patch
 
+import curl_cffi.requests.exceptions as curl_exceptions
 import pytest
 import requests
+from yfinance.exceptions import YFRateLimitError
 
 from stock import StockCommand
 
@@ -91,11 +93,12 @@ class TestStockCommand:
         assert "Invalid stock symbol" in result
 
     def test_connection_error_returns_friendly_error(self, stock_command):
-        # Regression test: yfinance's real network errors are
-        # requests.exceptions.* (it uses requests internally), not the
+        # Regression test: yfinance's real network errors are not the
         # builtin ConnectionError/TimeoutError this used to (uselessly)
         # catch - this used to fall through to the generic exception
-        # branch instead of a network-specific message.
+        # branch instead of a network-specific message. Covers the
+        # requests.exceptions.* shape (yfinance's fallback HTTP path when
+        # curl_cffi isn't installed).
         with patch("stock.yf.Ticker", side_effect=requests.exceptions.ConnectionError):
             result = stock_command.execute("tsla")
         assert "Could not connect" in result
@@ -104,3 +107,25 @@ class TestStockCommand:
         with patch("stock.yf.Ticker", side_effect=requests.exceptions.Timeout):
             result = stock_command.execute("tsla")
         assert "timed out" in result
+
+    def test_curl_cffi_connection_error_returns_friendly_error(self, stock_command):
+        # Regression test: yfinance 1.x does its actual HTTP via
+        # curl_cffi by default (confirmed live: curl_cffi is installed
+        # and yfinance uses it unless YF_DISABLE_CURL_CFFI is set), whose
+        # exceptions don't inherit from requests.exceptions.* at all - the
+        # requests-only except clause above would silently miss these.
+        with patch("stock.yf.Ticker", side_effect=curl_exceptions.ConnectionError("refused")):
+            result = stock_command.execute("tsla")
+        assert "Could not connect" in result
+
+    def test_curl_cffi_timeout_returns_friendly_error(self, stock_command):
+        with patch("stock.yf.Ticker", side_effect=curl_exceptions.Timeout("slow")):
+            result = stock_command.execute("tsla")
+        assert "timed out" in result
+
+    def test_rate_limit_error_returns_friendly_error(self, stock_command):
+        # New in yfinance 1.x - Yahoo actively rate-limits frequent
+        # requests, confirmed to happen in practice.
+        with patch("stock.yf.Ticker", side_effect=YFRateLimitError()):
+            result = stock_command.execute("tsla")
+        assert "rate limit" in result.lower()

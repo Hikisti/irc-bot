@@ -208,6 +208,24 @@ class TestSeriesResolution:
         assert series_id == 2945
 
 
+class TestApiGet:
+    def test_invalid_json_is_logged_as_invalid_json_not_a_request_failure(self, sc, capsys):
+        # Regression test: requests.exceptions.JSONDecodeError (raised by
+        # resp.json() on a non-JSON body) is also a RequestException, so
+        # without checking ValueError first this used to be logged (and
+        # treated) as a request failure even though the server did
+        # respond.
+        resp = make_response({})
+        resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "not json", 0)
+        with patch.object(sc.session, "get", return_value=resp):
+            result = sc._api_get("public/series-list", what="series-list")
+
+        assert result is None
+        captured = capsys.readouterr()
+        assert "series-list returned invalid JSON" in captured.out
+        assert "request failed" not in captured.out
+
+
 class TestFetchMatches:
     def test_flattens_nested_groups(self, sc):
         m1, m2 = make_match(mid=1), make_match(mid=2)
