@@ -51,6 +51,22 @@ def goal_event(period=1, game_time=125, home_score=1, away_score=0,
     }
 
 
+def disallowed_goal_event(period=1, game_time=446):
+    # Real shape confirmed live (Ässät-SaiPa, 2026-09-25): a goal
+    # overturned by video review stays in goalEvents forever with no
+    # scorer and no score change, unlike every real goal.
+    return {
+        "period": period,
+        "gameTime": game_time,
+        "homeTeamScore": 0,
+        "awayTeamScore": 0,
+        "scorerPlayerId": 0,
+        "scorerPlayer": None,
+        "assistantPlayers": [],
+        "goalTypes": ["YV", "VT0"],
+    }
+
+
 @pytest.fixture
 def liiga_command():
     return LiigaCommand()
@@ -226,6 +242,17 @@ class TestPollOnce:
         assert all_ended is False
         assert liiga_command._channels["#chan"]["games"][2]["home_goals"] == 1
 
+    def test_new_game_seeding_excludes_disallowed_goal_from_baseline(self, liiga_command):
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {})  # nothing tracked yet
+
+        new_game = make_game(gid=2, home_goals=[disallowed_goal_event()], ended=False)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={2: new_game}):
+            liiga_command._poll_once(bot, "#chan")
+
+        bot.send_message.assert_not_called()
+        assert liiga_command._channels["#chan"]["games"][2]["home_goals"] == 0
+
     def test_new_game_that_already_ended_counts_toward_all_ended(self, liiga_command):
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {})
@@ -284,6 +311,40 @@ class TestPollOnce:
         message = bot.send_message.call_args[0][1]
         assert "assists: Luke Martin" in message
         assert "YV" in message
+
+    def test_disallowed_video_review_goal_is_not_announced(self, liiga_command):
+        # Regression test for a real incident (Ässät-SaiPa, 2026-09-25):
+        # a goal disallowed by video review was announced as "GOAL: ...
+        # | Ässät — Unknown (YV/VT0)" - reading as a real goal by an
+        # unidentified scorer, when actually no goal happened at all.
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(home_goals=[])})
+
+        updated = {1: make_game(home_goals=[disallowed_goal_event()])}
+        with patch.object(liiga_command, "_fetch_today_games", return_value=updated):
+            liiga_command._poll_once(bot, "#chan")
+
+        bot.send_message.assert_not_called()
+
+    def test_disallowed_goal_does_not_shift_or_block_a_real_goal_after_it(self, liiga_command):
+        # The disallowed entry must be filtered out everywhere it's
+        # consulted (seeding, counting, slicing) - not just skipped when
+        # formatting the message - otherwise it throws off the
+        # count-based "already announced" index and either replays it or
+        # swallows the real goal that comes after it.
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(home_goals=[disallowed_goal_event()])})
+
+        updated = {1: make_game(home_goals=[
+            disallowed_goal_event(),
+            goal_event(home_score=1, away_score=0),
+        ])}
+        with patch.object(liiga_command, "_fetch_today_games", return_value=updated):
+            liiga_command._poll_once(bot, "#chan")
+
+        bot.send_message.assert_called_once()
+        message = bot.send_message.call_args[0][1]
+        assert "Kristian Vesalainen" in message
 
     def test_no_new_goals_sends_nothing(self, liiga_command):
         bot = MagicMock()

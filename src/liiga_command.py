@@ -130,8 +130,26 @@ class LiigaCommand(LiveTrackerCommand):
     def _team_goals(self, game, side):
         return (game.get(side) or {}).get("goals", "?")
 
-    def _announce_new_goals(self, irc_bot, channel, game, prev, side):
+    def _real_goal_events(self, game, side):
+        """goalEvents can include an entry for a goal disallowed by video
+        review - confirmed live (Ässät-SaiPa, 2026-09-25): an entry
+        tagged goalTypes ["YV", "VT0"] ("VT" = videotarkistus/video
+        review) with scorerPlayerId 0 and scorerPlayer null, which never
+        bumped the team's own authoritative "goals" count (stayed 0
+        there while goalEvents kept the entry) - unlike every real goal,
+        which always has a real scorer. Without filtering it out, it was
+        announced as "GOAL: ... | TeamName — Unknown (YV/VT0)", which
+        reads as a real goal by an unknown scorer rather than "no goal
+        happened here at all". Filtering here (not in the callers) keeps
+        the seeded baseline count and the announced slice built from the
+        same list, so a disallowed goal is never seeded, counted, or
+        announced.
+        """
         events = (game.get(side) or {}).get("goalEvents") or []
+        return [e for e in events if e.get("scorerPlayer")]
+
+    def _announce_new_goals(self, irc_bot, channel, game, prev, side):
+        events = self._real_goal_events(game, side)
         key = "home_goals" if side == "homeTeam" else "away_goals"
         for event in events[prev[key]:]:
             self._safe_send(irc_bot, channel, self._format_goal(game, side, event))
@@ -370,7 +388,7 @@ class LiigaCommand(LiveTrackerCommand):
 
     def _snapshot(self, game) -> dict:
         return {
-            "home_goals": len((game.get("homeTeam") or {}).get("goalEvents") or []),
-            "away_goals": len((game.get("awayTeam") or {}).get("goalEvents") or []),
+            "home_goals": len(self._real_goal_events(game, "homeTeam")),
+            "away_goals": len(self._real_goal_events(game, "awayTeam")),
             "ended": bool(game.get("ended")),
         }
