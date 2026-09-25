@@ -45,8 +45,15 @@ jobs:
             git fetch --all
             git reset --hard origin/main
             # Adjust this if the server's venv isn't named/located ".venv"
-            # directly under DEPLOY_PATH.
-            "${{ vars.DEPLOY_PATH }}/.venv/bin/pip" install -r requirements.txt
+            # directly under DEPLOY_PATH. "python3 -m pip", not the "pip"
+            # script directly - "pip" (and every other installed console
+            # script) has its venv's exact creation-time path hardcoded
+            # into its shebang line, so it silently breaks if the venv
+            # directory is ever renamed/moved after creation (confirmed
+            # live: happened when .venv-py314 was mv'd to .venv during
+            # the Python 3.14 migration). "python3 -m pip" invokes the
+            # interpreter directly instead, which isn't affected.
+            "${{ vars.DEPLOY_PATH }}/.venv/bin/python3" -m pip install -r requirements.txt
             sudo -n systemctl restart "${{ vars.DEPLOY_SERVICE_NAME }}"
             sleep 2
             sudo -n systemctl is-active "${{ vars.DEPLOY_SERVICE_NAME }}"
