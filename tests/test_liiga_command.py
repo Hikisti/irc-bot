@@ -483,6 +483,29 @@ class TestAnnounceEnd:
         assert "end-suffix mismatch" in captured.out
         assert "2701280" in captured.out
 
+    def test_periods_so_wins_over_a_generic_overtime_finishedtype(self, liiga_command, capsys):
+        # Regression test for a real gap: finishedType "ENDED_DURING_
+        # OVERTIME" is non-empty, so the old "suffix_from_type or
+        # suffix_from_periods" logic picked "(OT)" and never even looked
+        # at periods - even though a shootout only ever happens after a
+        # scoreless overtime, so periods showing WINNING_SHOT_COMPETITION
+        # here is strictly the more specific, and more reliable
+        # (confirmed live), signal of the two.
+        bot = MagicMock()
+        game = self._game_with_periods("ENDED_DURING_OVERTIME", [
+            {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+            {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+            {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 0, "awayTeamGoals": 0},
+            {"index": 5, "category": "WINNING_SHOT_COMPETITION", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ])
+
+        liiga_command._announce_end(bot, "#chan", game)
+
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (SO)"
+        assert "end-suffix mismatch" in capsys.readouterr().out  # still logged, still diverges
+
     def test_scoreless_overtime_period_entry_is_not_mistaken_for_a_played_one(self, liiga_command):
         # A period category can apparently appear in the list even when
         # nothing happened in it (e.g. scheduling metadata) - only count

@@ -212,7 +212,18 @@ class LiigaCommand(LiveTrackerCommand):
             if category == "OVERTIME" and goals:
                 suffix_from_periods = " (OT)"
 
-        suffix = suffix_from_type or suffix_from_periods
+        # A shootout only ever follows a scoreless overtime, so it's
+        # strictly the more specific/final outcome of the two - and
+        # periods is the source confirmed live to catch it reliably
+        # (see comment above). finishedType is otherwise trusted first:
+        # a generic "OVERTIME" finishedType (which doesn't distinguish
+        # "decided in OT" from "OT then shootout") would otherwise always
+        # win over periods here, since it's non-empty and short-circuits
+        # the "or" below before periods ever gets consulted.
+        if suffix_from_periods == " (SO)":
+            suffix = " (SO)"
+        else:
+            suffix = suffix_from_type or suffix_from_periods
         if suffix_from_type != suffix_from_periods:
             # Diagnostic for a reported case where a real shootout final
             # was announced with no suffix at all - couldn't reproduce
