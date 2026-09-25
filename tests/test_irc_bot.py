@@ -1,4 +1,5 @@
 import os
+import socket
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -289,7 +290,8 @@ class TestConnect:
     def test_prints_a_startup_banner_with_the_pid(self, bot, capsys):
         bot.sock.connect.side_effect = OSError("unreachable")  # short-circuits before the blocking loop
 
-        bot.connect()
+        with patch("irc_bot.socket.socket", return_value=bot.sock):
+            bot.connect()
 
         captured = capsys.readouterr()
         assert f"BOT STARTED pid={os.getpid()}" in captured.out
@@ -299,7 +301,8 @@ class TestConnect:
         # loop can't block the test - the first sleep() call (before
         # join_channels()) flips running off, same as a real shutdown
         # would, so the loop below it never actually spins.
-        with patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
+        with patch("irc_bot.socket.socket", return_value=bot.sock), \
+             patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
              patch("irc_bot.threading.Thread"):
             bot.connect()
 
@@ -309,11 +312,29 @@ class TestConnect:
     def test_failed_connect_logs_connect_failed_with_traceback(self, bot, capsys):
         bot.sock.connect.side_effect = OSError("unreachable")
 
-        bot.connect()
+        with patch("irc_bot.socket.socket", return_value=bot.sock):
+            bot.connect()
 
         captured = capsys.readouterr()
         assert "CONNECT FAILED: unreachable" in captured.out
         assert "Traceback" in captured.err
+
+    def test_connect_creates_the_socket_lazily_not_at_construction(self):
+        # Regression test: IrcBot() used to open a real socket in
+        # __init__, so simply instantiating a bot (e.g. in any test)
+        # created a live OS socket that was never connected or closed
+        # unless the test happened to overwrite/close it. The socket
+        # should only come into existence once connect() actually needs
+        # one.
+        b = IrcBot()
+        assert b.sock is None
+
+        with patch("irc_bot.socket.socket") as mock_socket_cls:
+            mock_socket_cls.return_value.connect.side_effect = OSError("unreachable")
+            b.connect()
+
+        mock_socket_cls.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
+        assert b.sock is mock_socket_cls.return_value
 
 
 class TestStop:

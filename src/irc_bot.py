@@ -15,7 +15,7 @@ class IrcBot:
         self.nickname = nickname
         self.channels = channels if channels else ["#bottest123"]  # Default channel
         self.running = False
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock = None
         self._send_lock = threading.Lock()  # serializes socket writes across threads
         self.command_handler = CommandHandler()  # Initialize command handler
         self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
@@ -29,6 +29,7 @@ class IrcBot:
         print(f"==== BOT STARTED pid={os.getpid()} ====")
         print(f"Connecting to {self.server}:{self.port} as {self.nickname}...")
         try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((self.server, self.port))
             print(f"CONNECTED: {self.server}:{self.port} as {self.nickname}")
             self.send_raw(f"NICK {self.nickname}")
