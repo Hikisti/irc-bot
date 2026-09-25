@@ -65,18 +65,15 @@ class ElectricityCommand(BaseCommand):
             rounded_price = Decimal(str(price)).quantize(Decimal("0.01"), ROUND_HALF_UP)
             result = f"{rounded_price} snt / kWh"
             
-            # Calculate next quarter hour and cache
-            minute = now.minute
-            next_quarter = ((minute // 15) + 1) * 15
-            
-            if next_quarter == 60:
-                next_time = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
-            else:
-                next_time = now.replace(minute=next_quarter, second=0, microsecond=0)
-            
-            # Store result and expiration as timestamp for faster comparison
+            # Next quarter-hour boundary, computed on the UTC epoch rather
+            # than by adding a wall-clock timedelta to `now`: Finland's
+            # UTC offset is always a whole number of hours, so epoch and
+            # local quarter-hour boundaries coincide, but wall-clock
+            # arithmetic doesn't - on DST fall-back night, adding an hour
+            # to a wall-clock time can jump across the repeated hour,
+            # caching a price for ~70 real minutes instead of ~15.
             self._cached_result = result
-            self._cache_until_timestamp = next_time.timestamp()
+            self._cache_until_timestamp = (int(now_timestamp) // 900 + 1) * 900
             
             return result
 

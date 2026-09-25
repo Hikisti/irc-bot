@@ -27,9 +27,9 @@ class FrozenDateTime(datetime.datetime):
         return cls._frozen.astimezone(tz) if tz else cls._frozen.replace(tzinfo=None)
 
 
-def freeze_at(monkeypatch, hour, minute):
+def freeze_at(monkeypatch, hour, minute, year=2026, month=1, day=15, fold=0):
     tz = ZoneInfo("Europe/Helsinki")
-    FrozenDateTime._frozen = datetime.datetime(2026, 1, 15, hour, minute, 30, tzinfo=tz)
+    FrozenDateTime._frozen = datetime.datetime(year, month, day, hour, minute, 30, fold=fold, tzinfo=tz)
     monkeypatch.setattr("electricity.datetime.datetime", FrozenDateTime)
 
 
@@ -101,6 +101,23 @@ class TestCacheExpiry:
 
         expected = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=ZoneInfo("Europe/Helsinki"))
         assert electricity_command._cache_until_timestamp == expected.timestamp()
+
+    def test_cache_expires_after_15_real_minutes_across_dst_fall_back(
+        self, electricity_command, monkeypatch
+    ):
+        # Regression test: Finland's DST fall-back for 2026 is 2026-10-25,
+        # 04:00 EEST -> 03:00 EET, so 03:00-03:59 occurs twice (fold=0 is
+        # the first, EEST pass). Computing the next cache boundary by
+        # adding a wall-clock timedelta(hours=1) to "now" (the old logic)
+        # jumped straight over the repeated hour, caching a price for a
+        # real 70 minutes here instead of ~10-15.
+        freeze_at(monkeypatch, year=2026, month=10, day=25, hour=3, minute=50, fold=0)
+        with patch.object(electricity_command.session, "get", return_value=make_response({"price": 1.0})):
+            electricity_command.execute()
+
+        now = datetime.datetime(2026, 10, 25, 3, 50, 30, fold=0, tzinfo=ZoneInfo("Europe/Helsinki"))
+        real_minutes_cached = (electricity_command._cache_until_timestamp - now.timestamp()) / 60
+        assert 9 <= real_minutes_cached <= 10
 
     def test_cache_is_reused_before_expiry_and_refetched_after(self, electricity_command, monkeypatch):
         freeze_at(monkeypatch, hour=10, minute=20)  # expires at 10:30
