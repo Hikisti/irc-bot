@@ -157,6 +157,27 @@ class TestRun:
 
         bot.send_message.assert_called_once_with("#chan", "Error: could not reach the Liiga API.")
 
+    def test_refuses_to_start_more_than_15_minutes_before_first_game(self, liiga_command):
+        # Confirms LiigaCommand's own START_TIME_KEY ("start") wiring into
+        # the shared early-start guard - the guard's own logic is covered
+        # exhaustively in test_live_tracker_command.py.
+        bot = MagicMock()
+        stop_event = threading.Event()
+        liiga_command._channels["#chan"] = {"stop_event": stop_event, "thread": None, "games": {}}
+
+        future_start = (
+            datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(minutes=30)
+        ).isoformat()
+        with patch.object(
+            liiga_command, "_fetch_today_games",
+            return_value={1: make_game(start=future_start)},
+        ):
+            liiga_command._run(bot, "#chan", stop_event)
+
+        message = bot.send_message.call_args[0][1]
+        assert "Too early to track" in message
+        assert "#chan" not in liiga_command._channels
+
     def test_stopped_before_lookup_finishes_sends_nothing(self, liiga_command):
         bot = MagicMock()
         stop_event = threading.Event()

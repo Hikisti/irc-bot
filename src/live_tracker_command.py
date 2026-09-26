@@ -43,6 +43,15 @@ class LiveTrackerCommand(BaseCommand):
     HELSINKI_TZ = ZoneInfo("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10
+    # How long before the earliest today's-item's scheduled start
+    # <command> start refuses to begin polling - confirmed live users
+    # start tracking well over an hour before the first game, which just
+    # burns API calls/poll cycles for nothing until something's actually
+    # happening. A subclass sets START_TIME_KEY to the field name its own
+    # items use for their ISO-8601 start timestamp (e.g. Liiga's "start",
+    # Pesis's "date").
+    EARLY_START_GUARD_MINUTES = 15
+    START_TIME_KEY = None
     # Bound for "<command> next"'s day-by-day search when today's own
     # games/matches are all already finished (or there's an API-specific
     # hint that doesn't apply) - see each subclass's own next-period fetch
@@ -193,6 +202,24 @@ class LiveTrackerCommand(BaseCommand):
             self._safe_send(irc_bot, channel, f"No {self.DISPLAY_NAME} {self.TRACKED_NOUN} scheduled today.")
             return
 
+        earliest = min(
+            (dt for dt in (
+                self._parse_start_dt(item.get(self.START_TIME_KEY)) for item in items.values()
+            ) if dt is not None),
+            default=None,
+        )
+        if earliest is not None:
+            guard_until = earliest - datetime.timedelta(minutes=self.EARLY_START_GUARD_MINUTES)
+            now = datetime.datetime.now(self.HELSINKI_TZ)
+            if now < guard_until:
+                self._drop_if_current(channel, stop_event)
+                self._safe_send(irc_bot, channel, (
+                    f"Too early to track — {self.DISPLAY_NAME} play starts at "
+                    f"{earliest.strftime('%H:%M')}. You can run {self.COMMAND_NAME} start "
+                    f"again from {guard_until.strftime('%H:%M')} onward."
+                ))
+                return
+
         state = self._build_initial_state(items)
         if not self._commit_initial_state(channel, stop_event, state):
             return  # stopped (or superseded) before the lookup finished
@@ -294,16 +321,22 @@ class LiveTrackerCommand(BaseCommand):
 
     # ---- start-time summary (e.g. "17:00 A-B, C-D | 18:30 E-F") --------
 
-    def _start_time_label(self, iso_str):
-        """Scheduled start time in Helsinki local time as 'HH:MM', or None
-        if there's no usable ISO-8601 timestamp."""
+    def _parse_start_dt(self, iso_str):
+        """Scheduled start time as an aware Helsinki-local datetime, or
+        None if there's no usable ISO-8601 timestamp."""
         if not iso_str:
             return None
         try:
             dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             return None
-        return dt.astimezone(self.HELSINKI_TZ).strftime("%H:%M")
+        return dt.astimezone(self.HELSINKI_TZ)
+
+    def _start_time_label(self, iso_str):
+        """Scheduled start time in Helsinki local time as 'HH:MM', or None
+        if there's no usable ISO-8601 timestamp."""
+        dt = self._parse_start_dt(iso_str)
+        return dt.strftime("%H:%M") if dt else None
 
     def _format_start_time_summary(self, items, start_key, name_fn) -> str:
         """Groups items by scheduled start time (items[start_key], an

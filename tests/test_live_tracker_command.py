@@ -1,9 +1,44 @@
 import datetime
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from live_tracker_command import LiveTrackerCommand
+
+
+class RunTracker(LiveTrackerCommand):
+    """Unlike MinimalTracker below, this one keeps the real _run() (needed
+    to exercise the early-start guard, which lives inside it) - so tests
+    using this call _run() directly rather than through _start()'s real
+    background thread, the same way TestRunNext calls _run_next()
+    directly."""
+
+    DISPLAY_NAME = "Test"
+    COMMAND_NAME = "!test"
+    CACHE_SLUG = "test"
+    TRACKED_NOUN = "items"
+    TRACKED_NOUN_COUNTED = "item(s)"
+    PERIOD_NOUN = "round"
+    STATE_KEY = "items"
+    START_TIME_KEY = "start"
+
+    def _fetch_today_items(self, context):
+        raise NotImplementedError
+
+    def _build_initial_state(self, items) -> dict:
+        return {k: {"seen": True} for k in items}
+
+    def _format_period_summary(self, items):
+        return ", ".join(str(i) for i in items)
+
+    def _poll_once(self, irc_bot, channel, *context_args) -> bool:
+        return True
+
+
+@pytest.fixture
+def run_tracker():
+    return RunTracker()
 
 
 class MinimalTracker(LiveTrackerCommand):
@@ -214,6 +249,90 @@ class TestStartTimeLabel:
 
     def test_malformed_timestamp_returns_none(self, tracker):
         assert tracker._start_time_label("not-a-timestamp") is None
+
+
+class TestEarlyStartGuard:
+    """_run()'s guard against starting to poll long before anything's
+    actually happening - confirmed live (Liiga, 2026-09-26): users start
+    tracking well over an hour before the first game, burning API calls/
+    poll cycles for nothing."""
+
+    def _run_with_items(self, tracker, items):
+        bot = MagicMock()
+        stop_event = threading.Event()
+        tracker._channels["#chan"] = {"stop_event": stop_event, "thread": None, tracker.STATE_KEY: {}}
+        tracker._fetch_today_items = lambda context: items
+        tracker._run(bot, "#chan", stop_event)
+        return bot
+
+    def test_refuses_when_more_than_guard_minutes_before_first_start(self, run_tracker):
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        first_start = now + datetime.timedelta(minutes=30)
+        bot = self._run_with_items(run_tracker, {1: {"start": first_start.isoformat()}})
+
+        message = bot.send_message.call_args[0][1]
+        guard_until = first_start - datetime.timedelta(minutes=15)
+        assert message == (
+            f"Too early to track — Test play starts at {first_start.strftime('%H:%M')}. "
+            f"You can run !test start again from {guard_until.strftime('%H:%M')} onward."
+        )
+        # The channel slot _start() would have reserved must be released,
+        # so a later retry isn't blocked by a phantom "already tracking".
+        assert "#chan" not in run_tracker._channels
+
+    def test_uses_the_earliest_of_several_items(self, run_tracker):
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        earlier = now + datetime.timedelta(minutes=45)
+        later = now + datetime.timedelta(minutes=90)
+        bot = self._run_with_items(run_tracker, {
+            1: {"start": later.isoformat()},
+            2: {"start": earlier.isoformat()},
+        })
+
+        assert earlier.strftime("%H:%M") in bot.send_message.call_args[0][1]
+
+    def test_proceeds_at_exactly_the_guard_boundary(self, run_tracker):
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        first_start = now + datetime.timedelta(minutes=15)
+        bot = self._run_with_items(run_tracker, {1: {"start": first_start.isoformat()}})
+
+        first_message = bot.send_message.call_args_list[0][0][1]
+        assert "Too early" not in first_message
+        assert "Tracking 1 Test item(s) today" in first_message
+
+    def test_proceeds_once_within_the_guard_window(self, run_tracker):
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        first_start = now + datetime.timedelta(minutes=5)
+        bot = self._run_with_items(run_tracker, {1: {"start": first_start.isoformat()}})
+
+        assert "Tracking 1 Test item(s) today" in bot.send_message.call_args_list[0][0][1]
+
+    def test_proceeds_once_the_game_has_already_started(self, run_tracker):
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        past_start = now - datetime.timedelta(minutes=10)
+        bot = self._run_with_items(run_tracker, {1: {"start": past_start.isoformat()}})
+
+        assert "Tracking 1 Test item(s) today" in bot.send_message.call_args_list[0][0][1]
+
+    def test_fails_open_when_every_start_field_is_missing(self, run_tracker):
+        bot = self._run_with_items(run_tracker, {1: {}, 2: {"start": None}})
+        assert "Tracking 2 Test item(s) today" in bot.send_message.call_args_list[0][0][1]
+
+    def test_fails_open_when_start_field_is_unparseable(self, run_tracker):
+        bot = self._run_with_items(run_tracker, {1: {"start": "not-a-timestamp"}})
+        assert "Tracking 1 Test item(s) today" in bot.send_message.call_args_list[0][0][1]
+
+    def test_uses_only_the_valid_start_among_a_mix(self, run_tracker):
+        # One item's start can't be parsed - the guard must still work off
+        # the other, valid one rather than failing open entirely.
+        now = datetime.datetime.now(run_tracker.HELSINKI_TZ)
+        far_future = now + datetime.timedelta(minutes=30)
+        bot = self._run_with_items(run_tracker, {
+            1: {"start": "not-a-timestamp"},
+            2: {"start": far_future.isoformat()},
+        })
+
+        assert "Too early to track" in bot.send_message.call_args_list[0][0][1]
 
 
 class TestAbstractHooks:

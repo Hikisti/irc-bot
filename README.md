@@ -69,6 +69,11 @@ in `src/irc_bot.py`.
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
 
+`!liiga start`/`!superpesis start`/`!ykkospesis start` all refuse to begin tracking more than 15
+minutes before the earliest scheduled game/match that day, e.g. `Too early to track — Liiga play
+starts at 17:00. You can run !liiga start again from 16:45 onward.` — avoids burning API calls and
+poll cycles hours before anything's actually happening.
+
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
 all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the next upcoming

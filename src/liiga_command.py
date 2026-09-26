@@ -37,6 +37,7 @@ class LiigaCommand(LiveTrackerCommand):
     TRACKED_NOUN_COUNTED = "game(s)"
     PERIOD_NOUN = "gameday"
     STATE_KEY = "games"
+    START_TIME_KEY = "start"
 
     BASE_URL = "https://www.liiga.fi/api/v2/games"
     TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]

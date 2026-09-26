@@ -1,3 +1,4 @@
+import datetime
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -127,6 +128,25 @@ class TestRun:
         message = bot.send_message.call_args[0][1]
         assert "Tracking 1 Superpesis match" in message
         assert "Manse PP-Hyvinkään Tahko" in message
+
+    def test_refuses_to_start_more_than_15_minutes_before_first_match(self, sc):
+        # Confirms PesisCommand's own START_TIME_KEY ("date") wiring into
+        # the shared early-start guard - the guard's own logic is covered
+        # exhaustively in test_live_tracker_command.py.
+        bot = MagicMock()
+        stop_event = threading.Event()
+        sc._channels["#pesis.fi"] = {"stop_event": stop_event, "thread": None, "matches": {}}
+
+        future_date = (
+            datetime.datetime.now(sc.HELSINKI_TZ) + datetime.timedelta(minutes=30)
+        ).isoformat()
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_today_matches", return_value={146953: make_match(date=future_date)}):
+            sc._run(bot, "#pesis.fi", stop_event)
+
+        message = bot.send_message.call_args[0][1]
+        assert "Too early to track" in message
+        assert "#pesis.fi" not in sc._channels
 
 
 class TestSeedSnapshot:

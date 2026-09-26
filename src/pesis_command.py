@@ -169,6 +169,7 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
     PERIOD_NOUN = "matchday"
     STATE_KEY = "matches"
     REQUIRES_CONTEXT = True
+    START_TIME_KEY = "date"
 
     # /public/series-list is ~1MB even filtered to the current season alone
     # (5.6MB unfiltered, across 82+ historical seasons) - confirmed live
