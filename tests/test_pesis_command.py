@@ -148,6 +148,25 @@ class TestRun:
         assert "Too early to track" in message
         assert "#pesis.fi" not in sc._channels
 
+    def test_all_matches_already_finished_sends_one_message_not_tracking_then_stopped(self, sc):
+        # Confirms PesisCommand's own ENDED_STATE_KEY ("finished") wiring
+        # into the shared already-finished guard - the guard's own logic
+        # is covered exhaustively in test_live_tracker_command.py.
+        bot = MagicMock()
+        stop_event = threading.Event()
+        sc._channels["#pesis.fi"] = {"stop_event": stop_event, "thread": None, "matches": {}}
+
+        with patch.object(sc, "_resolve_series_id", return_value=2945), \
+             patch.object(sc, "_fetch_today_matches", return_value={146953: make_match(finished=True)}), \
+             patch.object(sc, "_fetch_match_events", return_value=[]), \
+             patch.object(sc, "_fetch_match_roster", return_value={}):
+            sc._run(bot, "#pesis.fi", stop_event)
+
+        bot.send_message.assert_called_once_with(
+            "#pesis.fi", "All of today's Superpesis matches have already finished.",
+        )
+        assert "#pesis.fi" not in sc._channels
+
 
 class TestSeedSnapshot:
     def test_seeds_empty_announced_and_ended_periods(self, sc):

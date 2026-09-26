@@ -52,6 +52,15 @@ class LiveTrackerCommand(BaseCommand):
     # Pesis's "date").
     EARLY_START_GUARD_MINUTES = 15
     START_TIME_KEY = None
+    # The per-item state key (from _build_initial_state()'s own snapshot,
+    # e.g. Liiga's "ended", Pesis's "finished") that says an item is
+    # already over - lets <command> start recognize "today's slate exists
+    # but every single item on it already finished" (e.g. run late in the
+    # evening, well after the last game ended) as its own case, distinct
+    # from "no items scheduled today" - rather than announcing "Tracking
+    # N games" and then immediately, confusingly, "all finished, stopped"
+    # a fraction of a second later.
+    ENDED_STATE_KEY = None
     # Bound for "<command> next"'s day-by-day search when today's own
     # games/matches are all already finished (or there's an API-specific
     # hint that doesn't apply) - see each subclass's own next-period fetch
@@ -221,6 +230,15 @@ class LiveTrackerCommand(BaseCommand):
                 return
 
         state = self._build_initial_state(items)
+
+        if all(s.get(self.ENDED_STATE_KEY) for s in state.values()):
+            self._drop_if_current(channel, stop_event)
+            self._safe_send(
+                irc_bot, channel,
+                f"All of today's {self.DISPLAY_NAME} {self.TRACKED_NOUN} have already finished.",
+            )
+            return
+
         if not self._commit_initial_state(channel, stop_event, state):
             return  # stopped (or superseded) before the lookup finished
 

@@ -22,12 +22,13 @@ class RunTracker(LiveTrackerCommand):
     PERIOD_NOUN = "round"
     STATE_KEY = "items"
     START_TIME_KEY = "start"
+    ENDED_STATE_KEY = "ended"
 
     def _fetch_today_items(self, context):
         raise NotImplementedError
 
     def _build_initial_state(self, items) -> dict:
-        return {k: {"seen": True} for k in items}
+        return {k: {"seen": True, "ended": v.get("ended", False)} for k, v in items.items()}
 
     def _format_period_summary(self, items):
         return ", ".join(str(i) for i in items)
@@ -333,6 +334,42 @@ class TestEarlyStartGuard:
         })
 
         assert "Too early to track" in bot.send_message.call_args_list[0][0][1]
+
+
+class TestAlreadyFinishedGuard:
+    """_run()'s bail-out when today's slate exists but every item on it
+    is already over - confirmed live (Liiga, 2026-09-26, late evening
+    Helsinki time): without this, !liiga start announced "Tracking N
+    games today" and then, a fraction of a second later, "all finished,
+    stopped" - confusing noise rather than a single clear message."""
+
+    def _run_with_items(self, tracker, items):
+        bot = MagicMock()
+        stop_event = threading.Event()
+        tracker._channels["#chan"] = {"stop_event": stop_event, "thread": None, tracker.STATE_KEY: {}}
+        tracker._fetch_today_items = lambda context: items
+        tracker._run(bot, "#chan", stop_event)
+        return bot
+
+    def test_all_already_ended_sends_one_clear_message_not_tracking_then_stopped(self, run_tracker):
+        bot = self._run_with_items(run_tracker, {1: {"ended": True}, 2: {"ended": True}})
+
+        bot.send_message.assert_called_once_with(
+            "#chan", "All of today's Test items have already finished.",
+        )
+        assert "#chan" not in run_tracker._channels
+
+    def test_some_still_active_proceeds_normally(self, run_tracker):
+        bot = self._run_with_items(run_tracker, {1: {"ended": True}, 2: {"ended": False}})
+
+        first_message = bot.send_message.call_args_list[0][0][1]
+        assert "Tracking 2 Test item(s) today" in first_message
+
+    def test_none_ended_proceeds_normally(self, run_tracker):
+        bot = self._run_with_items(run_tracker, {1: {"ended": False}})
+
+        first_message = bot.send_message.call_args_list[0][0][1]
+        assert "Tracking 1 Test item(s) today" in first_message
 
 
 class TestAbstractHooks:

@@ -178,6 +178,25 @@ class TestRun:
         assert "Too early to track" in message
         assert "#chan" not in liiga_command._channels
 
+    def test_all_games_already_ended_sends_one_message_not_tracking_then_stopped(self, liiga_command):
+        # Confirms LiigaCommand's own ENDED_STATE_KEY ("ended") wiring
+        # into the shared already-finished guard - the guard's own logic
+        # is covered exhaustively in test_live_tracker_command.py.
+        bot = MagicMock()
+        stop_event = threading.Event()
+        liiga_command._channels["#chan"] = {"stop_event": stop_event, "thread": None, "games": {}}
+
+        with patch.object(
+            liiga_command, "_fetch_today_games",
+            return_value={1: make_game(ended=True), 2: make_game(gid=2, ended=True)},
+        ):
+            liiga_command._run(bot, "#chan", stop_event)
+
+        bot.send_message.assert_called_once_with(
+            "#chan", "All of today's Liiga games have already finished.",
+        )
+        assert "#chan" not in liiga_command._channels
+
     def test_stopped_before_lookup_finishes_sends_nothing(self, liiga_command):
         bot = MagicMock()
         stop_event = threading.Event()

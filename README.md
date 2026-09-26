@@ -72,7 +72,10 @@ in `src/irc_bot.py`.
 `!liiga start`/`!superpesis start`/`!ykkospesis start` all refuse to begin tracking more than 15
 minutes before the earliest scheduled game/match that day, e.g. `Too early to track — Liiga play
 starts at 17:00. You can run !liiga start again from 16:45 onward.` — avoids burning API calls and
-poll cycles hours before anything's actually happening.
+poll cycles hours before anything's actually happening. They also recognize when today's slate
+exists but every game/match on it is already finished (e.g. run late in the evening), replying with
+a single `All of today's Liiga games have already finished.` instead of announcing "Tracking N
+games" and then immediately "all finished, stopped" a moment later.
 
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
