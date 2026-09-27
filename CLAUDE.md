@@ -32,7 +32,8 @@ not what it is.
 ## Development workflow
 
 - Python 3.14 everywhere (local venv, CI, production) - keep these in sync
-  if the venv is ever rebuilt (see the "rebuilding the venv" note below).
+  if the venv is ever rebuilt (see `DEPLOY.md`'s "rebuilding the venv" note
+  for a real incident this caused and how to avoid it).
 - `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r
   requirements-dev.txt`
 - `pytest` for the suite; `pytest --cov=src --cov-report=term-missing` for
@@ -90,3 +91,13 @@ turned out to be (often confirmed against the live API), and why the fix
 addresses that root cause rather than just the symptom. Look at recent
 `git log` output here for the tone/length to match before writing one from
 scratch.
+
+## Keeping this file current
+
+When a new standing rule gets established (a correction meant to
+generalize beyond the one task it came up in) or the architecture changes
+in a way that makes a section above stale, propose adding it here - don't
+wait to be asked to consider it. But never edit this file without explicit
+confirmation first, same as any other commit in this repo. Don't use it as
+a changelog - individual bug fixes and features belong in commit messages
+and `git log`, not here.
