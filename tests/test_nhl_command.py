@@ -319,15 +319,45 @@ class TestFetchTodayGames:
             assert nhl_command._fetch_today_games() == {}
 
 
+class TestHelsinkiDateLabel:
+    def test_uses_the_earliest_games_helsinki_date(self, nhl_command):
+        games = {
+            1: make_schedule_game(gid=1, start_time_utc="2026-09-29T23:00:00Z"),
+            2: make_schedule_game(gid=2, start_time_utc="2026-09-30T02:00:00Z"),
+        }
+        # Both convert to Helsinki 2026-09-30 (+03:00) - earliest wins,
+        # but they agree here anyway; see test_finds_the_earliest below
+        # for a case where they genuinely differ.
+        assert nhl_command._helsinki_date_label(games, "2026-09-29") == "2026-09-30"
+
+    def test_finds_the_earliest_when_games_span_two_helsinki_dates(self, nhl_command):
+        games = {
+            1: make_schedule_game(gid=1, start_time_utc="2026-09-29T13:00:00Z"),  # same Helsinki day
+            2: make_schedule_game(gid=2, start_time_utc="2026-09-29T23:00:00Z"),  # next Helsinki day
+        }
+        assert nhl_command._helsinki_date_label(games, "2026-09-29") == "2026-09-29"
+
+    def test_falls_back_to_eastern_date_when_no_start_time_parses(self, nhl_command):
+        games = {1: {"startTimeUTC": "not-a-timestamp"}}
+        assert nhl_command._helsinki_date_label(games, "2026-09-29") == "2026-09-29"
+
+    def test_empty_games_falls_back_to_eastern_date(self, nhl_command):
+        assert nhl_command._helsinki_date_label({}, "2026-09-29") == "2026-09-29"
+
+
 class TestFetchNextGameday:
     def test_finds_next_day_with_unfinished_games_in_same_week(self, nhl_command):
         today = nhl_command._today_eastern_str()
         tomorrow = (
             datetime.datetime.now(nhl_command.EASTERN_TZ) + datetime.timedelta(days=1)
         ).strftime("%Y-%m-%d")
+        # Early UTC time (13:00Z) so the Helsinki-converted date lines up
+        # with the Eastern bucket date for this test's purposes - the
+        # deliberate Eastern-evening-crosses-into-next-Helsinki-day case
+        # is its own dedicated test below.
         payload = make_schedule_payload({
             today: [],
-            tomorrow: [make_schedule_game(gid=1, game_state="FUT")],
+            tomorrow: [make_schedule_game(gid=1, game_state="FUT", start_time_utc=f"{tomorrow}T13:00:00Z")],
         })
         with patch.object(nhl_command, "_fetch_schedule", return_value=payload):
             date_str, games = nhl_command._fetch_next_gameday()
@@ -341,7 +371,7 @@ class TestFetchNextGameday:
         ).strftime("%Y-%m-%d")
         payload = make_schedule_payload({
             today: [make_schedule_game(gid=1, game_state="FINAL")],
-            tomorrow: [make_schedule_game(gid=2, game_state="FUT")],
+            tomorrow: [make_schedule_game(gid=2, game_state="FUT", start_time_utc=f"{tomorrow}T13:00:00Z")],
         })
         with patch.object(nhl_command, "_fetch_schedule", return_value=payload):
             date_str, games = nhl_command._fetch_next_gameday()
@@ -351,12 +381,38 @@ class TestFetchNextGameday:
         today = nhl_command._today_eastern_str()
         far_date = "2099-01-01"
         first_week = make_schedule_payload({today: []}, next_start_date=far_date)
-        second_week = make_schedule_payload({far_date: [make_schedule_game(gid=1, game_state="FUT")]})
+        second_week = make_schedule_payload({
+            far_date: [make_schedule_game(gid=1, game_state="FUT", start_time_utc=f"{far_date}T13:00:00Z")],
+        })
 
         with patch.object(nhl_command, "_fetch_schedule", side_effect=[first_week, second_week]):
             date_str, games = nhl_command._fetch_next_gameday()
         assert date_str == far_date
         assert list(games.keys()) == [1]
+
+    def test_eastern_evening_game_is_labeled_by_its_own_helsinki_date_not_the_api_bucket(self, nhl_command):
+        # Regression test for a real incident: the API's own gameWeek
+        # "date" is an Eastern calendar date, but !nhl next used to hand
+        # that straight to the shared "today"/"tomorrow" labeling logic,
+        # which compares it against Helsinki's own "today" - an Eastern
+        # evening game actually lands on the *following* Helsinki
+        # calendar date, so a slate the API bucketed under Eastern
+        # "2026-09-29" (with every game in the evening, Helsinki-local
+        # 2026-09-30) was mislabeled "tomorrow" instead of the correct,
+        # later date.
+        eastern_bucket_date = "2026-09-29"
+        payload = make_schedule_payload({
+            nhl_command._today_eastern_str(): [],
+            eastern_bucket_date: [
+                make_schedule_game(gid=1, game_state="FUT", start_time_utc="2026-09-29T21:00:00Z"),
+            ],
+        })
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload):
+            date_str, games = nhl_command._fetch_next_gameday()
+
+        # 2026-09-29T21:00:00Z is 2026-09-30 00:00 Helsinki time (+03:00).
+        assert date_str == "2026-09-30"
+        assert date_str != eastern_bucket_date
 
     def test_fetch_failure_returns_none_none(self, nhl_command):
         with patch.object(nhl_command, "_fetch_schedule", return_value=None):

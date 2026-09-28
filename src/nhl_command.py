@@ -332,6 +332,26 @@ class NHLCommand(LiveTrackerCommand):
                 return {g["id"]: g for g in (week.get("games") or []) if g.get("id") is not None}
         return {}
 
+    def _helsinki_date_label(self, games, eastern_date_str) -> str:
+        """The API's own gameWeek "date" is an Eastern calendar date - not
+        safe to hand straight to _format_date_label() (which compares it
+        against Helsinki's own "today"), since an Eastern evening game
+        lands on the *following* Helsinki calendar date. Confirmed live:
+        a slate the API buckets under Eastern "2026-09-29" landed
+        entirely on Helsinki date 2026-09-30, so "!nhl next" was
+        announcing "tomorrow" for a slate that was actually two days out
+        (a real Tuesday-labeled-as-Wednesday mislabel reported live).
+        Uses the *earliest* game's own Helsinki-converted date instead -
+        falls back to the raw Eastern date if none of the games have a
+        parseable start time (defensive, not observed live)."""
+        starts = [
+            dt for dt in (self._parse_start_dt(g.get("startTimeUTC")) for g in games.values())
+            if dt is not None
+        ]
+        if not starts:
+            return eastern_date_str
+        return min(starts).strftime("%Y-%m-%d")
+
     def _fetch_next_gameday(self):
         """Returns (date_str, games_dict) for the closest date (today or
         later) that has games *not all already finished*, or (None, None)
@@ -355,7 +375,7 @@ class NHLCommand(LiveTrackerCommand):
             for week in data.get("gameWeek") or []:
                 games = {g["id"]: g for g in (week.get("games") or []) if g.get("id") is not None}
                 if games and not all(self._is_ended(g) for g in games.values()):
-                    return week["date"], games
+                    return self._helsinki_date_label(games, week["date"]), games
 
             next_start = data.get("nextStartDate")
             if not next_start or next_start <= date_str:

@@ -107,13 +107,16 @@ early-start guard, and already-finished guard as `!liiga start`), announcing goa
 as they happen, e.g. `GOAL: Carolina Hurricanes 1-0 Florida Panthers 04:31 1st | Carolina
 Hurricanes — Bradly Nadeau (assists: Mike Reilly)` and `FINAL: Carolina Hurricanes 3-2 Florida
 Panthers (SO)`. `!nhl next` looks up the next upcoming NHL gameday and lists its matchups grouped
-by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (tomorrow): 00:00
+by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (Wed 30/09): 00:00
 CAR-FLA | 02:00 TOR-MTL`. Uses `api-web.nhle.com`, the NHL's own public web API (the same one that
 powers the NHL's official site) - undocumented and unofficial, so it isn't guaranteed to stay
 stable, same caveat as liiga.fi/pesistulokset.fi. Note the times shown are always Helsinki-local,
 but the API's own notion of "today" is anchored to US Eastern time - most NHL games actually fall
-into the small hours of the following Helsinki calendar day. **Only works in `#nhl.fi`** - like
-`!superpesis`, it's restricted to that one channel; typing it elsewhere is silently ignored.
+into the small hours of the following Helsinki calendar day, which is why the gameday label above
+is computed from the games' own Helsinki-converted times rather than the API's own (Eastern) date,
+and can end up showing a date further out than "tomorrow" even for the very next NHL gameday.
+**Only works in `#nhl.fi`** - like `!superpesis`, it's restricted to that one channel; typing it
+elsewhere is silently ignored.
 
 `!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches
 every 30s and announces runs and final results as they happen, the same way `!liiga start` does
