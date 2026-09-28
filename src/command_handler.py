@@ -9,6 +9,7 @@ from f1_command import F1Command
 from liiga_command import LiigaCommand
 from distance_command import DistanceCommand
 from imdb_command import ImdbCommand
+from nhl_command import NHLCommand
 from pesis_command import SuperpesisCommand, YkkospesisCommand
 
 class CommandHandler:
@@ -37,6 +38,7 @@ class CommandHandler:
         LiigaCommand,
         DistanceCommand,
         ImdbCommand,
+        NHLCommand,
         SuperpesisCommand,
         YkkospesisCommand,
     ]

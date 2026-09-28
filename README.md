@@ -2,8 +2,8 @@
 
 A simple IRC bot (KukistiBot) with a handful of chat commands: weather, stock, crypto,
 electricity price, local time, F1 schedule, driving distance, IMDb lookups, and live Liiga (ice
-hockey) and Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles for
-links shared in channel.
+hockey), NHL, and Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles
+for links shared in channel.
 
 ## Setup
 
@@ -65,6 +65,7 @@ in `src/irc_bot.py`.
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
 | IMDb | `!imdb` | movie/show title | `!imdb terminator 2` |
+| NHL live tracker | `!nhl` | `start`, `stop`, or `next` | `!nhl start` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
@@ -100,6 +101,19 @@ for a free personal bot) and replies with its year, IMDb rating, a short plot su
 IMDb URL, e.g. `Terminator 2: Judgment Day (1991) - IMDb: 8.6/10 - A cyborg from the future...
 - https://www.imdb.com/title/tt0103064/`. An unreleased/unrated title shows "not yet rated"
 instead of a score.
+
+`!nhl start` polls today's NHL games every 30s in the channel it was started in (same lifecycle,
+early-start guard, and already-finished guard as `!liiga start`), announcing goals and final scores
+as they happen, e.g. `GOAL: Carolina Hurricanes 1-0 Florida Panthers 04:31 1st | Carolina
+Hurricanes — Bradly Nadeau (assists: Mike Reilly)` and `FINAL: Carolina Hurricanes 3-2 Florida
+Panthers (SO)`. `!nhl next` looks up the next upcoming NHL gameday and lists its matchups grouped
+by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (tomorrow): 00:00
+CAR-FLA | 02:00 TOR-MTL`. Uses `api-web.nhle.com`, the NHL's own public web API (the same one that
+powers the NHL's official site) - undocumented and unofficial, so it isn't guaranteed to stay
+stable, same caveat as liiga.fi/pesistulokset.fi. Note the times shown are always Helsinki-local,
+but the API's own notion of "today" is anchored to US Eastern time - most NHL games actually fall
+into the small hours of the following Helsinki calendar day. **Only works in `#nhl.fi`** - like
+`!superpesis`, it's restricted to that one channel; typing it elsewhere is silently ignored.
 
 `!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches
 every 30s and announces runs and final results as they happen, the same way `!liiga start` does
