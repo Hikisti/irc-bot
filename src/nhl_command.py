@@ -1,5 +1,4 @@
 import datetime
-from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 
 import requests
@@ -71,29 +70,6 @@ class NHLCommand(LiveTrackerCommand):
         self._seed_goal_counts(state)
         return state
 
-    def _fetch_play_by_play_concurrently(self, game_ids) -> dict:
-        """Returns {game_id: pbp_or_None} for every id in `game_ids`,
-        fetched concurrently. Each future's own result is retrieved (and
-        any exception caught) individually - executor.map() itself would
-        instead propagate the *first* exception encountered while
-        iterating its results, aborting collection for every other
-        game's future too; submitting individually and never letting one
-        future's failure affect any other's result is the whole point of
-        fetching these independently in the first place."""
-        if not game_ids:
-            return {}
-
-        with ThreadPoolExecutor(max_workers=len(game_ids)) as executor:
-            futures = {gid: executor.submit(self._fetch_play_by_play, gid) for gid in game_ids}
-            results = {}
-            for gid, future in futures.items():
-                try:
-                    results[gid] = future.result()
-                except Exception as e:
-                    print(f"NHL: unexpected error fetching play-by-play for game {gid}: {e}")
-                    results[gid] = None
-            return results
-
     def _seed_goal_counts(self, state):
         """Fills in each game's already-scored goal counts (mutated in
         place) by fetching its own play-by-play - seeded from every real
@@ -103,7 +79,7 @@ class NHLCommand(LiveTrackerCommand):
         of today's games are fetched concurrently rather than one at a
         time - same reasoning/pattern as PesisCommand's
         _seed_match_extras()."""
-        for gid, pbp in self._fetch_play_by_play_concurrently(list(state.keys())).items():
+        for gid, pbp in self._fetch_concurrently(list(state.keys()), self._fetch_play_by_play).items():
             if pbp is not None:
                 state[gid]["home_goals"] = len(self._real_goals(pbp, "homeTeam"))
                 state[gid]["away_goals"] = len(self._real_goals(pbp, "awayTeam"))
@@ -130,7 +106,7 @@ class NHLCommand(LiveTrackerCommand):
         # Liiga, whose single schedule call already has everyone's goal
         # events) - fetched concurrently, same reasoning as
         # _seed_goal_counts() above.
-        pbp_by_gid = self._fetch_play_by_play_concurrently(list(games.keys()))
+        pbp_by_gid = self._fetch_concurrently(list(games.keys()), self._fetch_play_by_play)
 
         for gid, game in games.items():
             try:

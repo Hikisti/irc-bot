@@ -1,5 +1,6 @@
 import datetime
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -370,6 +371,39 @@ class TestAlreadyFinishedGuard:
 
         first_message = bot.send_message.call_args_list[0][0][1]
         assert "Tracking 1 Test item(s) today" in first_message
+
+
+class TestFetchConcurrently:
+    def test_returns_a_result_per_item(self, tracker):
+        results = tracker._fetch_concurrently([1, 2, 3], lambda item: item * 10)
+        assert results == {1: 10, 2: 20, 3: 30}
+
+    def test_empty_items_returns_empty_dict(self, tracker):
+        assert tracker._fetch_concurrently([], lambda item: item) == {}
+
+    def test_one_items_exception_does_not_prevent_collecting_the_others(self, tracker):
+        # The actual bug this exists to prevent: a bare
+        # concurrent.futures.Executor.map() would instead raise the
+        # first failing future's exception as soon as its result is
+        # reached, aborting collection for every other item too.
+        def flaky(item):
+            if item == 2:
+                raise RuntimeError("boom")
+            return item * 10
+
+        results = tracker._fetch_concurrently([1, 2, 3], flaky)
+        assert results == {1: 10, 2: None, 3: 30}
+
+    def test_fetches_run_concurrently_not_sequentially(self, tracker):
+        def slow(item):
+            time.sleep(0.1)
+            return item
+
+        start = time.time()
+        tracker._fetch_concurrently([1, 2, 3], slow)
+        elapsed = time.time() - start
+
+        assert elapsed < 0.25  # sequentially this would take >= 0.3s
 
 
 class TestAbstractHooks:

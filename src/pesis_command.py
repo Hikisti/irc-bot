@@ -1,6 +1,5 @@
 import os
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 
 from irc_format import GREEN, ORANGE, PURPLE, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
@@ -250,24 +249,24 @@ class PesisCommand(LiveTrackerCommand, PesisEventParsingMixin, PesisPlayerNamesM
         on any other's, so all matches are seeded concurrently rather
         than one at a time - with 2+ matches tracked (the common case)
         this roughly halves the time !superpesis start takes to report
-        back."""
-        if not state:
-            return
+        back. Uses _fetch_concurrently() (not a bare executor.map()) so
+        one match's fetch failing doesn't prevent every other match's
+        result from being collected too."""
 
         def seed_one(mid):
             events = self._fetch_match_events(mid)
             roster = self._fetch_match_roster(mid)
-            return mid, events, roster
+            return events, roster
 
-        with ThreadPoolExecutor(max_workers=len(state)) as executor:
-            for mid, events, roster in executor.map(seed_one, state.keys()):
-                if events is not None:
-                    runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
-                        events, state[mid]["home_id"], state[mid]["away_id"],
-                    )
-                    state[mid]["announced"] = {key: len(items) for key, items in runs_by_period_side.items()}
-                    state[mid]["ended_periods"] = set(period_end_by_period.keys())
-                state[mid]["roster"] = roster
+        for mid, result in self._fetch_concurrently(list(state.keys()), seed_one).items():
+            events, roster = result if result is not None else (None, None)
+            if events is not None:
+                runs_by_period_side, period_end_by_period = self._group_runs_and_period_ends(
+                    events, state[mid]["home_id"], state[mid]["away_id"],
+                )
+                state[mid]["announced"] = {key: len(items) for key, items in runs_by_period_side.items()}
+                state[mid]["ended_periods"] = set(period_end_by_period.keys())
+            state[mid]["roster"] = roster
 
     def _poll_once(self, irc_bot, channel, series_id) -> bool:
         matches = self._fetch_today_matches(series_id)

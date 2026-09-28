@@ -251,6 +251,36 @@ class TestSeedMatchExtras:
     def test_empty_state_does_nothing(self, sc):
         sc._seed_match_extras({})  # must not raise
 
+    def test_one_matchs_unexpected_seeding_error_does_not_block_the_others(self, sc):
+        # Regression test: this used to run every match's seed_one()
+        # through a bare executor.map(), whose returned iterator raises
+        # the *first* failing future's exception as soon as it's reached
+        # - aborting collection for every other match too, not just the
+        # one that actually failed. _fetch_concurrently() (shared with
+        # NHLCommand, which had the identical bug independently) isolates
+        # each match's own result instead.
+        state = {
+            1: {"roster": {}, "home_id": 10802, "away_id": 10803},
+            2: {"roster": {}, "home_id": 10804, "away_id": 10805},
+        }
+
+        def flaky_events(mid):
+            if mid == 1:
+                raise RuntimeError("boom")
+            return []
+
+        with patch.object(sc, "_fetch_match_events", side_effect=flaky_events), \
+             patch.object(sc, "_fetch_match_roster", return_value={"real": "roster"}):
+            sc._seed_match_extras(state)  # must not raise
+
+        # Match 1's own seed_one() failed entirely (events raised before
+        # roster was even fetched), so both are lost for match 1 alone -
+        # the important part is match 2 still seeds correctly regardless.
+        assert "announced" not in state[1]
+        assert state[1]["roster"] is None
+        assert state[2]["roster"] == {"real": "roster"}
+        assert state[2]["announced"] == {}
+
 
 class TestStop:
     # "stop without active tracking" and the plain stop/set-event/clear

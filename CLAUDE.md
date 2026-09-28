@@ -13,21 +13,46 @@ not what it is.
   channel=)`. `CommandHandler` builds its alias-dispatch table from these at
   startup - a command with no `ALIASES` is unreachable.
 - `LiveTrackerCommand` (`src/live_tracker_command.py`) is the shared engine
-  behind `LiigaCommand` and `PesisCommand` - identical start/stop/next
-  lifecycle, poll loop, early-start guard, and already-finished guard. Look
-  here first before touching either subclass's lifecycle code; only the
-  actual fetch/announce logic (`_poll_once`, `_fetch_today_items`,
-  `_build_initial_state`) is sport-specific.
+  behind `LiigaCommand`, `PesisCommand`, and `NHLCommand` - identical
+  start/stop/next lifecycle, poll loop, early-start guard, and
+  already-finished guard. Look here first before touching any of their
+  lifecycle code; only the actual fetch/announce logic (`_poll_once`,
+  `_fetch_today_items`, `_build_initial_state`) is sport-specific. It also
+  owns `_fetch_concurrently()` - the one and only way to fetch N
+  independent per-item network calls in parallel here (see "Concurrent
+  fetching" below); never hand-roll `ThreadPoolExecutor`/`executor.map()`
+  again in a new subclass.
 - `PesisCommand` is built from three mixins: `PesisEventParsingMixin`
   (turns the raw event feed into RUN:/JAKSO:/FINAL: text),
   `PesisPlayerNamesMixin` (scorer/batter name resolution), and
   `PesisDataFetchingMixin` (all pesistulokset.fi HTTP calls).
   `SuperpesisCommand`/`YkkospesisCommand` are thin subclasses of it.
-- `liiga.fi` and `pesistulokset.fi` are **unofficial, reverse-engineered
-  APIs** - not documented, can change shape without notice. This is why the
-  code leans defensive throughout (never crash on an unexpected field,
-  degrade to an error string instead) - keep that posture in any new code
-  touching these APIs, don't tighten assumptions "for cleanliness."
+- `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
+  reverse-engineered APIs** - not documented, can change shape without
+  notice. This is why the code leans defensive throughout (never crash on
+  an unexpected field, degrade to an error string instead) - keep that
+  posture in any new code touching these APIs, don't tighten assumptions
+  "for cleanliness." When integrating a *new* one of these, verify what
+  timezone it buckets/anchors its own dates by before assuming it matches
+  Helsinki - `NHLCommand` needed its own `EASTERN_TZ` for exactly this
+  reason (NHL schedule dates are bucketed by US Eastern time, confirmed
+  live), separate from `HELSINKI_TZ` used for every displayed time.
+
+## Concurrent fetching
+
+`LiveTrackerCommand._fetch_concurrently(items, fetch_fn)` runs `fetch_fn`
+across `items` in parallel and returns `{item: result_or_None}`. Use it for
+any "N independent per-item network calls" case (seeding a match/game's
+extra detail, polling several tracked items' own per-item state) instead
+of writing `ThreadPoolExecutor`/`executor.map()` directly. Confirmed live
+as a real, recurring bug shape: a bare `executor.map()`'s returned iterator
+raises the *first* failing future's exception as soon as it's reached,
+aborting collection for every other item's result too - both
+`NHLCommand`'s per-game play-by-play fetch and `PesisCommand`'s
+`_seed_match_extras` had this independently before `_fetch_concurrently()`
+existed. `_fetch_concurrently()` submits every future up front and
+retrieves each one's own result (or exception) individually, so one item's
+failure never affects any other's.
 
 ## Development workflow
 

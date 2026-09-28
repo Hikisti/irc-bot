@@ -1,6 +1,7 @@
 import datetime
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 
 from base_command import BaseCommand
@@ -309,6 +310,39 @@ class LiveTrackerCommand(BaseCommand):
             irc_bot.send_message(channel, message)
         except Exception as e:
             print(f"{self.DISPLAY_NAME}: failed to send message to {channel}: {e}")
+
+    # ---- concurrent per-item fetching -----------------------------------
+
+    def _fetch_concurrently(self, items, fetch_fn) -> dict:
+        """Runs fetch_fn(item) for every item in `items` concurrently,
+        returning {item: result_or_None}.
+
+        Deliberately does NOT use concurrent.futures.Executor.map(): its
+        returned iterator raises the *first* failing future's exception
+        as soon as it's reached, aborting collection for every other
+        item's result too - confirmed live as a real, recurring bug
+        shape in this codebase (NHLCommand's per-game play-by-play
+        fetch, PesisCommand's _seed_match_extras both had this
+        independently). Submitting every future up front and retrieving
+        each one's own result (or exception) individually, as done here,
+        is what actually delivers "one item's fetch failure doesn't
+        affect any other item" - the entire reason to fetch these
+        concurrently in the first place. Use this for any future
+        "N independent per-item network calls" case rather than
+        hand-rolling executor.map() again.
+        """
+        if not items:
+            return {}
+        with ThreadPoolExecutor(max_workers=len(items)) as executor:
+            futures = {item: executor.submit(fetch_fn, item) for item in items}
+            results = {}
+            for item, future in futures.items():
+                try:
+                    results[item] = future.result()
+                except Exception as e:
+                    print(f"{self.DISPLAY_NAME}: unexpected error in concurrent fetch for {item}: {e}")
+                    results[item] = None
+            return results
 
     # ---- polling loop -------------------------------------------------
 
