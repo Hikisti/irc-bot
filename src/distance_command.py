@@ -51,12 +51,15 @@ class DistanceCommand(BaseCommand):
             self.session.headers["Authorization"] = self.api_key
 
     def execute(self, args=None, **kwargs) -> str:
-        if not self.api_key:
-            return "Error: ORS_API_KEY is not set in environment."
-
+        # Arguments are validated before the API key is checked - same
+        # order as !weather/!time/!imdb - so a bare "!distance" always
+        # answers with usage, whether or not the key happens to be set.
         city1, city2, error = self._parse_cities(args)
         if error:
             return error
+
+        if not self.api_key:
+            return "Error: ORS_API_KEY is not set in environment."
 
         origin, error = self._geocode(city1)
         if error:

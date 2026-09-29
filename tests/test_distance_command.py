@@ -51,6 +51,16 @@ class TestMissingApiKey:
             dc = DistanceCommand()
         assert "ORS_API_KEY is not set" in dc.execute("Kokkola,Vimpeli")
 
+    def test_bare_call_shows_usage_even_when_the_key_is_missing(self, monkeypatch):
+        # Regression test: the key used to be checked before the
+        # arguments, so a bare "!distance" on a machine without
+        # ORS_API_KEY (CI has no .env) answered with the config error
+        # instead of usage.
+        monkeypatch.delenv("ORS_API_KEY", raising=False)
+        with patch("distance_command.load_dotenv"):
+            dc = DistanceCommand()
+        assert dc.execute("").startswith("Usage:")
+
 
 class TestParsing:
     def test_no_args_shows_usage(self, distance_command):
