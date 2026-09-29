@@ -28,6 +28,11 @@ class BaseCommand:
       background thread that sends messages of its own later, the way
       LiveTrackerCommand's live trackers do). Most commands are a single
       synchronous request-and-reply and don't need this.
+    - `HELP` (default None): the short usage string `!help` lists for this
+      command, e.g. "!stock <ticker>" - keep it to a few words, since
+      every command's HELP shares one IRC line. Every user-facing command
+      must set one (a test enforces it); only HelpCommand itself is
+      exempt.
 
     A command's own __init__() should never raise on a recoverable
     problem (e.g. a missing API key) - check for that lazily in
@@ -41,6 +46,7 @@ class BaseCommand:
     ALLOW_ARGS = True
     CHANNELS = None
     needs_irc_context = False
+    HELP = None
 
     def execute(self, args=None, irc_bot=None, channel=None) -> str:
         raise NotImplementedError

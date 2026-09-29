@@ -35,7 +35,9 @@ def freeze_at(monkeypatch, year, month, day):
 
 class TestCityLookup:
     def test_empty_city_returns_usage_error(self, time_command):
-        assert "Please provide a city" in time_command.execute("")
+        result = time_command.execute("")
+        assert result.startswith("Usage: !time")
+        assert "e.g., !time austin, !time cdt" in result
 
     def test_missing_api_key_returns_error(self, monkeypatch):
         monkeypatch.delenv("TIME_API_KEY", raising=False)

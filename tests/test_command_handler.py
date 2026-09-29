@@ -86,7 +86,9 @@ class TestCommandHandler:
 
         mock_f1.execute.assert_called_once_with("")
 
-    def test_args_rejected_for_no_args_command(self, handler, capsys):
+    def test_args_on_a_no_args_command_get_a_usage_reply_not_silence(self, handler, capsys):
+        # Used to be dropped silently, which made "!f1 2026" look like a
+        # broken bot.
         bot = MagicMock()
         mock_f1 = MagicMock()
         replace_command(handler, "!f1", mock_f1)
@@ -94,8 +96,16 @@ class TestCommandHandler:
         handler.handle_command(bot, "nick", "#chan", "!f1 extra stuff")
 
         mock_f1.execute.assert_not_called()
-        bot.send_message.assert_not_called()
+        bot.send_message.assert_called_once_with("#chan", "Usage: !f1 (takes no arguments)")
         assert "!f1 does not allow arguments" in capsys.readouterr().out
+
+    def test_usage_reply_names_the_alias_the_user_actually_typed(self, handler):
+        bot = MagicMock()
+        replace_command(handler, "!sähkö", MagicMock())
+
+        handler.handle_command(bot, "nick", "#chan", "!sahko huomenna")
+
+        bot.send_message.assert_called_once_with("#chan", "Usage: !sahko (takes no arguments)")
 
     def test_unknown_command_does_nothing(self, handler, capsys):
         bot = MagicMock()
@@ -227,3 +237,88 @@ class TestChannelRestriction:
         mock_weather.execute.assert_called_once_with("kokkola")
         bot.send_message.assert_called_once_with("#pesis.fi", "sunny")
 
+
+
+# The channels the bot actually joins (see src/irc_bot.py).
+PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi"]
+GENERAL_COMMANDS = ["!weather", "!stock", "!crypto", "!sähkö", "!time", "!f1", "!distance", "!imdb", "!bjorck"]
+
+
+class TestHelp:
+    def test_help_lists_the_general_commands_everywhere(self, handler):
+        text = handler.help_text("#nakkimuusi")
+        assert text.startswith("Commands: ")
+        for command in GENERAL_COMMANDS:
+            assert command in text
+
+    def test_channel_restricted_commands_only_show_in_their_own_channel(self, handler):
+        general = handler.help_text("#nakkimuusi")
+        for restricted in ("!liiga", "!nhl", "!superpesis", "!ykkospesis"):
+            assert restricted not in general
+
+        assert "!nhl start|stop|next" in handler.help_text("#nhl.fi")
+        assert "!liiga start|stop|next" in handler.help_text("#smliiga")
+        pesis = handler.help_text("#pesis.fi")
+        assert "!superpesis start|stop|next" in pesis
+        assert "!ykkospesis start|stop|next" in pesis
+        assert "!nhl" not in pesis
+
+    def test_each_command_is_listed_once_even_with_several_aliases(self, handler):
+        text = handler.help_text("#nakkimuusi")
+        assert text.count("!weather") == 1  # !w is an alias of the same command
+        assert text.count("!sähkö") == 1  # so is !sahko
+
+    def test_help_does_not_list_itself(self, handler):
+        assert "!help" not in handler.help_text("#nakkimuusi")
+
+    def test_bang_help_is_dispatched_through_handle_command(self, handler):
+        bot = MagicMock()
+
+        handler.handle_command(bot, "nick", "#nhl.fi", "!help")
+
+        bot.send_message.assert_called_once()
+        channel, message = bot.send_message.call_args[0]
+        assert channel == "#nhl.fi"
+        assert message.startswith("Commands: ") and "!nhl start|stop|next" in message
+
+    def test_extra_text_after_help_still_gets_the_list(self, handler):
+        bot = MagicMock()
+        handler.handle_command(bot, "nick", "#nakkimuusi", "!help stock")
+        assert bot.send_message.call_args[0][1].startswith("Commands: ")
+
+    def test_every_registered_command_has_help_text(self, handler):
+        # The guard that keeps the list complete: a new command that
+        # forgets to set HELP fails here instead of silently going
+        # missing from !help.
+        for command in handler._commands:
+            assert command.HELP, f"{type(command).__name__} has no HELP string"
+
+    def test_help_fits_on_one_irc_line_in_every_production_channel(self, handler):
+        # IRC lines cap at 512 bytes including the protocol framing the
+        # server adds when relaying - stay well clear of it.
+        for channel in PRODUCTION_CHANNELS:
+            text = handler.help_text(channel)
+            assert len(text.encode("utf-8")) <= 400, f"{channel}: {len(text)} chars"
+
+
+class TestUsageConvention:
+    def test_argument_taking_commands_reply_with_usage_when_called_bare(self, handler):
+        # The guard behind CLAUDE.md's "Adding a command" step 3: a new
+        # argument-taking command that answers a bare call with anything
+        # other than a "Usage:" line fails here instead of going unnoticed.
+        checked = []
+        for command in handler._commands:
+            if not command.ALLOW_ARGS:
+                continue
+            if command.needs_irc_context:
+                reply = command.execute("", irc_bot=MagicMock(), channel="#chan")
+            else:
+                reply = command.execute("")
+            assert reply and reply.startswith("Usage:"), (
+                f"{type(command).__name__} answered a bare call with: {reply!r}"
+            )
+            checked.append(type(command).__name__)
+
+        # Guards against the loop silently checking nothing (e.g. if
+        # ALLOW_ARGS defaults ever flip).
+        assert len(checked) >= 6

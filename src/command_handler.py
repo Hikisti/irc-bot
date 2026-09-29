@@ -6,6 +6,7 @@ from crypto import CryptoCommand
 from aijamatto import AijaMattoCommand
 from time_command import TimeCommand
 from f1_command import F1Command
+from help_command import HelpCommand
 from liiga_command import LiigaCommand
 from distance_command import DistanceCommand
 from imdb_command import ImdbCommand
@@ -25,8 +26,9 @@ class CommandHandler:
 
     # Every command class the bot knows about - the only place that has
     # to change to register a new one; everything else (alias lookup,
-    # ALLOW_ARGS/CHANNELS enforcement) is driven by each class's own
-    # BaseCommand attributes.
+    # ALLOW_ARGS/CHANNELS enforcement, its line in !help) is driven by
+    # each class's own BaseCommand attributes. (HelpCommand is the one
+    # exception: it needs the finished handler, so __init__ registers it.)
     COMMAND_CLASSES = [
         ElectricityCommand,
         WeatherCommand,
@@ -45,10 +47,26 @@ class CommandHandler:
 
     def __init__(self):
         self.commands_by_alias = {}
+        self._commands = []  # each command once (its aliases share one instance)
         for command_class in self.COMMAND_CLASSES:
             instance = command_class()
+            self._commands.append(instance)
             for alias in instance.ALIASES:
                 self.commands_by_alias[alias] = instance
+
+        help_command = HelpCommand(self)
+        for alias in help_command.ALIASES:
+            self.commands_by_alias[alias] = help_command
+
+    def help_text(self, channel) -> str:
+        """One line listing every command usable in `channel` (same
+        CHANNELS rule handle_command() enforces), in COMMAND_CLASSES
+        order."""
+        entries = [
+            command.HELP for command in self._commands
+            if command.HELP and (not command.CHANNELS or channel in command.CHANNELS)
+        ]
+        return "Commands: " + " | ".join(entries)
 
     def handle_command(self, irc_bot, nick, channel, message):
         """Parses and executes commands from IRC messages, handling aliases and argument restrictions."""
@@ -70,8 +88,11 @@ class CommandHandler:
                 return  # Ignore command
 
             if not main_command.ALLOW_ARGS and args:
-                print(f"Command {command} does not allow arguments. Ignoring.")
-                return  # Ignore command
+                # Replying (rather than silently dropping) so "!f1 2026"
+                # doesn't look like a broken bot.
+                print(f"Command {command} does not allow arguments. Replying with usage.")
+                irc_bot.send_message(channel, f"Usage: {command} (takes no arguments)")
+                return
 
             if getattr(main_command, "needs_irc_context", False) is True:
                 response = main_command.execute(args, irc_bot=irc_bot, channel=channel)

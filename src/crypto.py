@@ -8,6 +8,7 @@ class CryptoCommand(BaseCommand):
     """Handles cryptocurrency price queries using CoinGecko API."""
 
     ALIASES = ("!crypto",)
+    HELP = "!crypto <coin>"
 
     def __init__(self):
         self.cg = CoinGeckoAPI()

@@ -18,6 +18,7 @@ class F1Command(BaseCommand):
 
     ALIASES = ("!f1",)
     ALLOW_ARGS = False
+    HELP = "!f1 (next event)"
 
     JOLPICA_URL = "https://api.jolpi.ca/ergast/f1"
     HELSINKI_TZ = ZoneInfo("Europe/Helsinki")

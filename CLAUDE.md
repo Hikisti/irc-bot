@@ -9,9 +9,9 @@ not what it is.
 ## Architecture at a glance
 
 - `BaseCommand` (`src/base_command.py`) is the contract every command
-  implements: `ALIASES`, `ALLOW_ARGS`, `CHANNELS`, `execute(args, irc_bot=,
-  channel=)`. `CommandHandler` builds its alias-dispatch table from these at
-  startup - a command with no `ALIASES` is unreachable.
+  implements: `ALIASES`, `ALLOW_ARGS`, `CHANNELS`, `HELP`, `execute(args,
+  irc_bot=, channel=)`. `CommandHandler` builds its alias-dispatch table from
+  these at startup - a command with no `ALIASES` is unreachable.
 - `LiveTrackerCommand` (`src/live_tracker_command.py`) is the shared engine
   behind `LiigaCommand`, `PesisCommand`, and `NHLCommand` - identical
   start/stop/next lifecycle, poll loop, early-start guard, and
@@ -37,6 +37,21 @@ not what it is.
   Helsinki - `NHLCommand` needed its own `EASTERN_TZ` for exactly this
   reason (NHL schedule dates are bucketed by US Eastern time, confirmed
   live), separate from `HELSINKI_TZ` used for every displayed time.
+
+## Adding a command
+
+1. Subclass `BaseCommand` (or `LiveTrackerCommand` for a live tracker) and
+   add it to `COMMAND_CLASSES` in `src/command_handler.py` - the only
+   registration step. (`HelpCommand` is the one exception: it needs the
+   finished handler, so `CommandHandler.__init__` registers it directly.)
+2. Set `HELP` - the short usage string `!help` lists, e.g. `"!stock
+   <ticker>"`. There is no separate help file to update; a test fails if a
+   registered command has none.
+3. If it takes arguments, calling it bare must reply `Usage: ... (e.g.,
+   ...)`. A test enforces the `Usage:` prefix for every argument-taking
+   command.
+4. Add tests, plus a row in the README commands table and a paragraph if
+   the behavior isn't obvious.
 
 ## Concurrent fetching
 

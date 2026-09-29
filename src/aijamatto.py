@@ -13,6 +13,7 @@ class AijaMattoCommand(BaseCommand):
     """
 
     ALIASES = ("!bjorck",)
+    HELP = "!bjorck"
     ALLOW_ARGS = False
 
     # Resolved relative to this file, not the process's current working

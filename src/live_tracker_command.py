@@ -75,6 +75,10 @@ class LiveTrackerCommand(BaseCommand):
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", STATE_KEY: ...}
 
+    @property
+    def HELP(self):
+        return f"{self.COMMAND_NAME} start|stop|next"
+
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
         arg = (args or "").strip().lower()
 

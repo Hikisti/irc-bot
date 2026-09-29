@@ -9,6 +9,7 @@ class WeatherCommand(BaseCommand):
     """Fetches current weather for a given city."""
 
     ALIASES = ("!weather", "!w")
+    HELP = "!weather <city>"
 
     def __init__(self):
         load_dotenv()  # Load environment variables from .env
@@ -18,7 +19,7 @@ class WeatherCommand(BaseCommand):
 
     def execute(self, args):
         if not args:
-            return "Usage: !weather <city> or !weather <city>,<country>"
+            return "Usage: !weather <city> or !weather <city>,<country> (e.g., !weather austin)"
 
         if not self.api_key:
             return "Error: WEATHER_API_KEY is not set in environment."

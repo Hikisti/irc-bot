@@ -11,6 +11,7 @@ class StockCommand(BaseCommand):
     """Fetches stock price and market data for a given ticker symbol."""
 
     ALIASES = ("!stock",)
+    HELP = "!stock <ticker>"
 
     def execute(self, args):
         """Handles stock queries with improved error handling and currency support."""

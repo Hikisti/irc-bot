@@ -11,6 +11,7 @@ class ElectricityCommand(BaseCommand):
     """Fetches electricity prices in Finland for the current date and time with 15-minute resolution."""
 
     ALIASES = ("!sähkö", "!sahko")
+    HELP = "!sähkö (electricity price)"
     ALLOW_ARGS = False
 
     HELSINKI_TZ = ZoneInfo("Europe/Helsinki")

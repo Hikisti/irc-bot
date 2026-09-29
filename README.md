@@ -69,6 +69,13 @@ in `src/irc_bot.py`.
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
+| Help | `!help` | none | `!help` |
+
+`!help` lists the commands usable in the channel it's asked in, on one line (channel-restricted ones
+like `!nhl` only show up in their own channel). Any command used without its required argument
+replies with a `Usage:` line (most include an example), and the no-argument commands (`!f1`,
+`!sähkö`, `!bjorck`) answer extra text with `Usage: !f1 (takes no arguments)` rather than staying
+silent.
 
 `!liiga start`/`!superpesis start`/`!ykkospesis start` all refuse to begin tracking more than 15
 minutes before the earliest scheduled game/match that day, e.g. `Too early to track — Liiga play

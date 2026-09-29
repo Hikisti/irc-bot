@@ -27,6 +27,7 @@ class DistanceCommand(BaseCommand):
     """
 
     ALIASES = ("!distance",)
+    HELP = "!distance <city1>,<city2>"
 
     GEOCODE_URL = "https://api.openrouteservice.org/geocode/search"
     DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
@@ -34,7 +35,8 @@ class DistanceCommand(BaseCommand):
 
     USAGE = (
         "Usage: !distance <city1>,<city2> "
-        "(or !distance <city1> <city2> for two single-word city names)"
+        "(or !distance <city1> <city2> for two single-word city names), "
+        "e.g., !distance Kokkola,Vimpeli"
     )
 
     def __init__(self):

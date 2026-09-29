@@ -21,6 +21,7 @@ class ImdbCommand(BaseCommand):
     """
 
     ALIASES = ("!imdb",)
+    HELP = "!imdb <title>"
     BASE_URL = "https://www.omdbapi.com/"
 
     TYPE_KEYWORDS = {"series": "series", "tv": "series", "movie": "movie"}
@@ -69,7 +70,7 @@ class ImdbCommand(BaseCommand):
     def execute(self, args):
         text = (args or "").strip()
         if not text:
-            return "Usage: !imdb [series|movie] <title> [year], or !imdb <IMDb ID or URL>"
+            return "Usage: !imdb [series|movie] <title> [year], or !imdb <IMDb ID or URL> (e.g., !imdb series flipper 1995)"
 
         if not self.api_key:
             return "Error: OMDB_API_KEY is not set in environment."

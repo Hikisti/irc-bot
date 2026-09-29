@@ -22,6 +22,7 @@ class TimeCommand(BaseCommand):
     """
 
     ALIASES = ("!time",)
+    HELP = "!time <city or tz>"
 
     API_URL = "https://api.ipgeolocation.io/timezone"
 
@@ -88,7 +89,7 @@ class TimeCommand(BaseCommand):
     def execute(self, city_name: str) -> str:
         city_name = city_name.strip()
         if not city_name:
-            return "Error: Please provide a city name or timezone, e.g. !time austin or !time cdt"
+            return "Usage: !time <city> or !time <timezone abbreviation> (e.g., !time austin, !time cdt)"
 
         abbr = city_name.upper()
         if abbr in self.TIMEZONE_ABBREVIATIONS:
