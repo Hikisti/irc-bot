@@ -64,7 +64,7 @@ in `src/irc_bot.py`.
 | F1 schedule | `!f1` | none | `!f1` |
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
-| IMDb | `!imdb` | movie/show title | `!imdb terminator 2` |
+| IMDb | `!imdb` | movie/show title, optionally with `series`/`movie` first and/or a year last; or an IMDb ID/link | `!imdb terminator 2`, `!imdb series flipper 1995` |
 | NHL live tracker | `!nhl` | `start`, `stop`, or `next` | `!nhl start` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
@@ -97,10 +97,17 @@ this avoids silently misreading a multi-word city name as the wrong split.
 
 `!imdb` looks up a movie or show by title via the OMDb API (a third-party service re-publishing
 IMDb's data - IMDb's own official API is an enterprise-only AWS Data Exchange product, not viable
-for a free personal bot) and replies with its year, IMDb rating, a short plot summary, and its
-IMDb URL, e.g. `Terminator 2: Judgment Day (1991) - IMDb: 8.6/10 - A cyborg from the future...
-- https://www.imdb.com/title/tt0103064/`. An unreleased/unrated title shows "not yet rated"
-instead of a score.
+for a free personal bot) and replies with its year and type, IMDb rating, a short plot summary,
+and its IMDb URL, e.g. `Terminator 2: Judgment Day (1991, movie) - IMDb: 8.6/10 - A cyborg from
+the future... - https://www.imdb.com/title/tt0103064/`. An unreleased/unrated title shows "not yet
+rated" instead of a score. A bare title returns OMDb's single best match (which tends to prefer
+movies), so an ambiguous title can be narrowed down: a leading `series`/`tv`/`movie` picks the type
+(`!imdb series flipper`), a trailing year picks the release or start year (`!imdb flipper 1995`),
+and the two combine (`!imdb series flipper 1995`). To be exact, paste an IMDb ID or an imdb.com
+link (`!imdb tt0111964`). If a year or type hint finds nothing, the whole text is retried as a
+plain title, so titles like "Blade Runner 2049" still work. The one known miss: a title that itself
+starts with `movie`/`series`/`tv` and whose remainder is also a title (e.g. "Movie 43") - use the
+IMDb ID for those.
 
 `!nhl start` polls today's NHL games every 30s in the channel it was started in (same lifecycle,
 early-start guard, and already-finished guard as `!liiga start`), announcing goals and final scores
