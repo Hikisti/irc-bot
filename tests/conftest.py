@@ -18,6 +18,13 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+# python-dotenv turns load_dotenv() into a no-op when this is set. Several
+# commands call it in __init__, so without this a developer's local .env
+# (gitignored, never present in CI) silently supplies API keys and can make
+# a test pass locally that fails in CI - which is exactly how a CI-only
+# failure slipped through once. A test that needs a key sets it itself.
+os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
+
 
 def make_json_response(json_data, status_code=200, reason="Not Found"):
     """Shared mock for a requests.Response carrying a JSON body - used

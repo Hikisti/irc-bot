@@ -95,6 +95,11 @@ consistent, deliberate discipline - keep following it:
   real `!stock`/`!liiga`/`!superpesis` call against the live service).
   Several real bugs in this codebase were only caught this way, not by
   mocked tests alone.
+- Tests must not depend on a local `.env`: it's gitignored, so CI never
+  has it, and a test that only passes because of a key in it fails there
+  (this happened once). `tests/conftest.py` disables `.env` loading during
+  tests (`PYTHON_DOTENV_DISABLED`), so a test that needs a key must set it
+  itself with `monkeypatch.setenv`.
 - Never silently change observable behavior (a message's wording, a
   command's output shape) without calling it out first.
 - Don't add features, refactor, or add abstractions beyond what a task

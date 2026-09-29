@@ -177,7 +177,9 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-All tests mock outgoing network calls, so no API keys are required to run the suite.
+All tests mock outgoing network calls, so no API keys are required to run the suite. A local `.env`
+is deliberately ignored while the tests run (see `tests/conftest.py`), so the suite behaves the
+same on a developer machine as in CI.
 
 ## Project structure
 
