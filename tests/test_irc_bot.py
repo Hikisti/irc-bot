@@ -77,6 +77,46 @@ class TestProcessMessage:
         bot.command_handler.handle_command.assert_not_called()
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
+class TestUrlTitlesInExclusiveChannel:
+    """#veikkaus only answers its listed commands - a posted link must not
+    get a title reply there, while every other channel still does."""
+
+    def test_link_in_veikkaus_gets_no_title_reply(self, bot):
+        bot.channels = ["#veikkaus", "#nakkimuusi"]
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #veikkaus :look http://example.com/x")
+
+        bot.url_fetcher.detect_and_fetch.assert_not_called()
+
+    def test_channel_match_ignores_case(self, bot):
+        bot.channels = ["#VEIKKAUS"]
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #VEIKKAUS :http://example.com/x")
+
+        bot.url_fetcher.detect_and_fetch.assert_not_called()
+
+    def test_link_in_a_normal_channel_still_gets_its_title(self, bot):
+        bot.channels = ["#veikkaus", "#nakkimuusi"]
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #nakkimuusi :look http://example.com/x")
+
+        bot.url_fetcher.detect_and_fetch.assert_called_once_with(
+            "alice", "#nakkimuusi", "look http://example.com/x"
+        )
+
+    def test_liiga_command_still_works_in_veikkaus(self, bot):
+        bot.channels = ["#veikkaus"]
+        bot.command_handler = MagicMock()
+        bot.url_fetcher = MagicMock()
+
+        bot.process_message(":alice!a@host PRIVMSG #veikkaus :!liiga next")
+
+        bot.command_handler.handle_command.assert_called_once()
+
+
 class TestSendRaw:
     def test_sends_the_message_with_crlf(self, bot):
         # sendall() (not send()) guarantees the whole line goes out in one

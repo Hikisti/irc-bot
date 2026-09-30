@@ -46,9 +46,10 @@ class CommandHandler:
     ]
 
     # Channels where ONLY the listed aliases work (checked before each
-    # command's own CHANNELS). Every channel not named here keeps the
-    # default: all commands, subject to their own CHANNELS. To open one
-    # more command up in such a channel, add its alias here (and the
+    # command's own CHANNELS) and links posted are not expanded into page
+    # titles either. Every channel not named here keeps the default: all
+    # commands, subject to their own CHANNELS, plus link titles. To open
+    # one more command up in such a channel, add its alias here (and the
     # channel to its own CHANNELS if it has one).
     EXCLUSIVE_CHANNELS = {
         "#veikkaus": ("!liiga", "!help"),
@@ -79,6 +80,11 @@ class CommandHandler:
         if exclusive is not None and not any(a in exclusive for a in (aliases or command.ALIASES)):
             return False
         return not command.CHANNELS or channel in (c.lower() for c in command.CHANNELS)
+
+    def url_titles_allowed(self, channel) -> bool:
+        """False in an exclusive channel: the bot does nothing there
+        beyond its listed commands, so posted links get no title reply."""
+        return (channel or "").lower() not in self.EXCLUSIVE_CHANNELS
 
     def help_text(self, channel) -> str:
         """One line listing every command usable in `channel` (same

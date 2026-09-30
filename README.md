@@ -104,7 +104,7 @@ reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Uses the un
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
 `#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
 (see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
-is an *exclusive* channel: only `!liiga` and `!help` work there (`!help` lists just `!liiga`).
+is an *exclusive* channel: only `!liiga` and `!help` work there (`!help` lists just `!liiga`), and posted links get no title reply either.
 Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
 default of all commands.
 

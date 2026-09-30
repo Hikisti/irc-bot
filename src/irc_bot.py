@@ -189,7 +189,7 @@ class IrcBot:
         if channel in self.channels:
             if msg.startswith("!"):  # Command handling
                 self.command_handler.handle_command(self, nick, channel, msg)
-            else:  # Check for URLs in messages
+            elif self.command_handler.url_titles_allowed(channel):  # Check for URLs in messages
                 self.url_fetcher.detect_and_fetch(nick, channel, msg)
     
     def stop(self):
