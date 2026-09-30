@@ -21,7 +21,7 @@ def roster_spot(player_id, first="John", last="Doe"):
 
 def goal_play(event_id=1, period_number=1, period_type="REG", time_in_period="04:31",
               scoring_player_id=100, event_owner_team_id=10, home_score=1, away_score=0,
-              assist1=None, assist2=None):
+              assist1=None, assist2=None, situation_code=None):
     details = {
         "scoringPlayerId": scoring_player_id,
         "eventOwnerTeamId": event_owner_team_id,
@@ -32,20 +32,23 @@ def goal_play(event_id=1, period_number=1, period_type="REG", time_in_period="04
         details["assist1PlayerId"] = assist1
     if assist2 is not None:
         details["assist2PlayerId"] = assist2
-    return {
+    play = {
         "eventId": event_id,
         "typeDescKey": "goal",
         "periodDescriptor": {"number": period_number, "periodType": period_type},
         "timeInPeriod": time_in_period,
         "details": details,
     }
+    if situation_code is not None:
+        play["situationCode"] = situation_code  # a play-level field in the real feed, not in details
+    return play
 
 
 def make_pbp(game_id=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away_abbrev="FLA",
              home_place="Carolina", home_common="Hurricanes", away_place="Florida",
              away_common="Panthers", home_score=0, away_score=0, game_state="LIVE",
-             last_period_type=None, plays=None, roster=None):
-    return {
+             last_period_type=None, plays=None, roster=None, season=None):
+    pbp = {
         "id": game_id,
         "gameState": game_state,
         "homeTeam": {
@@ -60,6 +63,9 @@ def make_pbp(game_id=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away
         "plays": plays or [],
         "rosterSpots": roster or [],
     }
+    if season is not None:
+        pbp["season"] = season
+    return pbp
 
 
 def make_schedule_game(gid=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away_abbrev="FLA",
@@ -93,9 +99,25 @@ def make_schedule_payload(date_to_games, next_start_date=None):
     }
 
 
+def html_response(text, status_code=200):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.text = text
+    resp.raise_for_status = MagicMock()
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+    return resp
+
+
 @pytest.fixture
 def nhl_command():
-    return NHLCommand()
+    command = NHLCommand()
+    # A FINAL: announcement fetches nhl.com's game report for attendance, so
+    # by default every GET here answers 404 (no attendance) - a test that
+    # cares patches session.get itself. Nothing in this file may reach the
+    # real network.
+    command.session.get = MagicMock(return_value=html_response("", status_code=404))
+    return command
 
 
 class TestEndToEnd:
@@ -704,3 +726,132 @@ class TestTrackingSummary:
             join_channel_thread(nhl_command, "#nhl.fi")
 
         assert "TOR 1-1 MTL" in bot.send_message.call_args[0][1]
+
+
+class TestGoalTags:
+    """PP / SH / EN, decoded from the goal play's situationCode (away goalie,
+    away skaters, home skaters, home goalie) - validated against NHL's own
+    per-goal labels on 250 real goals with 0 mismatches. Home team id is 10,
+    away 20 in make_pbp()."""
+
+    def _tags(self, nhl_command, code, scored_by_home, period_type="REG"):
+        pbp = make_pbp(home_id=10, away_id=20)
+        goal = goal_play(event_owner_team_id=10 if scored_by_home else 20,
+                         period_type=period_type, situation_code=code)
+        return nhl_command._goal_tags(pbp, goal)
+
+    @pytest.mark.parametrize("code, by_home, period_type, expected", [
+        ("1551", True, "REG", []),            # five on five
+        ("1451", False, "REG", ["SH"]),       # real EDM-VAN goal: away scored 4-on-5
+        ("1541", False, "REG", ["PP"]),       # real EDM-VAN goal: away scored 5-on-4
+        ("1541", True, "REG", ["SH"]),        # same code, scored by the team with 4 skaters
+        ("1460", True, "REG", ["PP"]),        # real: home goalie pulled, 6-on-4 - NHL calls it a power play
+        ("1331", False, "OT", []),            # three on three overtime
+        ("1441", True, "REG", []),            # four on four
+        ("0651", True, "REG", ["EN"]),        # away pulled the goalie; home scores into the empty net
+        ("0641", True, "REG", ["SH", "EN"]),  # ...while shorthanded
+        ("0651", False, "REG", []),           # the pulled-goalie team itself scoring 6-on-5: even strength
+        ("1541", True, "SO", []),             # shootout goals get no tag whatever the code says
+    ])
+    def test_decoding(self, nhl_command, code, by_home, period_type, expected):
+        assert self._tags(nhl_command, code, by_home, period_type) == expected
+
+    def test_numeric_code_that_lost_its_leading_zero_is_restored(self, nhl_command):
+        assert self._tags(nhl_command, 651, True) == ["EN"]  # int 651 is really "0651"
+
+    @pytest.mark.parametrize("code", [None, "", "abc", "155", "15511", "0000", True, 1.5])
+    def test_missing_or_malformed_code_means_no_tag(self, nhl_command, code):
+        assert self._tags(nhl_command, code, True) == []
+
+    def test_a_goal_without_any_code_is_untagged(self, nhl_command):
+        pbp = make_pbp(home_id=10)
+        assert nhl_command._goal_tags(pbp, goal_play(event_owner_team_id=10)) == []
+
+    def test_tag_appears_between_scorer_and_assists(self, nhl_command):
+        pbp = make_pbp(home_id=10, away_id=20, roster=[roster_spot(100, "Evan", "Bouchard"), roster_spot(101, "Connor", "McDavid")])
+        goal = goal_play(event_owner_team_id=10, scoring_player_id=100, assist1=101, situation_code="1460")
+        assert nhl_command._format_goal(pbp, goal).endswith("— Evan Bouchard (PP) (assists: Connor McDavid)")
+
+    def test_combined_tags_are_slash_joined_like_liiga(self, nhl_command):
+        pbp = make_pbp(home_id=10, away_id=20, roster=[roster_spot(100, "Evan", "Bouchard")])
+        goal = goal_play(event_owner_team_id=10, scoring_player_id=100, situation_code="0641")
+        assert nhl_command._format_goal(pbp, goal).endswith("— Evan Bouchard (SH/EN)")
+
+
+class TestFetchAttendance:
+    REAL_MARKUP = '<td align="center" style="font-size: 10px;font-weight:bold">Attendance 19,250&nbsp;at&nbsp;Lenovo Center</td>'
+
+    def _pbp(self):
+        return make_pbp(game_id=2026020004, season=20262027)
+
+    def test_parses_the_real_report_markup(self, nhl_command):
+        with patch.object(nhl_command.session, "get", return_value=html_response(self.REAL_MARKUP)):
+            assert nhl_command._fetch_attendance(self._pbp()) == 19250
+
+    def test_builds_the_report_url_from_season_and_game_id(self, nhl_command):
+        with patch.object(nhl_command.session, "get", return_value=html_response(self.REAL_MARKUP)) as mock_get:
+            nhl_command._fetch_attendance(self._pbp())
+        assert mock_get.call_args.args[0] == "https://www.nhl.com/scores/htmlreports/20262027/GS020004.HTM"
+        assert mock_get.call_args.kwargs["headers"] == {"Accept": "text/html"}  # the session default is JSON
+
+    @pytest.mark.parametrize("html, expected", [
+        ("Attendance 17,850 at TD Garden", 17850),
+        ("<b>Attendance</b> <b>10,226</b>", 10226),
+        ("attendance 9,999", 9999),
+    ])
+    def test_tolerates_markup_and_spacing_variants(self, nhl_command, html, expected):
+        with patch.object(nhl_command.session, "get", return_value=html_response(html)):
+            assert nhl_command._fetch_attendance(self._pbp()) == expected
+
+    def test_report_not_published_yet_returns_none(self, nhl_command, capsys):
+        with patch.object(nhl_command.session, "get", return_value=html_response("", status_code=404)):
+            assert nhl_command._fetch_attendance(self._pbp()) is None
+        assert "no attendance" in capsys.readouterr().out
+
+    def test_request_failure_returns_none(self, nhl_command):
+        with patch.object(nhl_command.session, "get", side_effect=requests.exceptions.ConnectionError):
+            assert nhl_command._fetch_attendance(self._pbp()) is None
+
+    @pytest.mark.parametrize("html", ["<html>no figure here</html>", "Attendance TBD", "Attendance 0"])
+    def test_page_without_a_usable_figure_returns_none(self, nhl_command, html):
+        with patch.object(nhl_command.session, "get", return_value=html_response(html)):
+            assert nhl_command._fetch_attendance(self._pbp()) is None
+
+    def test_missing_season_or_id_makes_no_request(self, nhl_command):
+        nhl_command.session.get.reset_mock()
+        assert nhl_command._fetch_attendance(make_pbp(game_id=2026020004)) is None  # no season
+        assert nhl_command._fetch_attendance({"season": 20262027}) is None  # no id
+        nhl_command.session.get.assert_not_called()
+
+
+class TestFinalWithAttendance:
+    def test_final_line_includes_attendance_like_liiga(self, nhl_command):
+        bot = MagicMock()
+        pbp = make_pbp(home_score=3, away_score=2, last_period_type="OT")
+        with patch.object(nhl_command, "_fetch_attendance", return_value=18347):
+            nhl_command._announce_end(bot, "#nhl.fi", pbp)
+        assert bot.send_message.call_args[0][1] == (
+            f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT) | Yleisöä: 18347"
+        )
+
+    def test_final_line_is_unchanged_when_attendance_is_unavailable(self, nhl_command):
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", make_pbp(home_score=5, away_score=4))
+        message = bot.send_message.call_args[0][1]
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 5-4 Florida Panthers"
+
+    def test_a_game_ending_during_a_poll_announces_it_with_attendance(self, nhl_command):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+        }}
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
+
+        with patch.object(nhl_command, "_fetch_today_games", return_value={1: game}), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+             patch.object(nhl_command, "_fetch_attendance", return_value=19088):
+            nhl_command._poll_once(bot, "#nhl.fi")
+
+        assert bot.send_message.call_args[0][1].endswith("| Yleisöä: 19088")

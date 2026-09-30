@@ -128,7 +128,15 @@ IMDb ID for those.
 early-start guard, and already-finished guard as `!liiga start`), announcing goals and final scores
 as they happen, e.g. `GOAL: Carolina Hurricanes 1-0 Florida Panthers 04:31 1st | Carolina
 Hurricanes — Bradly Nadeau (assists: Mike Reilly)` and `FINAL: Carolina Hurricanes 3-2 Florida
-Panthers (SO)`. `!nhl next` looks up the next upcoming NHL gameday and lists its matchups grouped
+Panthers (SO) | Yleisöä: 19250`. A goal scored in a special situation is tagged after the scorer -
+`(PP)` power play, `(SH)` shorthanded, `(EN)` into an empty net, combined like `(SH/EN)` - and
+shootout goals get none. The tag is decoded from the goal's on-ice situation code, so it costs no
+extra request, and was checked against NHL's own labels on 250 real goals with no mismatches; a
+team scoring with its own goalie pulled at even strength gets no tag, matching NHL, and penalty
+shots aren't distinguishable in this feed. The attendance isn't in NHL's JSON API at all, so it's
+read from NHL's HTML game-summary report with one extra request when a game ends, and simply left
+off if that report isn't available yet or NHL changes the page. `!nhl next` looks up the next
+upcoming NHL gameday and lists its matchups grouped
 by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (Wed 30/09): 00:00
 CAR-FLA | 02:00 TOR-MTL`. Uses `api-web.nhle.com`, the NHL's own public web API (the same one that
 powers the NHL's official site) - undocumented and unofficial, so it isn't guaranteed to stay
