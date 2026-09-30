@@ -1,4 +1,5 @@
 import os
+import re
 import socket
 import threading
 import time
@@ -9,6 +10,9 @@ from command_handler import CommandHandler
 from url_fetcher import URLFetcher
 
 class IrcBot:
+    # mIRC bold/colour/reset/reverse/italic/underline - what a +c channel refuses.
+    FORMATTING_CODES = re.compile("[\x02\x03\x0f\x16\x1d\x1f]")
+
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="KukistiBot", channels=None):
         self.server = server
         self.port = port
@@ -17,6 +21,7 @@ class IrcBot:
         self.running = False
         self.sock = None
         self._send_lock = threading.Lock()  # serializes socket writes across threads
+        self._last_sent = {}  # channel -> last message sent to it, for _report_refused_send()
         self.command_handler = CommandHandler()  # Initialize command handler
         self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
 
@@ -97,6 +102,8 @@ class IrcBot:
                         self.join_channels()  # Join multiple channels
                     elif command == "PRIVMSG":
                         self.process_message(line)
+                    elif command == "404":  # ERR_CANNOTSENDTOCHAN
+                        self._report_refused_send(line)
             except Exception as e:
                 # The catch-all here is the last line of defense against
                 # anything not anticipated by more specific handling - a
@@ -135,9 +142,39 @@ class IrcBot:
             self.send_raw(f"JOIN {channel}")
             time.sleep(1)  # Prevent flooding
 
+    def _report_refused_send(self, line):
+        """Logs, in plain ASCII, that the server refused a message to a
+        channel ("404 Cannot send to channel"). Without this the only
+        trace was the raw server line among thousands of others, and the
+        refused GOAL: lines themselves were invisible in `journalctl`:
+        it shows entries containing control characters (bold/colour
+        codes) as "[N B blob data]" unless given -a, so a grep for the
+        channel found nothing. The 404 names no message, so this says
+        whether the last one we sent that channel had formatting codes,
+        which is what tells a +c channel (blocks them) from a moderated
+        (+m) or kicked/banned one."""
+        parts = line.split()
+        channel = parts[3] if len(parts) > 3 else "?"
+        last = self._last_sent.get(channel)
+        if last is None:
+            hint = "no message of ours to it is on record - check '/mode %s'" % channel
+        elif self.FORMATTING_CODES.search(last):
+            hint = (
+                "the last message we sent it had bold/colour codes, so most likely the "
+                "channel has mode +c, which blocks them - check '/mode %s'" % channel
+            )
+        else:
+            hint = (
+                "the last message we sent it had no formatting codes, so this is not a +c "
+                "problem - check whether the channel is moderated (+m) without voice for "
+                "the bot, or whether the bot was kicked or banned"
+            )
+        print(f"SEND REFUSED: the server would not deliver a message to {channel} (404 Cannot send to channel); {hint}")
+
     def send_message(self, channel, message):
         """Send a message to the specified IRC channel."""
         safe_message = message.replace("\n", " ").replace("\r", " ")  # Remove line breaks
+        self._last_sent[channel] = safe_message
         self.send_raw(f"PRIVMSG {channel} :{safe_message}")  # Prefix colon to prevent misinterpretation
         
     def process_message(self, message):

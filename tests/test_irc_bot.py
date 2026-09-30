@@ -343,3 +343,90 @@ class TestStop:
 
         captured = capsys.readouterr()
         assert "DISCONNECTED: stop() called" in captured.out
+
+
+class TestRefusedSend:
+    """QuakeNet answers a refused message with "404 <nick> <channel> :Cannot
+    send to channel" and names no message - seen live when #nhl.fi had mode
+    +c and every GOAL:/FINAL: line (bold/colour codes) was silently dropped
+    while plain replies went through. The log line has to make that
+    diagnosable without guesswork."""
+
+    LINE = ":atw.hu.quakenet.org 404 KukistiBot #nhl.fi :Cannot send to channel"
+
+    def test_refusal_after_a_formatted_message_points_at_mode_plus_c(self, bot, capsys):
+        bot.send_message("#nhl.fi", "\x02\x0303GOAL:\x0f Toronto 1-0 Montreal")
+        capsys.readouterr()
+
+        bot._report_refused_send(self.LINE)
+
+        out = capsys.readouterr().out
+        assert out.startswith("SEND REFUSED:")
+        assert "#nhl.fi" in out
+        assert "bold/colour codes" in out and "+c" in out
+        assert "/mode #nhl.fi" in out
+
+    def test_refusal_after_a_plain_message_says_it_is_not_a_plus_c_problem(self, bot, capsys):
+        bot.send_message("#nhl.fi", "Tracking 5 NHL game(s) today")
+        capsys.readouterr()
+
+        bot._report_refused_send(self.LINE)
+
+        out = capsys.readouterr().out
+        assert "not a +c problem" in out
+        assert "moderated (+m)" in out and "kicked or banned" in out
+
+    def test_refusal_with_no_message_on_record_still_names_the_channel(self, bot, capsys):
+        bot._report_refused_send(self.LINE)
+        out = capsys.readouterr().out
+        assert "SEND REFUSED:" in out and "#nhl.fi" in out and "no message of ours" in out
+
+    def test_last_message_is_tracked_per_channel(self, bot, capsys):
+        bot.send_message("#nhl.fi", "\x02formatted\x0f")
+        bot.send_message("#pesis.fi", "plain")
+        capsys.readouterr()
+
+        bot._report_refused_send(self.LINE)  # refusal is for #nhl.fi, not the later #pesis.fi send
+
+        assert "bold/colour codes" in capsys.readouterr().out
+
+    def test_malformed_404_does_not_crash(self, bot, capsys):
+        bot._report_refused_send(":server 404")
+        assert "SEND REFUSED:" in capsys.readouterr().out
+
+    def test_log_line_is_plain_printable_ascii(self, bot, capsys):
+        # journalctl shows an entry containing control characters as
+        # "[N B blob data]" (unless given -a), which is exactly how the
+        # refused GOAL: lines went unseen - this line must never share
+        # that fate, however formatted the refused message was.
+        bot.send_message("#nhl.fi", "\x02\x0303GOAL:\x0f x")
+        capsys.readouterr()
+
+        bot._report_refused_send(self.LINE)
+
+        out = capsys.readouterr().out.rstrip("\n")
+        assert all(32 <= ord(ch) < 127 for ch in out)
+
+    def test_listen_dispatches_a_404_to_the_report(self, bot, capsys):
+        call_count = 0
+
+        def recv_then_stop(bufsize):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (self.LINE + "\r\n").encode()
+            bot.running = False
+            return b""
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+        bot.send_message("#nhl.fi", "\x02x\x0f")
+        capsys.readouterr()
+
+        bot.listen()
+
+        assert "SEND REFUSED:" in capsys.readouterr().out
+
+    def test_send_message_still_sends_the_same_line(self, bot):
+        bot.send_message("#chan", "hello\nworld")
+        bot.sock.sendall.assert_called_once_with(b"PRIVMSG #chan :hello world\r\n")
