@@ -28,7 +28,7 @@ class LiigaCommand(LiveTrackerCommand):
     """
 
     ALIASES = ("!liiga",)
-    CHANNELS = ("#smliiga",)
+    CHANNELS = ("#smliiga", "#veikkaus")
 
     DISPLAY_NAME = "Liiga"
     COMMAND_NAME = "!liiga"

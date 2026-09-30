@@ -102,8 +102,11 @@ date with games) and lists its matchups grouped by start time, e.g. `Next Liiga 
 when the game was decided in overtime or a shootout, plus the attendance figure when the API
 reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Uses the unofficial liiga.fi
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
-`#smliiga`** — like `!superpesis`, it's restricted to that one channel
-(see `"channels"` in `command_handler.py`); typing it elsewhere is silently ignored.
+`#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
+(see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
+is an *exclusive* channel: only `!liiga` and `!help` work there (`!help` lists just `!liiga`).
+Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
+default of all commands.
 
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)

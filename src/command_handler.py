@@ -45,6 +45,15 @@ class CommandHandler:
         YkkospesisCommand,
     ]
 
+    # Channels where ONLY the listed aliases work (checked before each
+    # command's own CHANNELS). Every channel not named here keeps the
+    # default: all commands, subject to their own CHANNELS. To open one
+    # more command up in such a channel, add its alias here (and the
+    # channel to its own CHANNELS if it has one).
+    EXCLUSIVE_CHANNELS = {
+        "#veikkaus": ("!liiga", "!help"),
+    }
+
     def __init__(self):
         self.commands_by_alias = {}
         self._commands = []  # each command once (its aliases share one instance)
@@ -58,13 +67,26 @@ class CommandHandler:
         for alias in help_command.ALIASES:
             self.commands_by_alias[alias] = help_command
 
+    def is_allowed(self, command, channel, aliases=None) -> bool:
+        """The one place that decides whether `command` may run in
+        `channel`, used by both handle_command() and help_text() so !help
+        can never list something dispatch would ignore (or the reverse).
+        `aliases` defaults to all of the command's own; dispatch passes
+        just the one that was typed. IRC channel names are
+        case-insensitive, so both rules compare lowercased."""
+        channel = (channel or "").lower()
+        exclusive = self.EXCLUSIVE_CHANNELS.get(channel)
+        if exclusive is not None and not any(a in exclusive for a in (aliases or command.ALIASES)):
+            return False
+        return not command.CHANNELS or channel in (c.lower() for c in command.CHANNELS)
+
     def help_text(self, channel) -> str:
         """One line listing every command usable in `channel` (same
-        CHANNELS rule handle_command() enforces), in COMMAND_CLASSES
+        is_allowed() rule handle_command() enforces), in COMMAND_CLASSES
         order."""
         entries = [
             command.HELP for command in self._commands
-            if command.HELP and (not command.CHANNELS or channel in command.CHANNELS)
+            if command.HELP and self.is_allowed(command, channel)
         ]
         return "Commands: " + " | ".join(entries)
 
@@ -81,9 +103,10 @@ class CommandHandler:
                 return
 
             # Some commands are restricted to specific channels (e.g. !superpesis
-            # -> #pesis.fi only). CHANNELS is None for every other command, so it
-            # works in every channel the bot has joined.
-            if main_command.CHANNELS and channel not in main_command.CHANNELS:
+            # -> #pesis.fi only), and some channels to specific commands
+            # (EXCLUSIVE_CHANNELS). Otherwise a command works in every
+            # channel the bot has joined.
+            if not self.is_allowed(main_command, channel, aliases=(command,)):
                 print(f"Command {command} is not allowed in channel {channel}. Ignoring.")
                 return  # Ignore command
 

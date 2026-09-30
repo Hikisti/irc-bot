@@ -240,7 +240,7 @@ class TestChannelRestriction:
 
 
 # The channels the bot actually joins (see src/irc_bot.py).
-PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi"]
+PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi", "#veikkaus"]
 GENERAL_COMMANDS = ["!weather", "!stock", "!crypto", "!sähkö", "!time", "!f1", "!distance", "!imdb", "!bjorck"]
 
 
@@ -322,3 +322,59 @@ class TestUsageConvention:
         # Guards against the loop silently checking nothing (e.g. if
         # ALLOW_ARGS defaults ever flip).
         assert len(checked) >= 6
+
+
+class TestExclusiveChannel:
+    """#veikkaus allows only !liiga (and !help, which lists just !liiga
+    there). Every other channel keeps the default rules."""
+
+    def _run(self, handler, channel, message):
+        bot = MagicMock()
+        handler.handle_command(bot, "nick", channel, message)
+        return bot
+
+    def test_liiga_is_dispatched_in_veikkaus(self, handler):
+        mock = MagicMock()
+        mock.execute.return_value = "ok"
+        replace_command(handler, "!liiga", mock)
+
+        bot = self._run(handler, "#veikkaus", "!liiga start")
+
+        mock.execute.assert_called_once()
+        assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
+
+    @pytest.mark.parametrize("message", [
+        "!weather helsinki", "!w helsinki", "!stock aapl", "!crypto btc", "!sähkö", "!sahko",
+        "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck", "!nhl start",
+        "!superpesis start",
+    ])
+    def test_every_other_command_is_ignored_in_veikkaus(self, handler, message):
+        bot = self._run(handler, "#veikkaus", message)
+        bot.send_message.assert_not_called()
+
+    def test_other_commands_are_not_even_executed_in_veikkaus(self, handler):
+        mock = MagicMock()
+        replace_command(handler, "!weather", mock)
+        self._run(handler, "#veikkaus", "!weather helsinki")
+        mock.execute.assert_not_called()
+
+    def test_help_works_in_veikkaus_and_lists_only_liiga(self, handler):
+        bot = self._run(handler, "#veikkaus", "!help")
+        assert bot.send_message.call_args[0] == ("#veikkaus", "Commands: !liiga start|stop|next")
+
+    def test_channel_name_matching_is_case_insensitive(self, handler):
+        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next"
+        bot = self._run(handler, "#VEIKKAUS", "!stock aapl")
+        bot.send_message.assert_not_called()
+
+    def test_liiga_still_works_in_smliiga_and_general_commands_stay_out_of_it_only_via_veikkaus(self, handler):
+        assert "!liiga start|stop|next" in handler.help_text("#smliiga")
+        assert "!weather" in handler.help_text("#smliiga")
+        assert "!liiga" not in handler.help_text("#nakkimuusi")
+
+    def test_help_and_dispatch_agree_for_every_command_in_every_channel(self, handler):
+        for channel in PRODUCTION_CHANNELS:
+            listed = handler.help_text(channel)
+            for command in handler._commands:
+                allowed = handler.is_allowed(command, channel)
+                assert (command.HELP in listed) == allowed, f"{command.ALIASES} in {channel}"
