@@ -106,6 +106,11 @@ consistent, deliberate discipline - keep following it:
   actually needs. Comments only when the *why* is genuinely non-obvious
   (a hidden constraint, a workaround for a confirmed live incident) - not
   for what the code already says by being well-named.
+- Refactoring is triggered, not scheduled. Propose one (never fold it
+  into a feature or fix) when a third copy of a pattern appears or a
+  file passes about 600 lines. Keep it behavior-neutral, in its own
+  commit, and never right before a live-tracker change is verified
+  against real games.
 - Only commit when explicitly asked. Never push proactively either - see
   below for why that's a bigger deal here than in most repos.
 
