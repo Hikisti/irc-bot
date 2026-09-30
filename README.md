@@ -145,6 +145,9 @@ but the API's own notion of "today" is anchored to US Eastern time - most NHL ga
 into the small hours of the following Helsinki calendar day, which is why the gameday label above
 is computed from the games' own Helsinki-converted times rather than the API's own (Eastern) date,
 and can end up showing a date further out than "tomorrow" even for the very next NHL gameday.
+Because Eastern midnight falls in the middle of the late games, a tracker keeps following the
+schedule day it started on (not "today" at each poll) until those games finish, and `!nhl start`
+run right after Eastern midnight also picks up a game still in progress from the previous day.
 **Only works in `#nhl.fi`** - like `!superpesis`, it's restricted to that one channel; typing it
 elsewhere is silently ignored.
 

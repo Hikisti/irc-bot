@@ -855,3 +855,191 @@ class TestFinalWithAttendance:
             nhl_command._poll_once(bot, "#nhl.fi")
 
         assert bot.send_message.call_args[0][1].endswith("| Yleisöä: 19088")
+
+
+class TestTrackedSlate:
+    """Regression for a real night (2026-09-29, #nhl.fi): the schedule is
+    bucketed by Eastern date, and Eastern midnight falls in the middle of
+    the late games. The poll used to fetch "today's" slate, so at midnight
+    the tracked games vanished from it - every later goal and FINAL was
+    lost and the tracker quietly moved on to the next day's games."""
+
+    def _eastern_days(self, nhl_command):
+        now = datetime.datetime.now(nhl_command.EASTERN_TZ)
+        return now.strftime("%Y-%m-%d"), (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def _tracked(self, slate, gid=1, home_goals=0, away_goals=0, ended=False):
+        return {gid: {"home_id": 10, "away_id": 20, "home_goals": home_goals,
+                      "away_goals": away_goals, "ended": ended, "slate": slate}}
+
+    def _seed(self, nhl_command, state):
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": state}
+
+    def test_slates_by_date_tags_each_game_with_its_own_date(self, nhl_command):
+        payload = make_schedule_payload({
+            "2026-09-29": [make_schedule_game(gid=1)],
+            "2026-09-30": [make_schedule_game(gid=2)],
+        })
+        slates = nhl_command._slates_by_date(payload)
+        assert slates["2026-09-29"][1]["slateDate"] == "2026-09-29"
+        assert slates["2026-09-30"][2]["slateDate"] == "2026-09-30"
+
+    def test_snapshot_remembers_the_slate_and_falls_back_to_todays_eastern_date(self, nhl_command):
+        game = make_schedule_game(gid=1)
+        assert nhl_command._seed_snapshot({**game, "slateDate": "2026-09-29"})["slate"] == "2026-09-29"
+        assert nhl_command._seed_snapshot(game)["slate"] == nhl_command._today_eastern_str()
+
+    def test_start_includes_a_game_still_live_from_the_previous_eastern_day(self, nhl_command):
+        today, yesterday = self._eastern_days(nhl_command)
+        payload = make_schedule_payload({
+            yesterday: [
+                make_schedule_game(gid=1, game_state="LIVE"),   # a 10 pm start, still being played
+                make_schedule_game(gid=2, game_state="CRIT"),
+                make_schedule_game(gid=3, game_state="FINAL"),  # over - not worth tracking
+                make_schedule_game(gid=4, game_state="FUT"),    # e.g. postponed - not in progress
+            ],
+            today: [make_schedule_game(gid=5, game_state="FUT")],
+        })
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload) as mock_fetch:
+            games = nhl_command._fetch_today_games()
+
+        assert sorted(games) == [1, 2, 5]
+        assert games[1]["slateDate"] == yesterday and games[5]["slateDate"] == today
+        mock_fetch.assert_called_once_with(yesterday)  # one call covers both days
+
+    def test_tracked_games_fetch_starts_from_the_earliest_tracked_slate(self, nhl_command):
+        payload = make_schedule_payload({
+            "2026-09-29": [make_schedule_game(gid=1)],
+            "2026-09-30": [make_schedule_game(gid=2)],
+            "2026-10-01": [make_schedule_game(gid=3)],  # a day nobody tracks
+        })
+        state = {**self._tracked("2026-09-29", gid=1), **self._tracked("2026-09-30", gid=2)}
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload) as mock_fetch:
+            games = nhl_command._fetch_tracked_games(state)
+
+        mock_fetch.assert_called_once_with("2026-09-29")
+        assert sorted(games) == [1, 2]
+
+    def test_tracked_games_fetch_falls_back_to_today_without_slate_info(self, nhl_command):
+        with patch.object(nhl_command, "_fetch_today_games", return_value={7: {}}) as mock_today:
+            assert nhl_command._fetch_tracked_games({1: {"ended": False}}) == {7: {}}
+        mock_today.assert_called_once()
+
+    def test_tracked_games_fetch_failure_returns_none(self, nhl_command):
+        with patch.object(nhl_command, "_fetch_schedule", return_value=None):
+            assert nhl_command._fetch_tracked_games(self._tracked("2026-09-29")) is None
+
+    def test_poll_after_eastern_midnight_keeps_announcing_the_tracked_game(self, nhl_command):
+        bot = MagicMock()
+        self._seed(nhl_command, self._tracked("2026-09-29"))
+        # By now the schedule's "today" is the 30th - the tracked game is
+        # only in the 29th's slate.
+        payload = make_schedule_payload({
+            "2026-09-29": [make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")],
+            "2026-09-30": [make_schedule_game(gid=9, home_id=30, away_id=40, game_state="FUT")],
+        })
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, roster=[roster_spot(100, "Evan", "Bouchard")],
+                       plays=[goal_play(event_owner_team_id=10, scoring_player_id=100)])
+
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp):
+            all_ended = nhl_command._poll_once(bot, "#nhl.fi")
+
+        assert "Evan Bouchard" in bot.send_message.call_args[0][1]
+        assert all_ended is False
+        # ...and the next day's game was NOT quietly adopted in its place.
+        assert list(nhl_command._channels["#nhl.fi"]["games"]) == [1]
+
+    def test_tracker_ends_when_its_own_slate_finishes_even_though_tomorrow_has_games(self, nhl_command):
+        bot = MagicMock()
+        self._seed(nhl_command, self._tracked("2026-09-29"))
+        payload = make_schedule_payload({
+            "2026-09-29": [make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")],
+            "2026-09-30": [make_schedule_game(gid=9, game_state="FUT")],
+        })
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=6, away_score=5,
+                       game_state="FINAL", last_period_type="OT")
+
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp):
+            all_ended = nhl_command._poll_once(bot, "#nhl.fi")
+
+        assert "FINAL:" in bot.send_message.call_args[0][1]
+        assert all_ended is True  # not held open by the 30th's FUT game
+
+    def test_a_game_added_late_to_the_tracked_day_is_still_picked_up_silently(self, nhl_command):
+        bot = MagicMock()
+        self._seed(nhl_command, self._tracked("2026-09-29"))
+        payload = make_schedule_payload({"2026-09-29": [
+            make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE"),
+            make_schedule_game(gid=2, home_id=30, away_id=40, game_state="LIVE"),
+        ]})
+        pbp_by_id = {
+            1: make_pbp(game_id=1, home_id=10, away_id=20),
+            2: make_pbp(game_id=2, home_id=30, away_id=40, plays=[goal_play(event_owner_team_id=30, scoring_player_id=7)]),
+        }
+
+        with patch.object(nhl_command, "_fetch_schedule", return_value=payload), \
+             patch.object(nhl_command, "_fetch_play_by_play", side_effect=lambda gid: pbp_by_id[gid]):
+            nhl_command._poll_once(bot, "#nhl.fi")
+
+        bot.send_message.assert_not_called()  # seeded as a baseline, not replayed
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["slate"] == "2026-09-29"
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["home_goals"] == 1
+
+
+class TestGoalOrder:
+    """Several goals seen in one poll must come out in the order they were
+    scored, both teams interleaved. They used to be announced one team at a
+    time (home's goals, then away's) - visible when a tracker recovered a
+    stretch of a game and a 2-2 line landed before the 0-1 that came first.
+    Home team id is 10, away 20 in make_pbp()."""
+
+    def _pbp(self, plays):
+        roster = [roster_spot(1, "Home", "First"), roster_spot(2, "Away", "Second"),
+                  roster_spot(3, "Home", "Third"), roster_spot(4, "Away", "Fourth")]
+        return make_pbp(game_id=1, home_id=10, away_id=20, roster=roster, plays=plays)
+
+    def _plays(self):
+        return [
+            goal_play(event_id=1, event_owner_team_id=10, scoring_player_id=1, home_score=1, away_score=0),
+            goal_play(event_id=2, event_owner_team_id=20, scoring_player_id=2, home_score=1, away_score=1),
+            goal_play(event_id=3, event_owner_team_id=10, scoring_player_id=3, home_score=2, away_score=1),
+            goal_play(event_id=4, event_owner_team_id=20, scoring_player_id=4, home_score=2, away_score=2),
+        ]
+
+    def _announced(self, nhl_command, pbp, prev):
+        bot = MagicMock()
+        nhl_command._announce_new_goals(bot, "#nhl.fi", pbp, prev)
+        return [call.args[1] for call in bot.send_message.call_args_list]
+
+    def test_goals_come_out_in_the_order_they_were_scored_across_both_teams(self, nhl_command):
+        messages = self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 0, "away_goals": 0})
+
+        scorers = [next(name for name in ("First", "Second", "Third", "Fourth") if name in m) for m in messages]
+        assert scorers == ["First", "Second", "Third", "Fourth"]  # not First, Third, Second, Fourth
+        assert "1-0" in messages[0] and "1-1" in messages[1] and "2-1" in messages[2] and "2-2" in messages[3]
+
+    def test_only_goals_beyond_each_teams_announced_count_are_new_and_still_ordered(self, nhl_command):
+        # home already had 1 announced, away none: new are Second (away), Third (home), Fourth (away)
+        messages = self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 1, "away_goals": 0})
+
+        scorers = [next(name for name in ("First", "Second", "Third", "Fourth") if name in m) for m in messages]
+        assert scorers == ["Second", "Third", "Fourth"]
+
+    def test_nothing_new_announces_nothing(self, nhl_command):
+        assert self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 2, "away_goals": 2}) == []
+
+    def test_a_poll_announces_a_multi_goal_backlog_in_game_order(self, nhl_command):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+        }}
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
+
+        with patch.object(nhl_command, "_fetch_today_games", return_value={1: game}), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=self._pbp(self._plays())):
+            nhl_command._poll_once(bot, "#nhl.fi")
+
+        scores = [call.args[1].split("|")[0] for call in bot.send_message.call_args_list]
+        assert ["1-0" in scores[0], "1-1" in scores[1], "2-1" in scores[2], "2-2" in scores[3]] == [True] * 4

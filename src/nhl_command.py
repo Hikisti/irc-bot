@@ -97,13 +97,13 @@ class NHLCommand(LiveTrackerCommand):
 
         Returns True once every tracked game has ended (nothing left to watch).
         """
-        games = self._fetch_today_games()
-        if games is None:
-            return False
-
         prev_state = self._get_state(channel)
         if prev_state is None:
             return True
+
+        games = self._fetch_tracked_games(prev_state)
+        if games is None:
+            return False
 
         all_ended = bool(games)
         new_state = {}
@@ -130,8 +130,7 @@ class NHLCommand(LiveTrackerCommand):
                     continue
 
                 if pbp is not None:
-                    self._announce_new_goals(irc_bot, channel, pbp, prev, "homeTeam")
-                    self._announce_new_goals(irc_bot, channel, pbp, prev, "awayTeam")
+                    self._announce_new_goals(irc_bot, channel, pbp, prev)
 
                 ended = self._is_ended(game)
                 if ended and not prev["ended"] and pbp is not None:
@@ -235,10 +234,24 @@ class NHLCommand(LiveTrackerCommand):
                 return f"{first} {last}".strip() or "Unknown"
         return "Unknown"
 
-    def _announce_new_goals(self, irc_bot, channel, pbp, prev, side):
-        goals = self._real_goals(pbp, side)
-        key = "home_goals" if side == "homeTeam" else "away_goals"
-        for goal in goals[prev[key]:]:
+    def _new_goals(self, pbp, prev) -> list:
+        """Goals not announced yet, in the order they were scored. Each
+        team's new goals are found from its own count (the same one
+        _seed_snapshot/_build_initial_state record), then put back in play
+        order across both teams - the play-by-play is chronological.
+        Announcing one team's goals and then the other's instead (as this
+        used to) scrambled the sequence whenever a poll saw several at
+        once, e.g. right after a tracker recovered from missing a stretch
+        of a game: a 2-2 line landed before the 0-1 that came first."""
+        new = (
+            self._real_goals(pbp, "homeTeam")[prev["home_goals"]:]
+            + self._real_goals(pbp, "awayTeam")[prev["away_goals"]:]
+        )
+        position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
+        return sorted(new, key=lambda goal: position[id(goal)])
+
+    def _announce_new_goals(self, irc_bot, channel, pbp, prev):
+        for goal in self._new_goals(pbp, prev):
             self._safe_send(irc_bot, channel, self._format_goal(pbp, goal))
 
     def _format_goal(self, pbp, goal) -> str:
@@ -375,6 +388,9 @@ class NHLCommand(LiveTrackerCommand):
             "home_goals": 0,
             "away_goals": 0,
             "ended": self._is_ended(game),
+            # The schedule day (Eastern) this game belongs to - what the poll
+            # keeps following, see _fetch_tracked_games().
+            "slate": game.get("slateDate") or self._today_eastern_str(),
         }
 
     def _fetch_play_by_play(self, game_id):
@@ -422,17 +438,61 @@ class NHLCommand(LiveTrackerCommand):
         # or double-count games for a large chunk of the Helsinki day.
         return datetime.datetime.now(self.EASTERN_TZ).strftime("%Y-%m-%d")
 
+    def _slates_by_date(self, data) -> dict:
+        """{date: {game_id: game}} for every day in a schedule window. Each
+        game gets a "slateDate" of its own so a snapshot can remember
+        which day's slate it belongs to."""
+        slates = {}
+        for week in data.get("gameWeek") or []:
+            date = week.get("date")
+            slates[date] = {
+                g["id"]: {**g, "slateDate": date}
+                for g in (week.get("games") or []) if g.get("id") is not None
+            }
+        return slates
+
     def _fetch_today_games(self):
         """Returns {game_id: game_dict} for "today" (US Eastern), or None
-        on failure."""
-        data = self._fetch_schedule(self._today_eastern_str())
+        on failure. Also includes any game from the previous Eastern day
+        that is still in progress: late starts (10 pm Eastern and after)
+        run past Eastern midnight, and someone starting tracking then
+        would otherwise see none of the game actually being played."""
+        now = datetime.datetime.now(self.EASTERN_TZ)
+        today_str = now.strftime("%Y-%m-%d")
+        yesterday_str = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        data = self._fetch_schedule(yesterday_str)  # a 7-day window, so this covers today too
         if data is None:
             return None
-        today_str = self._today_eastern_str()
-        for week in data.get("gameWeek") or []:
-            if week.get("date") == today_str:
-                return {g["id"]: g for g in (week.get("games") or []) if g.get("id") is not None}
-        return {}
+        slates = self._slates_by_date(data)
+        games = dict(slates.get(today_str, {}))
+        for gid, game in slates.get(yesterday_str, {}).items():
+            if game.get("gameState") in ("LIVE", "CRIT"):
+                games[gid] = game
+        return games
+
+    def _fetch_tracked_games(self, prev_state):
+        """Returns {game_id: game_dict} for the slate day(s) the tracked
+        games belong to, or None on failure - NOT simply "today".
+
+        Confirmed live (2026-09-29, #nhl.fi): the schedule is bucketed by
+        Eastern date, and Eastern midnight lands in the middle of the
+        late games (a 10 pm Eastern start is still being played at
+        midnight). Polling "today's" slate at that moment silently
+        replaced the tracked games with tomorrow's, so every goal and
+        FINAL after midnight was lost and the tracker quietly moved on to
+        the next day. Following the tracked games' own slate keeps them
+        until they finish, and then the tracker ends, as it should."""
+        dates = sorted({snap["slate"] for snap in prev_state.values() if snap.get("slate")})
+        if not dates:
+            return self._fetch_today_games()
+        data = self._fetch_schedule(dates[0])  # a 7-day window from the earliest tracked day
+        if data is None:
+            return None
+        slates = self._slates_by_date(data)
+        games = {}
+        for date in dates:
+            games.update(slates.get(date, {}))
+        return games
 
     def _helsinki_date_label(self, games, eastern_date_str) -> str:
         """The API's own gameWeek "date" is an Eastern calendar date - not
