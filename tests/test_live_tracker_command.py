@@ -423,3 +423,22 @@ class TestAbstractHooks:
     def test_poll_once_is_not_implemented(self, tracker):
         with pytest.raises(NotImplementedError):
             tracker._poll_once(MagicMock(), "#chan")
+
+
+class TestTrackingSummaryHook:
+    def test_defaults_to_the_same_list_next_uses(self, run_tracker):
+        assert run_tracker._format_tracking_summary([1, 2]) == run_tracker._format_period_summary([1, 2])
+
+    def test_start_message_uses_the_tracking_summary_and_next_does_not(self, run_tracker):
+        run_tracker._format_tracking_summary = lambda items: "TRACKING-LIST"
+        bot = MagicMock()
+        stop_event = threading.Event()
+        run_tracker._channels["#chan"] = {"stop_event": stop_event, "thread": None, run_tracker.STATE_KEY: {}}
+        run_tracker._fetch_today_items = lambda context: {1: {"start": "2020-01-01T00:00:00Z"}}
+        run_tracker._run(bot, "#chan", stop_event)
+        assert "Tracking 1 Test item(s) today: TRACKING-LIST" in bot.send_message.call_args_list[0][0][1]
+
+        next_bot = MagicMock()
+        run_tracker._fetch_next_period = lambda context: ("2026-01-01", {1: "a"})
+        run_tracker._run_next(next_bot, "#chan")
+        assert "TRACKING-LIST" not in next_bot.send_message.call_args[0][1]

@@ -98,7 +98,7 @@ class TestStartDoesNotBlock:
         bot.send_message.assert_called_once()
         message = bot.send_message.call_args[0][1]
         assert "Tracking 1 Liiga game" in message
-        assert "17:00 HIFK-Ilves" in message
+        assert "17:00 HIFK 0-0 Ilves" in message  # make_game() defaults to started
 
     def test_start_reserves_slot_immediately_against_races(self, liiga_command):
         """A second !liiga start while the first lookup is still in flight
@@ -1001,3 +1001,38 @@ class TestSeasonCalculation:
     def test_spring_date_uses_same_year(self, liiga_command):
         dt = datetime.datetime(2025, 3, 15, tzinfo=liiga_command.HELSINKI_TZ)
         assert liiga_command._current_season(dt) == 2025
+
+
+class TestTrackingSummary:
+    """The "Tracking N games today: ..." list adds scores for games already
+    underway (goals scored before !liiga start are deliberately never
+    announced, so without this a mid-game start leaves the channel
+    guessing); "!liiga next" keeps the plain list."""
+
+    def test_game_not_started_shows_no_score(self, liiga_command):
+        games = [make_game(started=False)]
+        assert liiga_command._format_tracking_summary(games) == "17:00 HIFK-Ilves"
+
+    def test_live_game_shows_its_score(self, liiga_command):
+        game = make_game(home_goals=[goal_event(), goal_event()], away_goals=[goal_event()])
+        assert liiga_command._format_tracking_summary([game]) == "17:00 HIFK 2-1 Ilves"
+
+    def test_finished_game_is_marked_final(self, liiga_command):
+        game = make_game(home_goals=[goal_event()], ended=True)
+        assert liiga_command._format_tracking_summary([game]) == "17:00 HIFK 1-0 Ilves (final)"
+
+    def test_mixed_slate_keeps_time_grouping(self, liiga_command):
+        games = [
+            make_game(gid=1, home="HIFK", away="Ilves", home_goals=[goal_event()], start="2026-09-05T14:00:00Z"),
+            make_game(gid=2, home="JYP", away="Lukko", started=False, start="2026-09-05T15:30:00Z"),
+        ]
+        assert liiga_command._format_tracking_summary(games) == "17:00 HIFK 1-0 Ilves | 18:30 JYP-Lukko"
+
+    def test_non_numeric_goal_counts_show_no_score_rather_than_a_wrong_one(self, liiga_command):
+        game = make_game()
+        del game["homeTeam"]["goals"]  # _team_goals() falls back to "?"
+        assert liiga_command._format_tracking_summary([game]) == "17:00 HIFK-Ilves"
+
+    def test_next_keeps_the_plain_list_even_for_a_started_game(self, liiga_command):
+        game = make_game(home_goals=[goal_event()])
+        assert liiga_command._format_period_summary([game]) == "17:00 HIFK-Ilves"

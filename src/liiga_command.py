@@ -116,13 +116,34 @@ class LiigaCommand(LiveTrackerCommand):
 
     # ---- start-time summary -------------------------------------------
 
-    def _format_games_summary(self, games) -> str:
+    def _format_tracking_summary(self, items):
+        return self._format_games_summary(items, with_scores=True)
+
+    def _format_games_summary(self, games, with_scores=False) -> str:
         """Groups games by scheduled start time, e.g.
-        '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30 JYP-Lukko'."""
-        return self._format_start_time_summary(
-            games, "start",
-            lambda g: f"{self._team_name(g, 'homeTeam')}-{self._team_name(g, 'awayTeam')}",
-        )
+        '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30 JYP-Lukko'. With
+        with_scores, a game already underway shows its score ('HIFK 2-1
+        Ilves') and a finished one adds '(final)'."""
+        def label(game):
+            home, away = self._team_name(game, "homeTeam"), self._team_name(game, "awayTeam")
+            score = self._score_pair(game) if with_scores else None
+            if score is None:
+                return f"{home}-{away}"
+            text = f"{home} {score[0]}-{score[1]} {away}"
+            return f"{text} (final)" if game.get("ended") else text
+
+        return self._format_start_time_summary(games, "start", label)
+
+    def _score_pair(self, game):
+        """(home, away) goals of a game that has started, else None -
+        and None too if the goal counts aren't real numbers, so an
+        unexpected shape shows no score rather than a wrong one."""
+        if not (game.get("started") or game.get("ended")):
+            return None
+        home, away = self._team_goals(game, "homeTeam"), self._team_goals(game, "awayTeam")
+        if isinstance(home, int) and isinstance(away, int):
+            return home, away
+        return None
 
     # ---- announcements --------------------------------------------------
 

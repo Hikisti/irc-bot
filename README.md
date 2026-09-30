@@ -85,6 +85,14 @@ exists but every game/match on it is already finished (e.g. run late in the even
 a single `All of today's Liiga games have already finished.` instead of announcing "Tracking N
 games" and then immediately "all finished, stopped" a moment later.
 
+For `!liiga start` and `!nhl start`, the "Tracking N games" reply also shows the current score of
+any game already underway, e.g. `Tracking 3 NHL game(s) today: 00:00 CAR 0-1 FLA (final) | 02:00
+TOR 1-1 MTL | 05:00 EDM-VAN` (`(final)` once it has ended, plain names for games not started yet).
+Goals scored before a start are never announced - they're the baseline - so this is how a mid-game
+start shows what already happened. `!liiga next`/`!nhl next` keep the plain list, and
+`!superpesis`/`!ykkospesis` don't show scores yet (pesäpallo's per-jakso scoring needs its own
+format, and its not-yet-started data shape hasn't been seen live).
+
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
 all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the next upcoming

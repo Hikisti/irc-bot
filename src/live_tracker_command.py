@@ -35,8 +35,8 @@ class LiveTrackerCommand(BaseCommand):
     _build_initial_state(items), and the _run_next hooks
     _fetch_next_period(context) and _format_period_summary(items) (both
     _run and _run_next also share _format_period_summary); only if the
-    default doesn't fit, _format_not_found_message() and
-    _resolve_context().
+    default doesn't fit, _format_not_found_message(),
+    _resolve_context() and _format_tracking_summary().
     """
 
     needs_irc_context = True
@@ -247,7 +247,7 @@ class LiveTrackerCommand(BaseCommand):
         if not self._commit_initial_state(channel, stop_event, state):
             return  # stopped (or superseded) before the lookup finished
 
-        summary = self._format_period_summary(items.values())
+        summary = self._format_tracking_summary(items.values())
         self._safe_send(
             irc_bot, channel,
             f"Tracking {len(items)} {self.DISPLAY_NAME} {self.TRACKED_NOUN_COUNTED} today: {summary}",
@@ -255,6 +255,15 @@ class LiveTrackerCommand(BaseCommand):
 
         poll_args = (context,) if self.REQUIRES_CONTEXT else ()
         self._poll_loop(irc_bot, channel, stop_event, *poll_args)
+
+    def _format_tracking_summary(self, items) -> str:
+        """The item list in the "Tracking N ... today: ..." message. Same
+        as <command> next's list by default; a subclass overrides it to
+        say what it can about items already underway (e.g. current
+        scores), so starting tracking mid-game doesn't leave the channel
+        guessing what already happened - goals scored before the start
+        are deliberately never announced (they're the baseline)."""
+        return self._format_period_summary(items)
 
     def _fetch_today_items(self, context):
         """Returns {item_id: item_dict} for today, or None on failure (API

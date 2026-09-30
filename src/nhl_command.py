@@ -154,7 +154,10 @@ class NHLCommand(LiveTrackerCommand):
 
     # ---- start-time summary -------------------------------------------
 
-    def _format_games_summary(self, games) -> str:
+    def _format_tracking_summary(self, items):
+        return self._format_games_summary(items, with_scores=True)
+
+    def _format_games_summary(self, games, with_scores=False) -> str:
         """Groups games by scheduled start time, e.g.
         '21:00 CAR-FLA, PHI-BOS | 22:00 EDM-WPG'. Uses each team's short
         abbreviation (not the full city+mascot name) here specifically -
@@ -162,11 +165,30 @@ class NHLCommand(LiveTrackerCommand):
         ("Carolina Hurricanes-Florida Panthers, ...") would make this
         summary line unreadably long; full names are still used in the
         GOAL:/FINAL: messages below, where only one game's worth appears
-        per line."""
-        return self._format_start_time_summary(
-            games, "startTimeUTC",
-            lambda g: f"{self._team_abbrev(g, 'homeTeam')}-{self._team_abbrev(g, 'awayTeam')}",
-        )
+        per line. With with_scores, a game already underway shows its
+        score ('TOR 1-0 MTL') and a finished one adds '(final)'."""
+        def label(game):
+            home, away = self._team_abbrev(game, "homeTeam"), self._team_abbrev(game, "awayTeam")
+            score = self._score_pair(game) if with_scores else None
+            if score is None:
+                return f"{home}-{away}"
+            text = f"{home} {score[0]}-{score[1]} {away}"
+            return f"{text} (final)" if self._is_ended(game) else text
+
+        return self._format_start_time_summary(games, "startTimeUTC", label)
+
+    def _score_pair(self, game):
+        """(home, away) score of a game that has started, else None.
+        FUT/PRE games have no score yet; anything else only counts if
+        both scores are real numbers, so an unexpected shape shows no
+        score rather than a wrong one."""
+        if game.get("gameState") in ("FUT", "PRE"):
+            return None
+        home = (game.get("homeTeam") or {}).get("score")
+        away = (game.get("awayTeam") or {}).get("score")
+        if isinstance(home, int) and isinstance(away, int):
+            return home, away
+        return None
 
     # ---- team name helpers ------------------------------------------------
 

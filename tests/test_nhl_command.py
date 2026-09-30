@@ -63,13 +63,20 @@ def make_pbp(game_id=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away
 
 
 def make_schedule_game(gid=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away_abbrev="FLA",
-                        start_time_utc="2026-09-29T21:00:00Z", game_state="FUT"):
+                        start_time_utc="2026-09-29T21:00:00Z", game_state="FUT",
+                        home_score=None, away_score=None):
+    home = {"id": home_id, "abbrev": home_abbrev}
+    away = {"id": away_id, "abbrev": away_abbrev}
+    if home_score is not None:  # the real schedule payload only carries scores once a game has started
+        home["score"] = home_score
+    if away_score is not None:
+        away["score"] = away_score
     return {
         "id": gid,
         "startTimeUTC": start_time_utc,
         "gameState": game_state,
-        "homeTeam": {"id": home_id, "abbrev": home_abbrev},
-        "awayTeam": {"id": away_id, "abbrev": away_abbrev},
+        "homeTeam": home,
+        "awayTeam": away,
     }
 
 
@@ -639,3 +646,61 @@ class TestGuardWiring:
             "#nhl.fi", "All of today's NHL games have already finished.",
         )
         assert "#nhl.fi" not in nhl_command._channels
+
+
+class TestTrackingSummary:
+    """The "Tracking N games today: ..." list adds scores for games already
+    underway (goals scored before !nhl start are deliberately never
+    announced, so without this a mid-game start leaves the channel
+    guessing); "!nhl next" keeps the plain list."""
+
+    def _one(self, **kwargs):
+        return [make_schedule_game(home_abbrev="TOR", away_abbrev="MTL", **kwargs)]
+
+    def test_future_and_pregame_games_show_no_score(self, nhl_command):
+        for state in ("FUT", "PRE"):
+            assert nhl_command._format_tracking_summary(self._one(game_state=state)).endswith("TOR-MTL")
+
+    def test_live_game_shows_its_score(self, nhl_command):
+        games = self._one(game_state="LIVE", home_score=1, away_score=0)
+        assert nhl_command._format_tracking_summary(games).endswith("TOR 1-0 MTL")
+
+    def test_zero_zero_live_game_still_shows_its_score(self, nhl_command):
+        games = self._one(game_state="LIVE", home_score=0, away_score=0)
+        assert nhl_command._format_tracking_summary(games).endswith("TOR 0-0 MTL")
+
+    def test_finished_game_is_marked_final(self, nhl_command):
+        for state in ("FINAL", "OFF"):
+            games = self._one(game_state=state, home_score=3, away_score=2)
+            assert nhl_command._format_tracking_summary(games).endswith("TOR 3-2 MTL (final)")
+
+    def test_started_game_without_numeric_scores_shows_no_score(self, nhl_command):
+        games = self._one(game_state="LIVE")  # no score keys at all
+        assert nhl_command._format_tracking_summary(games).endswith("TOR-MTL")
+
+    def test_mixed_slate_keeps_time_grouping(self, nhl_command):
+        games = [
+            make_schedule_game(gid=1, home_abbrev="CAR", away_abbrev="FLA", game_state="FINAL",
+                               home_score=0, away_score=1, start_time_utc="2026-09-29T21:00:00Z"),
+            make_schedule_game(gid=2, home_abbrev="EDM", away_abbrev="VAN", game_state="FUT",
+                               start_time_utc="2026-09-30T02:00:00Z"),
+        ]
+        assert nhl_command._format_tracking_summary(games) == "00:00 CAR 0-1 FLA (final) | 05:00 EDM-VAN"
+
+    def test_next_keeps_the_plain_list_even_for_a_started_game(self, nhl_command):
+        games = self._one(game_state="LIVE", home_score=1, away_score=0)
+        assert nhl_command._format_period_summary(games).endswith("TOR-MTL")
+
+    def test_start_message_includes_the_live_score(self, nhl_command):
+        bot = MagicMock()
+        past_start = (datetime.datetime.now(nhl_command.HELSINKI_TZ) - datetime.timedelta(hours=1)).isoformat()
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, home_abbrev="TOR", away_abbrev="MTL",
+                                  game_state="LIVE", start_time_utc=past_start, home_score=1, away_score=1)
+
+        with patch.object(nhl_command, "_fetch_today_games", return_value={1: game}), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=make_pbp(game_id=1, home_id=10, away_id=20)), \
+             patch.object(nhl_command, "_poll_loop"):
+            nhl_command.execute("start", irc_bot=bot, channel="#nhl.fi")
+            join_channel_thread(nhl_command, "#nhl.fi")
+
+        assert "TOR 1-1 MTL" in bot.send_message.call_args[0][1]
