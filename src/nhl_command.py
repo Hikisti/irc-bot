@@ -108,11 +108,14 @@ class NHLCommand(LiveTrackerCommand):
         all_ended = bool(games)
         new_state = {}
 
-        # Every tracked game needs its own play-by-play fetch (unlike
-        # Liiga, whose single schedule call already has everyone's goal
-        # events) - fetched concurrently, same reasoning as
-        # _seed_goal_counts() above.
-        pbp_by_gid = self._fetch_concurrently(list(games.keys()), self._fetch_play_by_play)
+        # Every game that can still change needs its own play-by-play
+        # fetch (unlike Liiga, whose single schedule call already has
+        # everyone's goal events) - fetched concurrently, same reasoning
+        # as _seed_goal_counts() above. Games not yet started or already
+        # finished (and already announced) are skipped: nothing new can
+        # be in their feed.
+        to_fetch = [gid for gid, g in games.items() if self._needs_play_by_play(g, prev_state.get(gid))]
+        pbp_by_gid = self._fetch_concurrently(to_fetch, self._fetch_play_by_play)
 
         for gid, game in games.items():
             try:
@@ -156,6 +159,16 @@ class NHLCommand(LiveTrackerCommand):
 
         self._set_state(channel, new_state)
         return all_ended
+
+    def _needs_play_by_play(self, game, prev) -> bool:
+        """False for a game whose play-by-play can't hold anything new:
+        not started yet, or finished with the end already recorded in
+        the previous snapshot (so its FINAL: has been announced). A game
+        that just ended this cycle (prev not ended) is still fetched -
+        that final poll carries its last goal and the FINAL: line."""
+        if game.get("gameState") in ("FUT", "PRE"):
+            return False
+        return not (prev is not None and prev["ended"] and self._is_ended(game))
 
     # ---- start-time summary -------------------------------------------
 

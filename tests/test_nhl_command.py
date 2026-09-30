@@ -1043,3 +1043,48 @@ class TestGoalOrder:
 
         scores = [call.args[1].split("|")[0] for call in bot.send_message.call_args_list]
         assert ["1-0" in scores[0], "1-1" in scores[1], "2-1" in scores[2], "2-2" in scores[3]] == [True] * 4
+
+
+class TestPlayByPlaySkipping:
+    """Play-by-play is only fetched for games that can still change."""
+
+    def _poll(self, nhl_command, prev, game_state, fail=False):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {1: prev}}
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state=game_state)
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, plays=[
+            goal_play(event_owner_team_id=10, scoring_player_id=100)])
+        with patch.object(nhl_command, "_fetch_today_games", return_value={1: game}), \
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp) as fetch:
+            nhl_command._poll_once(bot, "#nhl.fi")
+        return fetch, bot
+
+    def _prev(self, ended=False, home_goals=0):
+        return {"home_id": 10, "away_id": 20, "home_goals": home_goals, "away_goals": 0, "ended": ended}
+
+    @pytest.mark.parametrize("state", ["FUT", "PRE"])
+    def test_not_started_game_is_not_fetched(self, nhl_command, state):
+        fetch, _ = self._poll(nhl_command, self._prev(), state)
+        fetch.assert_not_called()
+
+    def test_finished_and_already_announced_game_is_not_fetched_and_keeps_its_counts(self, nhl_command):
+        fetch, bot = self._poll(nhl_command, self._prev(ended=True, home_goals=3), "OFF")
+        fetch.assert_not_called()
+        bot.send_message.assert_not_called()
+        assert nhl_command._channels["#nhl.fi"]["games"][1]["home_goals"] == 3
+
+    @pytest.mark.parametrize("state", ["LIVE", "CRIT"])
+    def test_live_game_is_fetched(self, nhl_command, state):
+        fetch, _ = self._poll(nhl_command, self._prev(), state)
+        fetch.assert_called_once()
+
+    def test_game_that_just_ended_is_still_fetched_for_last_goal_and_final(self, nhl_command):
+        fetch, bot = self._poll(nhl_command, self._prev(ended=False), "OFF")
+        fetch.assert_called_once()
+        texts = [c.args[1] for c in bot.send_message.call_args_list]
+        assert any("GOAL:" in t for t in texts) and any("FINAL:" in t for t in texts)
+
+    def test_game_going_live_after_being_skipped_is_fetched_from_zero(self, nhl_command):
+        fetch, bot = self._poll(nhl_command, self._prev(), "LIVE")
+        fetch.assert_called_once()
+        assert any("GOAL:" in c.args[1] for c in bot.send_message.call_args_list)
