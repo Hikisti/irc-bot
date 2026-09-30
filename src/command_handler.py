@@ -52,7 +52,7 @@ class CommandHandler:
     # one more command up in such a channel, add its alias here (and the
     # channel to its own CHANNELS if it has one).
     EXCLUSIVE_CHANNELS = {
-        "#veikkaus": ("!liiga", "!help"),
+        "#veikkaus": ("!liiga", "!nhl", "!help"),
     }
 
     def __init__(self):

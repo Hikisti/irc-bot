@@ -104,7 +104,7 @@ reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Uses the un
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
 `#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
 (see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
-is an *exclusive* channel: only `!liiga` and `!help` work there (`!help` lists just `!liiga`), and posted links get no title reply either.
+is an *exclusive* channel: only `!liiga`, `!nhl` and `!help` work there (`!help` lists just the first two), and posted links get no title reply either.
 Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
 default of all commands.
 
@@ -151,7 +151,7 @@ and can end up showing a date further out than "tomorrow" even for the very next
 Because Eastern midnight falls in the middle of the late games, a tracker keeps following the
 schedule day it started on (not "today" at each poll) until those games finish, and `!nhl start`
 run right after Eastern midnight also picks up a game still in progress from the previous day.
-**Only works in `#nhl.fi`** - like `!superpesis`, it's restricted to that one channel; typing it
+**Only works in `#nhl.fi` and `#veikkaus`** - like `!superpesis`, it's restricted to those channels; typing it
 elsewhere is silently ignored.
 
 `!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches

@@ -325,8 +325,8 @@ class TestUsageConvention:
 
 
 class TestExclusiveChannel:
-    """#veikkaus allows only !liiga (and !help, which lists just !liiga
-    there). Every other channel keeps the default rules."""
+    """#veikkaus allows only !liiga and !nhl (and !help, which lists just
+    those two there). Every other channel keeps the default rules."""
 
     def _run(self, handler, channel, message):
         bot = MagicMock()
@@ -345,7 +345,7 @@ class TestExclusiveChannel:
 
     @pytest.mark.parametrize("message", [
         "!weather helsinki", "!w helsinki", "!stock aapl", "!crypto btc", "!sähkö", "!sahko",
-        "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck", "!nhl start",
+        "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck",
         "!superpesis start",
     ])
     def test_every_other_command_is_ignored_in_veikkaus(self, handler, message):
@@ -358,12 +358,23 @@ class TestExclusiveChannel:
         self._run(handler, "#veikkaus", "!weather helsinki")
         mock.execute.assert_not_called()
 
-    def test_help_works_in_veikkaus_and_lists_only_liiga(self, handler):
+    def test_nhl_is_dispatched_in_veikkaus(self, handler):
+        mock = MagicMock()
+        mock.execute.return_value = "ok"
+        replace_command(handler, "!nhl", mock)
+
+        self._run(handler, "#veikkaus", "!nhl start")
+
+        mock.execute.assert_called_once()
+        assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
+
+    def test_help_works_in_veikkaus_and_lists_only_liiga_and_nhl(self, handler):
         bot = self._run(handler, "#veikkaus", "!help")
-        assert bot.send_message.call_args[0] == ("#veikkaus", "Commands: !liiga start|stop|next")
+        assert bot.send_message.call_args[0] == (
+            "#veikkaus", "Commands: !liiga start|stop|next | !nhl start|stop|next")
 
     def test_channel_name_matching_is_case_insensitive(self, handler):
-        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next"
+        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next | !nhl start|stop|next"
         bot = self._run(handler, "#VEIKKAUS", "!stock aapl")
         bot.send_message.assert_not_called()
 

@@ -37,7 +37,7 @@ class NHLCommand(LiveTrackerCommand):
     """
 
     ALIASES = ("!nhl",)
-    CHANNELS = ("#nhl.fi",)
+    CHANNELS = ("#nhl.fi", "#veikkaus")
 
     DISPLAY_NAME = "NHL"
     COMMAND_NAME = "!nhl"
