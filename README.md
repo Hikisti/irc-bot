@@ -65,7 +65,7 @@ in `src/irc_bot.py`.
 | Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
 | IMDb | `!imdb` | movie/show title, optionally with `series`/`movie` first and/or a year last; or an IMDb ID/link | `!imdb terminator 2`, `!imdb series flipper 1995` |
-| NHL live tracker | `!nhl` | `start`, `stop`, or `next` | `!nhl start` |
+| NHL live tracker | `!nhl` | `start`, `stop`, `next`, `now`, or `results` | `!nhl now` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
@@ -151,6 +151,15 @@ and can end up showing a date further out than "tomorrow" even for the very next
 Because Eastern midnight falls in the middle of the late games, a tracker keeps following the
 schedule day it started on (not "today" at each poll) until those games finish, and `!nhl start`
 run right after Eastern midnight also picks up a game still in progress from the previous day.
+`!nhl now` and `!nhl results` are one-shot looks that don't start any tracking (and work while a
+tracker is running). `!nhl now` is today's board: `Live:` games with score, period and time left
+(`TOR 2-1 NYI 2nd 12:34 left`, `1st int.`, `OT`, `SO`), then `Final:` and `Upcoming:` (Helsinki start
+times); empty groups are left out, and with no games at all it points at the next gameday.
+`!nhl results` lists only the finished games of the latest slate that has any (`NHL results 1.10.: PHI
+0-7 PIT, TOR 2-1 NYI (OT)`, dated as Helsinki sees it) and adds `(N game(s) still on: !nhl now)` when
+games of that slate are still being played. Both read `api-web.nhle.com`'s `/score/{date}` (Eastern
+dates, briefly cached) and split long output into several lines.
+
 **Only works in `#nhl.fi` and `#veikkaus`** - like `!superpesis`, it's restricted to those channels; typing it
 elsewhere is silently ignored.
 

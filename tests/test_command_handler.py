@@ -256,7 +256,7 @@ class TestHelp:
         for restricted in ("!liiga", "!nhl", "!superpesis", "!ykkospesis"):
             assert restricted not in general
 
-        assert "!nhl start|stop|next" in handler.help_text("#nhl.fi")
+        assert "!nhl start|stop|next|now|results" in handler.help_text("#nhl.fi")
         assert "!liiga start|stop|next" in handler.help_text("#smliiga")
         pesis = handler.help_text("#pesis.fi")
         assert "!superpesis start|stop|next" in pesis
@@ -279,7 +279,7 @@ class TestHelp:
         bot.send_message.assert_called_once()
         channel, message = bot.send_message.call_args[0]
         assert channel == "#nhl.fi"
-        assert message.startswith("Commands: ") and "!nhl start|stop|next" in message
+        assert message.startswith("Commands: ") and "!nhl start|stop|next|now|results" in message
 
     def test_extra_text_after_help_still_gets_the_list(self, handler):
         bot = MagicMock()
@@ -371,10 +371,10 @@ class TestExclusiveChannel:
     def test_help_works_in_veikkaus_and_lists_only_liiga_and_nhl(self, handler):
         bot = self._run(handler, "#veikkaus", "!help")
         assert bot.send_message.call_args[0] == (
-            "#veikkaus", "Commands: !liiga start|stop|next | !nhl start|stop|next")
+            "#veikkaus", "Commands: !liiga start|stop|next | !nhl start|stop|next|now|results")
 
     def test_channel_name_matching_is_case_insensitive(self, handler):
-        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next | !nhl start|stop|next"
+        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next | !nhl start|stop|next|now|results"
         bot = self._run(handler, "#VEIKKAUS", "!stock aapl")
         bot.send_message.assert_not_called()
 

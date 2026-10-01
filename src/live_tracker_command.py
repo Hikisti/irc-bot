@@ -69,6 +69,9 @@ class LiveTrackerCommand(BaseCommand):
     NEXT_SEARCH_MAX_DAYS = 21
 
     REQUIRES_CONTEXT = False
+    # The subcommands !help and the usage reply list; a subclass that
+    # handles more in its own execute() (NHL's now/results) extends it.
+    SUBCOMMANDS = ("start", "stop", "next")
 
     def __init__(self):
         self.session = make_session(f"KukistiBot-{self.CACHE_SLUG}/1.0")
@@ -77,7 +80,7 @@ class LiveTrackerCommand(BaseCommand):
 
     @property
     def HELP(self):
-        return f"{self.COMMAND_NAME} start|stop|next"
+        return f"{self.COMMAND_NAME} {'|'.join(self.SUBCOMMANDS)}"
 
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs) -> str:
         arg = (args or "").strip().lower()
@@ -88,7 +91,7 @@ class LiveTrackerCommand(BaseCommand):
             return self._stop(channel)
         elif arg == "next":
             return self._next(irc_bot, channel)
-        return f"Usage: {self.COMMAND_NAME} start | {self.COMMAND_NAME} stop | {self.COMMAND_NAME} next"
+        return "Usage: " + " | ".join(f"{self.COMMAND_NAME} {sub}" for sub in self.SUBCOMMANDS)
 
     # ---- start / stop -----------------------------------------------
 

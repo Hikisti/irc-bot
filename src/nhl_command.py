@@ -6,9 +6,10 @@ import requests
 
 from irc_format import BOLD, RESET, GREEN, ORANGE, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
+from nhl_scoreboard import NHLScoreboardMixin
 
 
-class NHLCommand(LiveTrackerCommand):
+class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     """
     Live-tracks today's NHL games in a channel, announcing goals and final
     scores as they happen. Uses api-web.nhle.com, the NHL's own public web
@@ -19,6 +20,9 @@ class NHLCommand(LiveTrackerCommand):
       !nhl start  -> start polling today's games in this channel
       !nhl stop   -> stop polling in this channel
       !nhl next   -> show the next upcoming NHL gameday's games and times
+      !nhl now    -> today's board: live games (score, period, clock), then
+                     finished and upcoming ones (see NHLScoreboardMixin)
+      !nhl results -> finished games of the latest slate that has any
 
     Two things this API needs that liiga.fi doesn't:
       - "Today" is bucketed by US Eastern time, not Helsinki time - a game
@@ -48,6 +52,7 @@ class NHLCommand(LiveTrackerCommand):
     STATE_KEY = "games"
     START_TIME_KEY = "startTimeUTC"
     ENDED_STATE_KEY = "ended"
+    SUBCOMMANDS = ("start", "stop", "next", "now", "results")
 
     EASTERN_TZ = ZoneInfo("America/New_York")
     BASE_URL = "https://api-web.nhle.com/v1"
@@ -59,6 +64,12 @@ class NHLCommand(LiveTrackerCommand):
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
+
+    def execute(self, args=None, irc_bot=None, channel=None, **kwargs):
+        arg = (args or "").strip().lower()
+        if arg in ("now", "results"):
+            return self._scoreboard(irc_bot, channel, arg)
+        return super().execute(args, irc_bot=irc_bot, channel=channel, **kwargs)
 
     # ---- "next"/"run" lookup hooks (see LiveTrackerCommand._run_next / _run) --
 

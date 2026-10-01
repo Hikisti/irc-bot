@@ -22,6 +22,12 @@ not what it is.
   independent per-item network calls in parallel here (see "Concurrent
   fetching" below); never hand-roll `ThreadPoolExecutor`/`executor.map()`
   again in a new subclass.
+- `NHLCommand` also mixes in `NHLScoreboardMixin` (`src/nhl_scoreboard.py`):
+  the one-shot `!nhl now`/`!nhl results` lookups, which read the
+  `/score/{date}` endpoint (it carries period and clock; the schedule the
+  tracker polls doesn't) and never touch tracker state. A subcommand that
+  isn't start/stop/next goes in `SUBCOMMANDS` (what `!help` and the usage
+  reply list) and the subclass's own `execute()`.
 - `PesisCommand` is built from three mixins: `PesisEventParsingMixin`
   (turns the raw event feed into RUN:/JAKSO:/FINAL: text),
   `PesisPlayerNamesMixin` (scorer/batter name resolution), and
