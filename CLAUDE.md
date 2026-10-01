@@ -111,6 +111,11 @@ consistent, deliberate discipline - keep following it:
   file passes about 600 lines. Keep it behavior-neutral, in its own
   commit, and never right before a live-tracker change is verified
   against real games.
+- Problems and ideas that aren't being fixed now (a known quirk, a
+  deferred option, a parked decision) go in GitHub Issues, not in code
+  comments, memory, or a TODO file. The repo is public, so an issue never
+  holds server details, hostnames, paths, keys, or anything from
+  `DEPLOY.md`. Creating or closing one is outward-facing: confirm first.
 - Only commit when explicitly asked. Never push proactively either - see
   below for why that's a bigger deal here than in most repos.
 
