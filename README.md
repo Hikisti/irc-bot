@@ -138,7 +138,12 @@ extra request, and was checked against NHL's own labels on 250 real goals with n
 team scoring with its own goalie pulled at even strength gets no tag, matching NHL, and penalty
 shots aren't distinguishable in this feed. The attendance isn't in NHL's JSON API at all, so it's
 read from NHL's HTML game-summary report with one extra request when a game ends, and simply left
-off if that report isn't available yet or NHL changes the page. `!nhl next` looks up the next
+off if that report isn't available yet or NHL changes the page. Each goal is remembered by its team
+and running score (with its event id as a second check), not by a count per team, because the feed
+was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
+back: neither is announced a second time, and the next goal after a disallowed one (same running score)
+still is. A goal that is removed after being announced is still not retracted, and the scorer or assists
+in the line can still be early guesses. `!nhl next` looks up the next
 upcoming NHL gameday and lists its matchups grouped
 by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (Wed 30/09): 00:00
 CAR-FLA | 02:00 TOR-MTL`. Uses `api-web.nhle.com`, the NHL's own public web API (the same one that

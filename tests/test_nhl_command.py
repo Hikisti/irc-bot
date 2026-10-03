@@ -455,26 +455,26 @@ class TestFetchNextGameday:
 
 
 class TestBuildInitialState:
-    def test_seeds_goal_counts_from_play_by_play(self, nhl_command):
+    def test_seeds_the_announced_goals_from_play_by_play(self, nhl_command):
         items = {1: make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")}
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, plays=[
-            goal_play(event_owner_team_id=10, scoring_player_id=100),
-            goal_play(event_owner_team_id=20, scoring_player_id=200),
-            goal_play(event_owner_team_id=20, scoring_player_id=201),
+            goal_play(event_id=1, event_owner_team_id=10, scoring_player_id=100, home_score=1, away_score=0),
+            goal_play(event_id=2, event_owner_team_id=20, scoring_player_id=200, home_score=1, away_score=1),
+            goal_play(event_id=3, event_owner_team_id=20, scoring_player_id=201, home_score=1, away_score=2),
         ])
         with patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp):
             state = nhl_command._build_initial_state(items)
 
-        assert state[1]["home_goals"] == 1
-        assert state[1]["away_goals"] == 2
+        assert state[1]["announced"] == {
+            ("score", 10, 1, 0): [1], ("score", 20, 1, 1): [2], ("score", 20, 1, 2): [3],
+        }
         assert state[1]["ended"] is False
 
-    def test_play_by_play_failure_leaves_goal_counts_at_zero(self, nhl_command):
+    def test_play_by_play_failure_leaves_the_announced_record_empty(self, nhl_command):
         items = {1: make_schedule_game(gid=1)}
         with patch.object(nhl_command, "_fetch_play_by_play", return_value=None):
             state = nhl_command._build_initial_state(items)
-        assert state[1]["home_goals"] == 0
-        assert state[1]["away_goals"] == 0
+        assert state[1]["announced"] == {}
 
     def test_empty_items_short_circuits(self, nhl_command):
         assert nhl_command._build_initial_state({}) == {}
@@ -487,7 +487,7 @@ class TestPollOnce:
     def test_new_goal_is_announced(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, roster=[roster_spot(100, "Bradly", "Nadeau")], plays=[
@@ -505,7 +505,7 @@ class TestPollOnce:
     def test_no_new_goals_sends_nothing(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 1, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {("score", 10, 1, 0): [1]}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, plays=[
@@ -521,7 +521,7 @@ class TestPollOnce:
     def test_game_end_is_announced(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
@@ -537,7 +537,7 @@ class TestPollOnce:
     def test_already_ended_game_is_not_touched_again(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 3, "away_goals": 2, "ended": True},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": True},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
 
@@ -562,12 +562,13 @@ class TestPollOnce:
 
         bot.send_message.assert_not_called()
         assert all_ended is False
-        assert nhl_command._channels["#nhl.fi"]["games"][2]["home_goals"] == 1
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 10, 1, 0): [1]}
 
-    def test_play_by_play_failure_carries_forward_previous_goal_counts(self, nhl_command):
+    def test_play_by_play_failure_carries_forward_the_announced_record(self, nhl_command):
         bot = MagicMock()
+        record = {("score", 10, 1, 0): [1], ("score", 20, 1, 1): [2]}
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 2, "away_goals": 1, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": dict(record), "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
 
@@ -576,12 +577,11 @@ class TestPollOnce:
             nhl_command._poll_once(bot, "#nhl.fi")
 
         bot.send_message.assert_not_called()
-        assert nhl_command._channels["#nhl.fi"]["games"][1]["home_goals"] == 2
-        assert nhl_command._channels["#nhl.fi"]["games"][1]["away_goals"] == 1
+        assert nhl_command._channels["#nhl.fi"]["games"][1]["announced"] == record
 
     def test_fetch_failure_returns_false_without_crashing(self, nhl_command):
         bot = MagicMock()
-        self._seed(nhl_command, "#nhl.fi", {1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False}})
+        self._seed(nhl_command, "#nhl.fi", {1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False}})
 
         with patch.object(nhl_command, "_fetch_today_games", return_value=None):
             assert nhl_command._poll_once(bot, "#nhl.fi") is False
@@ -597,7 +597,7 @@ class TestPollOnce:
         # tracked game in the same batch from being processed.
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
 
@@ -610,7 +610,7 @@ class TestPollOnce:
     def test_unexpected_exception_processing_one_game_does_not_crash_the_poll(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20)
@@ -844,7 +844,7 @@ class TestFinalWithAttendance:
     def test_a_game_ending_during_a_poll_announces_it_with_attendance(self, nhl_command):
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         }}
         game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
@@ -868,9 +868,9 @@ class TestTrackedSlate:
         now = datetime.datetime.now(nhl_command.EASTERN_TZ)
         return now.strftime("%Y-%m-%d"), (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
-    def _tracked(self, slate, gid=1, home_goals=0, away_goals=0, ended=False):
-        return {gid: {"home_id": 10, "away_id": 20, "home_goals": home_goals,
-                      "away_goals": away_goals, "ended": ended, "slate": slate}}
+    def _tracked(self, slate, gid=1, announced=None, ended=False):
+        return {gid: {"home_id": 10, "away_id": 20, "announced": announced or {},
+                      "ended": ended, "slate": slate}}
 
     def _seed(self, nhl_command, state):
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": state}
@@ -985,7 +985,7 @@ class TestTrackedSlate:
 
         bot.send_message.assert_not_called()  # seeded as a baseline, not replayed
         assert nhl_command._channels["#nhl.fi"]["games"][2]["slate"] == "2026-09-29"
-        assert nhl_command._channels["#nhl.fi"]["games"][2]["home_goals"] == 1
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 30, 1, 0): [1]}
 
 
 class TestGoalOrder:
@@ -1008,32 +1008,33 @@ class TestGoalOrder:
             goal_play(event_id=4, event_owner_team_id=20, scoring_player_id=4, home_score=2, away_score=2),
         ]
 
-    def _announced(self, nhl_command, pbp, prev):
+    def _announced(self, nhl_command, pbp, announced):
         bot = MagicMock()
-        nhl_command._announce_new_goals(bot, "#nhl.fi", pbp, prev)
+        nhl_command._announce_new_goals(bot, "#nhl.fi", pbp, announced)
         return [call.args[1] for call in bot.send_message.call_args_list]
 
     def test_goals_come_out_in_the_order_they_were_scored_across_both_teams(self, nhl_command):
-        messages = self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 0, "away_goals": 0})
+        messages = self._announced(nhl_command, self._pbp(self._plays()), {})
 
         scorers = [next(name for name in ("First", "Second", "Third", "Fourth") if name in m) for m in messages]
         assert scorers == ["First", "Second", "Third", "Fourth"]  # not First, Third, Second, Fourth
         assert "1-0" in messages[0] and "1-1" in messages[1] and "2-1" in messages[2] and "2-2" in messages[3]
 
-    def test_only_goals_beyond_each_teams_announced_count_are_new_and_still_ordered(self, nhl_command):
-        # home already had 1 announced, away none: new are Second (away), Third (home), Fourth (away)
-        messages = self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 1, "away_goals": 0})
+    def test_only_goals_not_announced_yet_are_new_and_still_ordered(self, nhl_command):
+        # the first goal (home, 1-0) is already announced: new are Second (away), Third (home), Fourth (away)
+        messages = self._announced(nhl_command, self._pbp(self._plays()), {("score", 10, 1, 0): [1]})
 
         scorers = [next(name for name in ("First", "Second", "Third", "Fourth") if name in m) for m in messages]
         assert scorers == ["Second", "Third", "Fourth"]
 
     def test_nothing_new_announces_nothing(self, nhl_command):
-        assert self._announced(nhl_command, self._pbp(self._plays()), {"home_goals": 2, "away_goals": 2}) == []
+        everything = nhl_command._resolve_goals(self._pbp(self._plays()), {})[1]
+        assert self._announced(nhl_command, self._pbp(self._plays()), everything) == []
 
     def test_a_poll_announces_a_multi_goal_backlog_in_game_order(self, nhl_command):
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "home_goals": 0, "away_goals": 0, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
         }}
         game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
 
@@ -1059,19 +1060,20 @@ class TestPlayByPlaySkipping:
             nhl_command._poll_once(bot, "#nhl.fi")
         return fetch, bot
 
-    def _prev(self, ended=False, home_goals=0):
-        return {"home_id": 10, "away_id": 20, "home_goals": home_goals, "away_goals": 0, "ended": ended}
+    def _prev(self, ended=False, announced=None):
+        return {"home_id": 10, "away_id": 20, "announced": announced or {}, "ended": ended}
 
     @pytest.mark.parametrize("state", ["FUT", "PRE"])
     def test_not_started_game_is_not_fetched(self, nhl_command, state):
         fetch, _ = self._poll(nhl_command, self._prev(), state)
         fetch.assert_not_called()
 
-    def test_finished_and_already_announced_game_is_not_fetched_and_keeps_its_counts(self, nhl_command):
-        fetch, bot = self._poll(nhl_command, self._prev(ended=True, home_goals=3), "OFF")
+    def test_finished_and_already_announced_game_is_not_fetched_and_keeps_its_record(self, nhl_command):
+        record = {("score", 10, 1, 0): [1], ("score", 10, 2, 0): [2], ("score", 10, 3, 0): [3]}
+        fetch, bot = self._poll(nhl_command, self._prev(ended=True, announced=dict(record)), "OFF")
         fetch.assert_not_called()
         bot.send_message.assert_not_called()
-        assert nhl_command._channels["#nhl.fi"]["games"][1]["home_goals"] == 3
+        assert nhl_command._channels["#nhl.fi"]["games"][1]["announced"] == record
 
     @pytest.mark.parametrize("state", ["LIVE", "CRIT"])
     def test_live_game_is_fetched(self, nhl_command, state):
@@ -1088,3 +1090,136 @@ class TestPlayByPlaySkipping:
         fetch, bot = self._poll(nhl_command, self._prev(), "LIVE")
         fetch.assert_called_once()
         assert any("GOAL:" in c.args[1] for c in bot.send_message.call_args_list)
+
+
+class TestAnnouncedGoalRecord:
+    """Goals are remembered by (team, running score) plus event id, not by a
+    count per team (issue #20). Each case below was seen in a real feed."""
+
+    HOME, AWAY = 10, 20
+
+    def _pbp(self, *plays):
+        roster = [roster_spot(i, f"P{i}", "X") for i in range(1, 9)]
+        return make_pbp(game_id=1, home_id=self.HOME, away_id=self.AWAY, plays=list(plays), roster=roster)
+
+    def _goal(self, event_id, team, home, away, scorer=1, **kw):
+        return goal_play(event_id=event_id, event_owner_team_id=team, scoring_player_id=scorer,
+                         home_score=home, away_score=away, **kw)
+
+    def _poll_sequence(self, nhl_command, feeds):
+        """Runs one poll per feed and returns every GOAL: line sent."""
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": self.HOME, "away_id": self.AWAY, "announced": {}, "ended": False},
+        }}
+        game = make_schedule_game(gid=1, home_id=self.HOME, away_id=self.AWAY, game_state="LIVE")
+        for feed in feeds:
+            # _fetch_tracked_games, not _fetch_today_games: after the first poll the
+            # stored games carry their slate date and the schedule is fetched by it.
+            with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                 patch.object(nhl_command, "_fetch_play_by_play", return_value=feed) as fetch:
+                nhl_command._poll_once(bot, "#nhl.fi")
+            assert fetch.call_count == 1  # every poll in the sequence really ran
+        return [c.args[1] for c in bot.send_message.call_args_list if "GOAL:" in c.args[1]]
+
+    # -- a goal that vanishes for a poll and comes back (same id) ------------
+
+    def test_goal_that_disappears_for_a_poll_and_returns_is_announced_once(self, nhl_command):
+        goal = self._goal(155, self.AWAY, 0, 1, scorer=1, assist1=2, assist2=3)
+        lines = self._poll_sequence(nhl_command, [self._pbp(goal), self._pbp(), self._pbp(goal)])
+        assert len(lines) == 1
+
+    def test_the_same_with_different_assists_on_the_way_back(self, nhl_command):
+        first = self._goal(155, self.AWAY, 0, 1, scorer=1, assist1=2, assist2=3)
+        back = self._goal(155, self.AWAY, 0, 1, scorer=1, assist1=4)
+        lines = self._poll_sequence(nhl_command, [self._pbp(first), self._pbp(), self._pbp(back)])
+        assert len(lines) == 1
+
+    # -- the same goal listed under two ids ----------------------------------
+
+    def test_two_plays_for_one_goal_in_the_same_poll_are_announced_once_the_first_listed(self, nhl_command):
+        a = self._goal(278, self.AWAY, 0, 2, scorer=5)
+        b = self._goal(279, self.AWAY, 0, 2, scorer=6)
+        lines = self._poll_sequence(nhl_command, [self._pbp(a, b)])
+        assert len(lines) == 1 and "P5" in lines[0]
+
+    def test_a_duplicate_listed_before_the_announced_play_is_ignored(self, nhl_command):
+        # the real sequence: play 279 announced, then 278 appears *before* it in the list
+        later, earlier = self._goal(279, self.AWAY, 0, 2, scorer=6), self._goal(278, self.AWAY, 0, 2, scorer=5)
+        lines = self._poll_sequence(nhl_command, [self._pbp(later), self._pbp(earlier, later)])
+        assert len(lines) == 1 and "P6" in lines[0]  # the old behaviour announced 279 a second time
+
+    def test_a_duplicate_listed_after_the_announced_play_is_ignored(self, nhl_command):
+        first, second = self._goal(278, self.AWAY, 0, 2, scorer=5), self._goal(279, self.AWAY, 0, 2, scorer=6)
+        lines = self._poll_sequence(nhl_command, [self._pbp(first), self._pbp(first, second)])
+        assert len(lines) == 1
+
+    def test_when_the_feed_drops_the_duplicate_nothing_is_announced(self, nhl_command):
+        a, b = self._goal(278, self.AWAY, 0, 2, scorer=5), self._goal(279, self.AWAY, 0, 2, scorer=6)
+        lines = self._poll_sequence(nhl_command, [self._pbp(b), self._pbp(a, b), self._pbp(a)])
+        assert len(lines) == 1
+
+    # -- a removed goal followed by a real one with the same running score ----
+
+    def test_goal_after_a_disallowed_one_with_the_same_running_score_is_announced(self, nhl_command):
+        disallowed = self._goal(1, self.AWAY, 0, 2, scorer=1)   # announced, then removed
+        real = self._goal(2, self.AWAY, 0, 2, scorer=2)         # the team's next goal: same running score
+        lines = self._poll_sequence(nhl_command, [self._pbp(disallowed), self._pbp(), self._pbp(real)])
+        assert len(lines) == 2
+
+    def test_a_removal_and_the_next_goal_in_the_same_poll_is_not_swallowed(self, nhl_command):
+        disallowed = self._goal(1, self.AWAY, 0, 1, scorer=1)
+        real = self._goal(2, self.AWAY, 0, 1, scorer=2)
+        lines = self._poll_sequence(nhl_command, [self._pbp(disallowed), self._pbp(real)])
+        assert len(lines) == 2  # the old per-team count saw 1 -> 1 and announced nothing
+
+    # -- identity edge cases ---------------------------------------------------
+
+    def test_a_goal_whose_running_score_was_renumbered_but_whose_id_is_known_is_not_repeated(self, nhl_command):
+        before = self._goal(7, self.AWAY, 0, 3)
+        renumbered = self._goal(7, self.AWAY, 0, 2)
+        lines = self._poll_sequence(nhl_command, [self._pbp(before), self._pbp(renumbered)])
+        assert len(lines) == 1
+
+    def test_shootout_goals_of_one_team_are_each_announced(self, nhl_command):
+        # confirmed live: every shootout goal carries the same running score and clock 00:00
+        so1 = self._goal(1253, self.HOME, 2, 2, scorer=1, period_number=5, period_type="SO", time_in_period="00:00")
+        so2 = self._goal(1258, self.HOME, 2, 2, scorer=2, period_number=5, period_type="SO", time_in_period="00:00")
+        lines = self._poll_sequence(nhl_command, [self._pbp(so1), self._pbp(so1, so2)])
+        assert len(lines) == 2
+
+    def test_missing_running_score_falls_back_to_the_event_id(self, nhl_command):
+        one = self._goal(1, self.AWAY, None, None)
+        two = self._goal(2, self.AWAY, None, None, scorer=2)
+        lines = self._poll_sequence(nhl_command, [self._pbp(one), self._pbp(one, two), self._pbp(one, two)])
+        assert len(lines) == 2
+
+    def test_missing_running_score_and_id_falls_back_to_period_and_clock(self, nhl_command):
+        a = self._goal(None, self.AWAY, None, None, time_in_period="05:00")
+        b = self._goal(None, self.AWAY, None, None, scorer=2, time_in_period="09:00")
+        del a["eventId"], b["eventId"]
+        lines = self._poll_sequence(nhl_command, [self._pbp(a), self._pbp(a, b), self._pbp(a, b)])
+        assert len(lines) == 2
+
+    def test_goals_of_both_teams_with_the_same_running_score_digits_are_distinct(self, nhl_command):
+        home = self._goal(1, self.HOME, 1, 0)
+        away = self._goal(2, self.AWAY, 1, 1)
+        assert len(self._poll_sequence(nhl_command, [self._pbp(home, away)])) == 2
+
+    # -- record handling --------------------------------------------------------
+
+    def test_the_stored_record_is_not_mutated_in_place(self, nhl_command):
+        goal = self._goal(1, self.AWAY, 0, 1)
+        stored = {}
+        nhl_command._resolve_goals(self._pbp(goal), stored)
+        assert stored == {}
+
+    def test_seeding_records_both_ids_of_a_doubly_listed_goal(self, nhl_command):
+        a, b = self._goal(278, self.AWAY, 0, 2), self._goal(279, self.AWAY, 0, 2)
+        _, record = nhl_command._resolve_goals(self._pbp(a, b), {})
+        assert record == {("score", self.AWAY, 0, 2): [278, 279]}
+
+    def test_a_goal_already_in_the_feed_when_tracking_started_is_never_announced(self, nhl_command):
+        goal = self._goal(1, self.AWAY, 0, 1)
+        record = nhl_command._resolve_goals(self._pbp(goal), {})[1]
+        assert nhl_command._resolve_goals(self._pbp(goal), record)[0] == []

@@ -84,12 +84,12 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
     def _build_initial_state(self, items) -> dict:
         state = {gid: self._seed_snapshot(g) for gid, g in items.items()}
-        self._seed_goal_counts(state)
+        self._seed_announced(state)
         return state
 
-    def _seed_goal_counts(self, state):
-        """Fills in each game's already-scored goal counts (mutated in
-        place) by fetching its own play-by-play - seeded from every real
+    def _seed_announced(self, state):
+        """Fills in each game's record of goals already in its feed (mutated
+        in place) by fetching its own play-by-play - seeded from every real
         goal already in the game's history so `!nhl start` on a game
         already in progress doesn't replay it as fresh GOAL: lines. One
         game's play-by-play fetch doesn't depend on any other's, so all
@@ -98,8 +98,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         _seed_match_extras()."""
         for gid, pbp in self._fetch_concurrently(list(state.keys()), self._fetch_play_by_play).items():
             if pbp is not None:
-                state[gid]["home_goals"] = len(self._real_goals(pbp, "homeTeam"))
-                state[gid]["away_goals"] = len(self._real_goals(pbp, "awayTeam"))
+                state[gid]["announced"] = self._resolve_goals(pbp, {})[1]
 
     # ---- polling ---------------------------------------------------------
 
@@ -137,30 +136,24 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                     # Seed a baseline silently instead of replaying old goals.
                     new_state[gid] = self._seed_snapshot(game)
                     if pbp is not None:
-                        new_state[gid]["home_goals"] = len(self._real_goals(pbp, "homeTeam"))
-                        new_state[gid]["away_goals"] = len(self._real_goals(pbp, "awayTeam"))
+                        new_state[gid]["announced"] = self._resolve_goals(pbp, {})[1]
                     if not new_state[gid]["ended"]:
                         all_ended = False
                     continue
 
+                announced = prev["announced"]
                 if pbp is not None:
-                    self._announce_new_goals(irc_bot, channel, pbp, prev)
+                    announced = self._announce_new_goals(irc_bot, channel, pbp, announced)
 
                 ended = self._is_ended(game)
                 if ended and not prev["ended"] and pbp is not None:
                     self._announce_end(irc_bot, channel, pbp)
 
+                # Play-by-play fetch failed this cycle: `announced` is still
+                # the previous record, carried forward unchanged, so the next
+                # successful poll doesn't replay already-announced goals.
                 new_state[gid] = self._seed_snapshot(game)
-                if pbp is not None:
-                    new_state[gid]["home_goals"] = len(self._real_goals(pbp, "homeTeam"))
-                    new_state[gid]["away_goals"] = len(self._real_goals(pbp, "awayTeam"))
-                else:
-                    # Play-by-play fetch failed this cycle - carry the
-                    # previous goal counts forward rather than resetting
-                    # them to 0, so the next successful poll doesn't
-                    # replay already-announced goals as new.
-                    new_state[gid]["home_goals"] = prev["home_goals"]
-                    new_state[gid]["away_goals"] = prev["away_goals"]
+                new_state[gid]["announced"] = announced
                 if not ended:
                     all_ended = False
             except Exception as e:
@@ -258,25 +251,73 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                 return f"{first} {last}".strip() or "Unknown"
         return "Unknown"
 
-    def _new_goals(self, pbp, prev) -> list:
-        """Goals not announced yet, in the order they were scored. Each
-        team's new goals are found from its own count (the same one
-        _seed_snapshot/_build_initial_state record), then put back in play
-        order across both teams - the play-by-play is chronological.
-        Announcing one team's goals and then the other's instead (as this
-        used to) scrambled the sequence whenever a poll saw several at
-        once, e.g. right after a tracker recovered from missing a stretch
-        of a game: a 2-2 line landed before the 0-1 that came first."""
-        new = (
-            self._real_goals(pbp, "homeTeam")[prev["home_goals"]:]
-            + self._real_goals(pbp, "awayTeam")[prev["away_goals"]:]
-        )
+    def _all_real_goals(self, pbp) -> list:
+        """Both teams' real goals in play order (the play-by-play is
+        chronological)."""
+        both = self._real_goals(pbp, "homeTeam") + self._real_goals(pbp, "awayTeam")
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
-        return sorted(new, key=lambda goal: position[id(goal)])
+        return sorted(both, key=lambda goal: position[id(goal)])
 
-    def _announce_new_goals(self, irc_bot, channel, pbp, prev):
-        for goal in self._new_goals(pbp, prev):
+    def _goal_key(self, goal):
+        """What makes a goal 'the same goal' across polls: the scoring team
+        and the running score right after it, i.e. the team's n-th goal.
+        Confirmed live that one goal can be listed twice under different
+        event ids (same period, clock and running score, the players' roles
+        in a different order), so the event id alone is not an identity.
+        A shootout goal is keyed by its event id instead: every shootout
+        goal carries the same running score and a clock of 00:00. With no
+        usable running score the event id is the fallback too."""
+        details = goal.get("details") or {}
+        home, away = details.get("homeScore"), details.get("awayScore")
+        period_type = (goal.get("periodDescriptor") or {}).get("periodType")
+        if period_type != "SO" and isinstance(home, int) and isinstance(away, int):
+            return ("score", details.get("eventOwnerTeamId"), home, away)
+        if goal.get("eventId") is not None:
+            return ("id", goal.get("eventId"))
+        return ("time", details.get("eventOwnerTeamId"),
+                (goal.get("periodDescriptor") or {}).get("number"), goal.get("timeInPeriod"))
+
+    def _resolve_goals(self, pbp, announced) -> tuple:
+        """(goals to announce now, the updated record) for one game's feed.
+        `announced` maps a goal's key to the event ids already announced
+        under it. Compared with counting goals per team (which this
+        replaced), this survives what the feed was seen doing:
+          - a goal vanishing for a poll and coming back (same id): known, not
+            announced again;
+          - the same goal listed under two ids at once: announced once;
+          - a goal removed and a different goal later reaching the same
+            running score (a disallowed goal, then the next real one): the
+            old ids are gone, so the new goal is announced;
+          - a goal whose running score was renumbered, but whose id was
+            already announced: known, not announced again.
+        New goals come back in play order across both teams."""
+        record = {key: list(ids) for key, ids in announced.items()}
+        seen_ids = {i for ids in record.values() for i in ids}
+        by_key = {}
+        for goal in self._all_real_goals(pbp):
+            by_key.setdefault(self._goal_key(goal), []).append(goal)
+
+        new = []
+        for key, plays in by_key.items():
+            ids = [i for i in (play.get("eventId") for play in plays) if i is not None]
+            known = record.get(key)
+            if known is not None and (not ids or not known or any(i in known for i in ids)):
+                record[key] = known + [i for i in ids if i not in known]
+            elif known is None and any(i in seen_ids for i in ids):
+                record[key] = ids
+            else:
+                new.append(plays[0])
+                record[key] = ids
+        position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
+        return sorted(new, key=lambda goal: position[id(goal)]), record
+
+    def _announce_new_goals(self, irc_bot, channel, pbp, announced) -> dict:
+        """Announces the goals not announced yet and returns the updated
+        record to store."""
+        new, record = self._resolve_goals(pbp, announced)
+        for goal in new:
             self._safe_send(irc_bot, channel, self._format_goal(pbp, goal))
+        return record
 
     def _format_goal(self, pbp, goal) -> str:
         home = self._team_name(pbp.get("homeTeam") or {})
@@ -409,8 +450,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         return {
             "home_id": (game.get("homeTeam") or {}).get("id"),
             "away_id": (game.get("awayTeam") or {}).get("id"),
-            "home_goals": 0,
-            "away_goals": 0,
+            "announced": {},  # goal key -> event ids announced, see _resolve_goals()
             "ended": self._is_ended(game),
             # The schedule day (Eastern) this game belongs to - what the poll
             # keeps following, see _fetch_tracked_games().
