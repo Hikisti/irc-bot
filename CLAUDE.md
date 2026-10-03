@@ -122,6 +122,10 @@ consistent, deliberate discipline - keep following it:
   comments, memory, or a TODO file. The repo is public, so an issue never
   holds server details, hostnames, paths, keys, or anything from
   `DEPLOY.md`. Creating or closing one is outward-facing: confirm first.
+  Every new issue gets one `priority: high|medium|low` label (high = a
+  visible error in a channel that has already happened) and one area label
+  (`nhl`, `liiga`, `pesis`, `imdb`); the pinned tracking issue holds the
+  order of work, so update its checklist when a priority changes.
 - Only commit when explicitly asked. Never push proactively either - see
   below for why that's a bigger deal here than in most repos.
 
