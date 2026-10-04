@@ -253,6 +253,43 @@ class TestStartTimeLabel:
         assert tracker._start_time_label("not-a-timestamp") is None
 
 
+class TestStartTimeSummary:
+    """Groups come out in the order of the real start times (the NHL slate of 2026-10-04 started at
+    20:00 Helsinki time and went on to 01:00-04:00 the next morning)."""
+
+    def _games(self, *starts_and_names):
+        return [{"start": start, "name": name} for start, name in starts_and_names]
+
+    def _summary(self, tracker, *games):
+        return tracker._format_start_time_summary(self._games(*games), "start", lambda g: g["name"])
+
+    def test_a_slate_crossing_midnight_starts_with_the_earliest_game(self, tracker):
+        text = self._summary(
+            tracker,
+            ("2026-10-04T22:00:00Z", "NYR-UTA"),   # 01:00 Helsinki, Monday
+            ("2026-10-04T17:00:00Z", "DET-WPG"),   # 20:00 Helsinki, Sunday
+            ("2026-10-05T00:00:00Z", "ANA-FLA"),   # 03:00
+            ("2026-10-05T00:00:00Z", "SEA-CGY"),
+            ("2026-10-05T01:00:00Z", "VAN-VGK"),   # 04:00
+        )
+        assert text == "20:00 DET-WPG | 01:00 NYR-UTA | 03:00 ANA-FLA, SEA-CGY | 04:00 VAN-VGK"
+
+    def test_the_same_clock_time_on_two_days_is_two_groups_in_date_order(self, tracker):
+        text = self._summary(tracker, ("2026-10-05T23:00:00Z", "B"), ("2026-10-04T23:00:00Z", "A"))
+        assert text == "02:00 A | 02:00 B"
+
+    def test_games_starting_together_share_a_group_in_input_order(self, tracker):
+        text = self._summary(tracker, ("2026-10-04T17:00:00Z", "A"), ("2026-10-04T17:00:30Z", "B"))
+        assert text == "20:00 A, B"
+
+    def test_a_game_with_no_usable_time_goes_last(self, tracker):
+        text = self._summary(tracker, ("", "NONE"), ("2026-10-04T17:00:00Z", "A"), ("junk", "JUNK"))
+        assert text == "20:00 A | ??:?? NONE, JUNK"
+
+    def test_nothing_to_group(self, tracker):
+        assert self._summary(tracker) == ""
+
+
 class TestEarlyStartGuard:
     """_run()'s guard against starting to poll long before anything's
     actually happening - confirmed live (Liiga, 2026-09-26): users start

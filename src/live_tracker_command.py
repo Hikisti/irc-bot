@@ -409,19 +409,21 @@ class LiveTrackerCommand(BaseCommand):
     def _format_start_time_summary(self, items, start_key, name_fn) -> str:
         """Groups items by scheduled start time (items[start_key], an
         ISO-8601 string), e.g. '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30
-        JYP-Lukko'. name_fn(item) builds each item's own display name."""
+        JYP-Lukko'. name_fn(item) builds each item's own display name.
+        The groups are in the order of the actual start times, not of the
+        'HH:MM' text: an NHL slate that crosses Helsinki midnight starts at
+        20:00 and goes on to 01:00 the next day, and sorting the text put
+        the 20:00 game last."""
         groups = {}
-        order = []
         for item in items:
-            label = self._start_time_label(item.get(start_key)) or "??:??"
-            name = name_fn(item)
-            if label not in groups:
-                groups[label] = []
-                order.append(label)
-            groups[label].append(name)
+            start = self._parse_start_dt(item.get(start_key))
+            key = start.replace(second=0, microsecond=0) if start else None
+            groups.setdefault(key, []).append(name_fn(item))
 
-        order.sort(key=lambda label: (label == "??:??", label))
-        return " | ".join(f"{label} {', '.join(groups[label])}" for label in order)
+        order = sorted(groups, key=lambda key: (key is None, key.timestamp() if key else 0))
+        return " | ".join(
+            f"{key.strftime('%H:%M') if key else '??:??'} {', '.join(groups[key])}" for key in order
+        )
 
     # ---- date label (byte-identical between subclasses) ----------------
 
