@@ -22,6 +22,9 @@ class NHLScoreboardMixin:
     """
 
     LIVE_STATES = ("LIVE", "CRIT")
+    UPCOMING_STATES = ("FUT", "PRE")
+    # gameScheduleState values for a game that will not be played as scheduled.
+    NOT_PLAYED_SCHEDULE_STATES = ("PPD", "CNCL", "TBD")
     # /score/{date} is cheap, but anyone can spam the command - a short
     # cache keeps that from becoming a request per message.
     SCORE_CACHE_SECONDS = 15
@@ -89,8 +92,16 @@ class NHLScoreboardMixin:
         now = datetime.datetime.now(self.EASTERN_TZ)
         return [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(count)]
 
+    def _is_upcoming(self, game) -> bool:
+        return (game.get("gameState") in self.UPCOMING_STATES
+                or game.get("gameScheduleState") in self.NOT_PLAYED_SCHEDULE_STATES)
+
     def _is_live(self, game) -> bool:
-        return game.get("gameState") in self.LIVE_STATES
+        """Neither not-yet-played nor finished: LIVE, CRIT, the short OVER
+        state between the end of play and FINAL (seen lasting 20 s to 4 min,
+        and once listed as 'upcoming' because only LIVE/CRIT counted), and
+        any state not seen before - which must never look like 'not started'."""
+        return not self._is_upcoming(game) and not self._is_ended(game)
 
     def _by_start(self, games):
         return sorted(games, key=lambda g: g.get("startTimeUTC") or "")
@@ -117,7 +128,7 @@ class NHLScoreboardMixin:
         live = self._by_start(g for g in games.values() if self._is_live(g))
         ended = self._by_start(g for g in games.values() if self._is_ended(g))
         upcoming = self._by_start(
-            g for g in games.values() if not self._is_live(g) and not self._is_ended(g)
+            g for g in games.values() if self._is_upcoming(g) and not self._is_ended(g)
         )
 
         sections = []
@@ -204,8 +215,15 @@ class NHLScoreboardMixin:
         return f"{text} ({last_period})" if last_period in ("OT", "SO") else text
 
     def _live_status(self, game) -> str:
-        """'2nd 12:34 left', '1st int.', 'OT 3:20 left' or 'SO'. Empty if the
-        feed has nothing usable."""
+        """'2nd 12:34 left', '1st int.', '1st end' (clock at 00:00 and stopped,
+        before the intermission flag is set), 'OT 3:20 left', 'SO', 'over' (the
+        state between the end of play and FINAL) or, for a state never seen
+        before, the state itself in brackets. Empty if the feed has nothing usable."""
+        state = game.get("gameState")
+        if state == "OVER":
+            return "over"
+        if state not in self.LIVE_STATES:
+            return f"[{state or '?'}]"
         period = game.get("periodDescriptor") or {}
         clock = game.get("clock") or {}
         number, period_type = period.get("number"), period.get("periodType")
@@ -219,6 +237,8 @@ class NHLScoreboardMixin:
         if clock.get("inIntermission"):
             return f"{name} int.".strip()
         remaining = clock.get("timeRemaining")
+        if remaining == "00:00" and clock.get("running") is False:
+            return f"{name} end".strip()
         return f"{name} {remaining} left".strip() if remaining else name
 
     # ---- message packing ----------------------------------------------------

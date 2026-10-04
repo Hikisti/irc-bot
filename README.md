@@ -164,8 +164,11 @@ schedule day it started on (not "today" at each poll) until those games finish, 
 run right after Eastern midnight also picks up a game still in progress from the previous day.
 `!nhl now` and `!nhl results` are one-shot looks that don't start any tracking (and work while a
 tracker is running). `!nhl now` is today's board: `Live:` games with score, period and time left
-(`TOR 2-1 NYI 2nd 12:34 left`, `1st int.`, `OT`, `SO`), then `Final:` and `Upcoming:` (Helsinki start
-times); empty groups are left out, and with no games at all it points at the next gameday.
+(`TOR 2-1 NYI 2nd 12:34 left`, `1st int.`, `OT`, `SO`; `1st end` for the moment a period's clock is at
+00:00 and stopped, and `over` for the short state between the end of play and the final), then `Final:`
+and `Upcoming:` (Helsinki start times; only games that have not started, or will not be played). A game in
+a state the code has never seen is listed under `Live:` with that state in brackets, never as upcoming.
+Empty groups are left out, and with no games at all it points at the next gameday.
 `!nhl results` lists only the finished games of the latest slate that has any (`NHL results 1.10.: PHI
 0-7 PIT, TOR 2-1 NYI (OT)`, dated as Helsinki sees it) and adds `(N game(s) still on: !nhl now)` when
 games of that slate are still being played. Both read `api-web.nhle.com`'s `/score/{date}` (Eastern

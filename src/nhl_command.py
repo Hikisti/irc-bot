@@ -330,12 +330,22 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             if rec is not None and rec["retracted"]:
                 rec = None  # a retracted goal that returns, or a later goal at this score, is new
             if rec is not None and (not ids or not rec["ids"] or any(i in rec["ids"] for i in ids)):
+                # Journal lines so the server log shows when a repeat was ignored.
+                if rec["missing"]:
+                    print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} is back after "
+                          f"{rec['missing']} missed poll(s), not announced again")
+                extra = [i for i in ids if i not in rec["ids"]]
+                if extra and rec["ids"]:
+                    print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} listed again as "
+                          f"event {extra}, not announced again")
                 rec["ids"] += [i for i in ids if i not in rec["ids"]]
                 rec["missing"] = 0
                 continue
             moved = next((k for k, r in record.items()
                           if k != key and not r["retracted"] and any(i in r["ids"] for i in ids)), None)
             if rec is None and moved is not None:
+                print(f"NHL: game {pbp.get('id')}: goal {self._key_text(moved)} is now "
+                      f"{self._key_text(key)}, not announced again")
                 record[key] = record.pop(moved)  # renumbered: same goal under a new key
                 record[key]["ids"] += [i for i in ids if i not in record[key]["ids"]]
                 record[key]["missing"] = 0
@@ -355,6 +365,11 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
         return sorted(new, key=lambda goal: position[id(goal)]), gone, record
+
+    def _key_text(self, key) -> str:
+        if key[0] == "score":
+            return f"(team {key[1]}, {key[2]}-{key[3]})"
+        return "(" + ", ".join(str(part) for part in key) + ")"
 
     def _posted_info(self, pbp, goal) -> dict:
         """What the announcement said about a goal, kept so a later poll can

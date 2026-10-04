@@ -1421,3 +1421,47 @@ class TestRetraction:
         assert record["posted"] == {"team": "Florida Panthers", "scorer": 1, "scorer_name": "P1 X",
                                     "assists": [2, 3], "period": 3, "clock": "05:25", "label": "05:25 3rd"}
         assert record["ids"] == [1] and record["missing"] == 0 and record["retracted"] is False
+
+
+class TestJournalLinesForIgnoredRepeats:
+    """A line in the bot's log whenever a repeated goal is ignored, so the server journal shows the fix acting."""
+
+    def _pbp(self, *plays):
+        return make_pbp(game_id=77, home_id=10, away_id=20, plays=list(plays))
+
+    def _goal(self, event_id, home=0, away=1, **kw):
+        return goal_play(event_id=event_id, event_owner_team_id=20, scoring_player_id=1, home_score=home, away_score=away, **kw)
+
+    def test_a_goal_that_comes_back_after_missed_polls_is_logged(self, nhl_command, capsys):
+        first = nhl_command._resolve_goals(self._pbp(self._goal(1)), {})[2]
+        for _ in range(2):
+            _, _, first = nhl_command._resolve_goals(self._pbp(), first)
+        capsys.readouterr()
+        nhl_command._resolve_goals(self._pbp(self._goal(1)), first)
+        assert "NHL: game 77: goal (team 20, 0-1) is back after 2 missed poll(s), not announced again" in capsys.readouterr().out
+
+    def test_a_second_play_for_an_announced_goal_is_logged(self, nhl_command, capsys):
+        record = nhl_command._resolve_goals(self._pbp(self._goal(279)), {})[2]
+        capsys.readouterr()
+        nhl_command._resolve_goals(self._pbp(self._goal(278), self._goal(279)), record)
+        assert "NHL: game 77: goal (team 20, 0-1) listed again as event [278], not announced again" in capsys.readouterr().out
+
+    def test_a_renumbered_goal_is_logged(self, nhl_command, capsys):
+        record = nhl_command._resolve_goals(self._pbp(self._goal(7, away=3)), {})[2]
+        capsys.readouterr()
+        nhl_command._resolve_goals(self._pbp(self._goal(7, away=2)), record)
+        assert "is now (team 20, 0-2), not announced again" in capsys.readouterr().out
+
+    def test_ordinary_polls_and_seeding_log_nothing(self, nhl_command, capsys):
+        goal = self._goal(1)
+        record = nhl_command._resolve_goals(self._pbp(goal), {}, seed=True)[2]
+        nhl_command._resolve_goals(self._pbp(goal), record)
+        nhl_command._resolve_goals(self._pbp(goal, self._goal(2, away=2)), record)
+        assert capsys.readouterr().out == ""
+
+    def test_seeding_a_feed_with_a_doubly_listed_goal_logs_nothing(self, nhl_command, capsys):
+        nhl_command._resolve_goals(self._pbp(self._goal(278), self._goal(279)), {}, seed=True)
+        assert capsys.readouterr().out == ""
+
+    def test_the_key_text_of_a_shootout_goal(self, nhl_command):
+        assert nhl_command._key_text(("id", 1253)) == "(id, 1253)"

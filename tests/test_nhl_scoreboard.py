@@ -14,7 +14,7 @@ YESTERDAY = "2026-09-30"
 
 def score_game(gid=1, home="CAR", away="FLA", state="FUT", home_score=None, away_score=None,
                start="2026-10-01T23:00:00Z", date=TODAY, period=None, period_type="REG",
-               remaining=None, intermission=False, last_period=None):
+               remaining=None, intermission=False, last_period=None, running=None, schedule_state=None):
     """One game as /v1/score/{date} returns it (only the fields used)."""
     game = {
         "id": gid, "gameDate": date, "startTimeUTC": start, "gameState": state,
@@ -27,6 +27,10 @@ def score_game(gid=1, home="CAR", away="FLA", state="FUT", home_score=None, away
     if period is not None:
         game["periodDescriptor"] = {"number": period, "periodType": period_type}
         game["clock"] = {"timeRemaining": remaining, "inIntermission": intermission}
+        if running is not None:
+            game["clock"]["running"] = running
+    if schedule_state is not None:
+        game["gameScheduleState"] = schedule_state
     if last_period:
         game["gameOutcome"] = {"lastPeriodType": last_period}
     return game
@@ -151,6 +155,66 @@ class TestLiveStatus:
         assert nhl._live_status(game) == "01:00 left"
 
 
+class TestEndOfPlayStates:
+    """The short OVER state, a period end, and states never seen before (issue #14, #11)."""
+
+    def test_over_is_shown_as_over_with_its_score(self, nhl):
+        game = score_game(home="NYR", away="TBL", state="OVER", home_score=5, away_score=1,
+                          period=3, remaining="00:00", running=False)
+        assert nhl._live_label(game) == "NYR 5-1 TBL over"
+
+    @pytest.mark.parametrize("period, ptype, expected", [(1, "REG", "1st end"), (3, "REG", "3rd end"), (4, "OT", "OT end")])
+    def test_a_stopped_clock_at_zero_is_the_end_of_the_period(self, nhl, period, ptype, expected):
+        game = score_game(state="LIVE", period=period, period_type=ptype, remaining="00:00", running=False)
+        assert nhl._live_status(game) == expected
+
+    def test_a_running_clock_at_zero_or_a_stopped_one_with_time_left_is_not_an_end(self, nhl):
+        assert nhl._live_status(score_game(state="LIVE", period=1, remaining="00:00", running=True)) == "1st 00:00 left"
+        assert nhl._live_status(score_game(state="LIVE", period=1, remaining="00:40", running=False)) == "1st 00:40 left"
+        assert nhl._live_status(score_game(state="LIVE", period=1, remaining="00:00")) == "1st 00:00 left"  # no flag in the feed
+
+    def test_the_intermission_flag_wins_over_the_period_end(self, nhl):
+        game = score_game(state="LIVE", period=1, remaining="00:00", running=False, intermission=True)
+        assert nhl._live_status(game) == "1st int."
+
+    def test_a_state_never_seen_before_is_shown_as_it_is(self, nhl):
+        assert nhl._live_status(score_game(state="WEIRD", period=2, remaining="10:00")) == "[WEIRD]"
+        assert nhl._live_status(score_game(state=None)) == "[?]"
+
+    def test_an_over_game_is_in_the_live_group_not_upcoming(self, nhl):
+        # the real case: a game that had just ended was listed under Upcoming for about 40 s
+        over = score_game(1, "NYR", "TBL", "OVER", 5, 1, period=3, remaining="00:00", running=False)
+        later = score_game(2, "COL", "LAK", "FUT", start="2026-10-02T02:00:00Z")
+        with scores(nhl, {eastern_dates()[0]: [over, later], eastern_dates()[1]: []}):
+            text = nhl._board_messages()[0]
+        assert text.index("Live: NYR 5-1 TBL over") < text.index("Upcoming: ")
+        assert "NYR-TBL" not in text.split("Upcoming:")[1]
+
+    def test_an_unknown_state_is_live_with_its_name_never_upcoming(self, nhl):
+        odd = score_game(1, "A", "B", "WEIRD", 1, 0, period=1, remaining="10:00")
+        with scores(nhl, {eastern_dates()[0]: [odd], eastern_dates()[1]: []}):
+            text = nhl._board_messages()[0]
+        assert text == "Live: A 1-0 B [WEIRD]"
+
+    @pytest.mark.parametrize("schedule_state", ["PPD", "CNCL", "TBD"])
+    def test_a_game_that_will_not_be_played_stays_in_the_upcoming_group(self, nhl, schedule_state):
+        # a game state that would otherwise count as live, but the schedule says it is not being played
+        game = score_game(1, "A", "B", "WEIRD", schedule_state=schedule_state)
+        with scores(nhl, {eastern_dates()[0]: [game], eastern_dates()[1]: []}):
+            assert nhl._board_messages() == ["Upcoming: 02:00 A-B"]
+
+    def test_results_count_an_over_game_as_still_on(self, nhl):
+        done = score_game(1, "PHI", "PIT", "OFF", 0, 7)
+        over = score_game(2, "NYR", "TBL", "OVER", 5, 1, period=3, remaining="00:00", running=False)
+        with scores(nhl, {eastern_dates()[0]: [done, over]}):
+            assert nhl._results_messages()[0].endswith("(1 game(s) still on: !nhl now)")
+
+    def test_an_over_game_from_yesterdays_slate_is_included(self, nhl):
+        over = score_game(9, "EDM", "VAN", "OVER", 3, 2, date=YESTERDAY, period=3, remaining="00:00", running=False)
+        with scores(nhl, {eastern_dates()[0]: [], eastern_dates()[1]: [over]}):
+            assert "EDM 3-2 VAN over" in nhl._board_messages()[0]
+
+
 class TestLabels:
     def test_live_label_has_score_and_status(self, nhl):
         game = score_game(home="TOR", away="NYI", state="LIVE", home_score=2, away_score=1,
@@ -231,7 +295,7 @@ class TestBoard:
         with scores(nhl, {eastern_dates()[0]: None}):
             assert nhl._board_messages() is None
 
-    def test_a_postponed_or_odd_state_game_is_listed_as_upcoming_not_dropped(self, nhl):
+    def test_a_game_in_an_odd_state_is_listed_not_dropped(self, nhl):
         g = score_game(1, "A", "B", "PPD")
         with scores(nhl, {eastern_dates()[0]: [g], eastern_dates()[1]: []}):
             assert "A-B" in nhl._board_messages()[0]
