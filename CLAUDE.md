@@ -33,6 +33,14 @@ not what it is.
   `PesisPlayerNamesMixin` (scorer/batter name resolution), and
   `PesisDataFetchingMixin` (all pesistulokset.fi HTTP calls).
   `SuperpesisCommand`/`YkkospesisCommand` are thin subclasses of it.
+- `tools/` holds read-only probes of the live feeds (`goal_probe.py`,
+  `state_watch.py` for the NHL, `liiga_sampler.py` for Liiga, shared
+  `probe_common.py`; see `tools/README.md`). They are not part of the bot:
+  nothing in `src/` imports them and they never talk to IRC. They reuse the
+  trackers' own fetch methods (`_fetch_scores`, `_fetch_play_by_play`,
+  `_current_season`), so renaming one of those means updating `tools/` too.
+  `tests/test_tools.py` covers their pure parts; the polling loops are
+  verified by running them.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on
@@ -101,6 +109,12 @@ consistent, deliberate discipline - keep following it:
   real `!stock`/`!liiga`/`!superpesis` call against the live service).
   Several real bugs in this codebase were only caught this way, not by
   mocked tests alone.
+- To check a live-tracker change against real games, start the matching
+  probe from `tools/` before the games, compare its log with the channel
+  log afterwards, and put what it showed (counts, short timelines) in the
+  relevant issue. The repo is public: probes and their output must carry no
+  identifying details (no names, local paths, hostnames, keys), and their
+  logs stay out of git (`*.log` is ignored; keep it that way).
 - Tests must not depend on a local `.env`: it's gitignored, so CI never
   has it, and a test that only passes because of a key in it fails there
   (this happened once). `tests/conftest.py` disables `.env` loading during

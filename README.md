@@ -223,11 +223,27 @@ All tests mock outgoing network calls, so no API keys are required to run the su
 is deliberately ignored while the tests run (see `tests/conftest.py`), so the suite behaves the
 same on a developer machine as in CI.
 
+## Probing the live feeds
+
+`tools/` holds small **read-only** scripts for watching the NHL and Liiga feeds while real games are
+on: `goal_probe.py` (NHL goals: changes, disappearances, a goal listed twice, header vs plays),
+`state_watch.py` (NHL game states, including the short `OVER` state) and `liiga_sampler.py` (the Liiga
+feed going backwards, cache headers, when `ended` and the attendance appear). They are not part of the
+bot and never talk to IRC; they exist so a tracker change can be compared with what the feed really did
+on a live night. Run them from the repository root, for example
+
+```bash
+.venv/bin/python tools/goal_probe.py 2026-10-04 14      # NHL slate by US-Eastern date, run up to 14 h
+```
+
+Logs go to `tools/logs/` (git-ignored). See [tools/README.md](tools/README.md) for each script.
+
 ## Project structure
 
 ```
 src/     - bot and command implementations
-tests/   - pytest test suite (mirrors src/, one test file per module)
+tests/   - pytest test suite (mirrors src/, one test file per module; test_tools.py covers tools/)
+tools/   - read-only probes of the live NHL/Liiga feeds (not part of the bot)
 ```
 
 ## Deployment
