@@ -142,8 +142,14 @@ off if that report isn't available yet or NHL changes the page. Each goal is rem
 and running score (with its event id as a second check), not by a count per team, because the feed
 was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
 back: neither is announced a second time, and the next goal after a disallowed one (same running score)
-still is. A goal that is removed after being announced is still not retracted, and the scorer or assists
-in the line can still be early guesses. `!nhl next` looks up the next
+still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
+minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving the score as the remaining
+goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens | the 05:25 3rd goal by Egor
+Chinakhov (Pittsburgh Penguins) was disallowed (offside challenge)`. The reason comes from the
+coach's-challenge stoppage the feed records near the goal (offside, goaltender interference, or just
+"challenge"); a challenge that failed, which is followed by a bench penalty, is not taken as a reason.
+Goals that were already in the feed when tracking started are never retracted. The scorer or assists
+in a line can still be early guesses. `!nhl next` looks up the next
 upcoming NHL gameday and lists its matchups grouped
 by start time using team abbreviations (`CAR-FLA`), e.g. `Next NHL gameday (Wed 30/09): 00:00
 CAR-FLA | 02:00 TOR-MTL`. Uses `api-web.nhle.com`, the NHL's own public web API (the same one that

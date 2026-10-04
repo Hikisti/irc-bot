@@ -68,6 +68,12 @@ def make_pbp(game_id=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away
     return pbp
 
 
+def seeded(*ids):
+    """The record of a goal that was already in the feed when tracking
+    started: remembered, but nothing was posted for it."""
+    return {"ids": list(ids), "posted": None, "missing": 0, "retracted": False}
+
+
 def make_schedule_game(gid=2026010026, home_id=10, away_id=20, home_abbrev="CAR", away_abbrev="FLA",
                         start_time_utc="2026-09-29T21:00:00Z", game_state="FUT",
                         home_score=None, away_score=None):
@@ -466,7 +472,7 @@ class TestBuildInitialState:
             state = nhl_command._build_initial_state(items)
 
         assert state[1]["announced"] == {
-            ("score", 10, 1, 0): [1], ("score", 20, 1, 1): [2], ("score", 20, 1, 2): [3],
+            ("score", 10, 1, 0): seeded(1), ("score", 20, 1, 1): seeded(2), ("score", 20, 1, 2): seeded(3),
         }
         assert state[1]["ended"] is False
 
@@ -505,7 +511,7 @@ class TestPollOnce:
     def test_no_new_goals_sends_nothing(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "announced": {("score", 10, 1, 0): [1]}, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {("score", 10, 1, 0): seeded(1)}, "ended": False},
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, plays=[
@@ -562,11 +568,11 @@ class TestPollOnce:
 
         bot.send_message.assert_not_called()
         assert all_ended is False
-        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 10, 1, 0): [1]}
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 10, 1, 0): seeded(1)}
 
     def test_play_by_play_failure_carries_forward_the_announced_record(self, nhl_command):
         bot = MagicMock()
-        record = {("score", 10, 1, 0): [1], ("score", 20, 1, 1): [2]}
+        record = {("score", 10, 1, 0): seeded(1), ("score", 20, 1, 1): seeded(2)}
         self._seed(nhl_command, "#nhl.fi", {
             1: {"home_id": 10, "away_id": 20, "announced": dict(record), "ended": False},
         })
@@ -985,7 +991,7 @@ class TestTrackedSlate:
 
         bot.send_message.assert_not_called()  # seeded as a baseline, not replayed
         assert nhl_command._channels["#nhl.fi"]["games"][2]["slate"] == "2026-09-29"
-        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 30, 1, 0): [1]}
+        assert nhl_command._channels["#nhl.fi"]["games"][2]["announced"] == {("score", 30, 1, 0): seeded(1)}
 
 
 class TestGoalOrder:
@@ -1022,13 +1028,13 @@ class TestGoalOrder:
 
     def test_only_goals_not_announced_yet_are_new_and_still_ordered(self, nhl_command):
         # the first goal (home, 1-0) is already announced: new are Second (away), Third (home), Fourth (away)
-        messages = self._announced(nhl_command, self._pbp(self._plays()), {("score", 10, 1, 0): [1]})
+        messages = self._announced(nhl_command, self._pbp(self._plays()), {("score", 10, 1, 0): seeded(1)})
 
         scorers = [next(name for name in ("First", "Second", "Third", "Fourth") if name in m) for m in messages]
         assert scorers == ["Second", "Third", "Fourth"]
 
     def test_nothing_new_announces_nothing(self, nhl_command):
-        everything = nhl_command._resolve_goals(self._pbp(self._plays()), {})[1]
+        everything = nhl_command._resolve_goals(self._pbp(self._plays()), {})[2]
         assert self._announced(nhl_command, self._pbp(self._plays()), everything) == []
 
     def test_a_poll_announces_a_multi_goal_backlog_in_game_order(self, nhl_command):
@@ -1069,7 +1075,7 @@ class TestPlayByPlaySkipping:
         fetch.assert_not_called()
 
     def test_finished_and_already_announced_game_is_not_fetched_and_keeps_its_record(self, nhl_command):
-        record = {("score", 10, 1, 0): [1], ("score", 10, 2, 0): [2], ("score", 10, 3, 0): [3]}
+        record = {("score", 10, 1, 0): seeded(1), ("score", 10, 2, 0): seeded(2), ("score", 10, 3, 0): seeded(3)}
         fetch, bot = self._poll(nhl_command, self._prev(ended=True, announced=dict(record)), "OFF")
         fetch.assert_not_called()
         bot.send_message.assert_not_called()
@@ -1106,8 +1112,9 @@ class TestAnnouncedGoalRecord:
         return goal_play(event_id=event_id, event_owner_team_id=team, scoring_player_id=scorer,
                          home_score=home, away_score=away, **kw)
 
-    def _poll_sequence(self, nhl_command, feeds):
-        """Runs one poll per feed and returns every GOAL: line sent."""
+    def _poll_sequence(self, nhl_command, feeds, all_lines=False):
+        """Runs one poll per feed and returns every GOAL: line sent (every line
+        sent with all_lines)."""
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
             1: {"home_id": self.HOME, "away_id": self.AWAY, "announced": {}, "ended": False},
@@ -1120,7 +1127,10 @@ class TestAnnouncedGoalRecord:
                  patch.object(nhl_command, "_fetch_play_by_play", return_value=feed) as fetch:
                 nhl_command._poll_once(bot, "#nhl.fi")
             assert fetch.call_count == 1  # every poll in the sequence really ran
-        return [c.args[1] for c in bot.send_message.call_args_list if "GOAL:" in c.args[1]]
+        lines = [c.args[1] for c in bot.send_message.call_args_list]
+        if all_lines:
+            return lines
+        return [line for line in lines if "GOAL:" in line and "NO GOAL:" not in line]
 
     # -- a goal that vanishes for a poll and comes back (same id) ------------
 
@@ -1216,10 +1226,198 @@ class TestAnnouncedGoalRecord:
 
     def test_seeding_records_both_ids_of_a_doubly_listed_goal(self, nhl_command):
         a, b = self._goal(278, self.AWAY, 0, 2), self._goal(279, self.AWAY, 0, 2)
-        _, record = nhl_command._resolve_goals(self._pbp(a, b), {})
-        assert record == {("score", self.AWAY, 0, 2): [278, 279]}
+        record = nhl_command._resolve_goals(self._pbp(a, b), {}, seed=True)[2]
+        assert record == {("score", self.AWAY, 0, 2): seeded(278, 279)}
 
     def test_a_goal_already_in_the_feed_when_tracking_started_is_never_announced(self, nhl_command):
         goal = self._goal(1, self.AWAY, 0, 1)
-        record = nhl_command._resolve_goals(self._pbp(goal), {})[1]
+        record = nhl_command._resolve_goals(self._pbp(goal), {}, seed=True)[2]
         assert nhl_command._resolve_goals(self._pbp(goal), record)[0] == []
+
+
+def stoppage_play(reason, time_in_period, period_number=1):
+    return {"typeDescKey": "stoppage", "periodDescriptor": {"number": period_number, "periodType": "REG"},
+            "timeInPeriod": time_in_period, "details": {"reason": reason, "secondaryReason": reason}}
+
+
+def penalty_play(desc_key, time_in_period, period_number=1):
+    return {"typeDescKey": "penalty", "periodDescriptor": {"number": period_number, "periodType": "REG"},
+            "timeInPeriod": time_in_period, "details": {"descKey": desc_key, "duration": 2}}
+
+
+class TestRetraction:
+    """A goal that was announced and then stays out of the feed is retracted
+    (issue #13, stage 1). Cases are the real ones seen over three nights."""
+
+    HOME, AWAY = 10, 20
+
+    def _pbp(self, *plays):
+        roster = [roster_spot(i, f"P{i}", "X") for i in range(1, 9)]
+        return make_pbp(game_id=1, home_id=self.HOME, away_id=self.AWAY, plays=list(plays), roster=roster)
+
+    def _goal(self, event_id=1, team=None, home=0, away=1, scorer=1, **kw):
+        kw.setdefault("time_in_period", "05:25")
+        kw.setdefault("period_number", 3)
+        return goal_play(event_id=event_id, event_owner_team_id=team or self.AWAY, scoring_player_id=scorer,
+                         home_score=home, away_score=away, **kw)
+
+    def _run(self, nhl_command, feeds, seeded_record=None):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": self.HOME, "away_id": self.AWAY, "announced": seeded_record or {}, "ended": False},
+        }}
+        game = make_schedule_game(gid=1, home_id=self.HOME, away_id=self.AWAY, game_state="LIVE")
+        for feed in feeds:
+            with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                 patch.object(nhl_command, "_fetch_play_by_play", return_value=feed):
+                nhl_command._poll_once(bot, "#nhl.fi")
+        return [c.args[1] for c in bot.send_message.call_args_list]
+
+    def _retractions(self, lines):
+        return [line for line in lines if "NO GOAL:" in line]
+
+    def _goals(self, lines):
+        return [line for line in lines if "GOAL:" in line and "NO GOAL:" not in line]
+
+    # -- when -----------------------------------------------------------------
+
+    def test_a_goal_gone_for_three_polls_is_not_retracted_and_not_repeated_when_it_returns(self, nhl_command):
+        goal = self._goal()
+        lines = self._run(nhl_command, [self._pbp(goal), self._pbp(), self._pbp(), self._pbp(), self._pbp(goal)])
+        assert self._retractions(lines) == [] and len(self._goals(lines)) == 1
+
+    def test_the_miss_counter_starts_over_when_the_goal_returns(self, nhl_command):
+        goal = self._goal()
+        gap = [self._pbp()] * 3
+        lines = self._run(nhl_command, [self._pbp(goal)] + gap + [self._pbp(goal)] + gap)
+        assert self._retractions(lines) == []  # 3 + 3 missed polls, never 4 in a row
+
+    def test_a_goal_gone_for_four_polls_is_retracted_once(self, nhl_command):
+        goal = self._goal()
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 7)
+        assert len(self._retractions(lines)) == 1
+
+    def test_the_retraction_names_the_goal_and_the_current_score(self, nhl_command):
+        goal = self._goal(scorer=1)
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4)
+        text = self._retractions(lines)[0]
+        assert "NO GOAL:" in text
+        assert "Carolina Hurricanes 0-0 Florida Panthers" in text
+        assert "the 05:25 3rd goal by P1 X (Florida Panthers) was disallowed" in text
+        assert "(" not in text.split("disallowed", 1)[1]  # no explanation without a stoppage
+
+    def test_a_goal_that_returns_after_being_retracted_is_announced_again(self, nhl_command):
+        goal = self._goal()
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4 + [self._pbp(goal)])
+        assert len(self._retractions(lines)) == 1 and len(self._goals(lines)) == 2
+
+    def test_fetch_failures_do_not_count_as_missing(self, nhl_command):
+        goal = self._goal()
+        lines = self._run(nhl_command, [self._pbp(goal), self._pbp(), self._pbp(), None, None, None, None, self._pbp()])
+        assert self._retractions(lines) == []  # only three real misses
+
+    def test_goals_already_in_the_feed_when_tracking_started_are_never_retracted(self, nhl_command):
+        record = {("score", self.AWAY, 0, 1): seeded(1)}
+        assert self._retractions(self._run(nhl_command, [self._pbp()] * 8, seeded_record=record)) == []
+
+    def test_the_resolver_reports_nothing_gone_for_goals_that_were_only_seeded(self, nhl_command):
+        record = {("score", self.AWAY, 0, 1): seeded(1)}
+        for _ in range(8):
+            _, gone, record = nhl_command._resolve_goals(self._pbp(), record)
+            assert gone == []
+
+    def test_a_renumbered_goal_is_not_mistaken_for_a_missing_one(self, nhl_command):
+        before, after = self._goal(7, away=3), self._goal(7, away=2)
+        lines = self._run(nhl_command, [self._pbp(before)] + [self._pbp(after)] * 6)
+        assert self._retractions(lines) == [] and len(self._goals(lines)) == 1
+
+    # -- replaced by the next goal -----------------------------------------------
+
+    def test_a_goal_replaced_at_once_is_retracted_before_the_new_one_is_announced(self, nhl_command):
+        old, new = self._goal(1, scorer=1), self._goal(2, scorer=2)
+        lines = self._run(nhl_command, [self._pbp(old), self._pbp(new)])
+        assert len(lines) == 3 and "NO GOAL:" in lines[1] and "P2 X" in lines[2] and "NO GOAL:" not in lines[2]
+
+    def test_two_goals_gone_at_once_give_two_retractions(self, nhl_command):
+        a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2)
+        lines = self._run(nhl_command, [self._pbp(a, b)] + [self._pbp()] * 4)
+        assert len(self._retractions(lines)) == 2
+
+    def test_the_label_of_an_overtime_goal(self, nhl_command):
+        goal = self._goal(period_number=4, period_type="OT", time_in_period="03:18")
+        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4))[0]
+        assert "the 03:18 OT goal" in text
+
+    # -- the score shown ------------------------------------------------------------
+
+    def test_the_score_is_the_running_score_of_the_last_remaining_goal(self, nhl_command):
+        first = self._goal(1, home=1, away=0, team=self.HOME, scorer=2, time_in_period="03:00")
+        removed = self._goal(2, home=1, away=1, scorer=1)
+        later = self._goal(3, home=2, away=1, team=self.HOME, scorer=3, time_in_period="09:00")
+        feeds = [self._pbp(first, removed)] + [self._pbp(first)] * 4
+        assert "Carolina Hurricanes 1-0 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
+        # a later goal is still there when the earlier one is retracted: the score shown is that goal's
+        feeds = [self._pbp(first, removed, later)] + [self._pbp(first, later)] * 4
+        assert "Carolina Hurricanes 2-1 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
+
+    def test_without_a_running_score_the_header_score_is_used(self, nhl_command):
+        goal = self._goal()
+        other = self._goal(2, home=None, away=None, scorer=2, time_in_period="08:00")
+        pbp = self._pbp(other)
+        pbp["homeTeam"]["score"], pbp["awayTeam"]["score"] = 4, 5
+        feeds = [self._pbp(goal, other)] + [pbp] * 4
+        assert "Carolina Hurricanes 4-5 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
+
+    # -- the explanation ----------------------------------------------------------------
+
+    def _reason_text(self, nhl_command, *extra_plays):
+        goal = self._goal(time_in_period="05:25", period_number=3)
+        return self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp(*extra_plays)] * 4))[0]
+
+    def test_offside_challenge_even_half_a_minute_before_the_goals_clock(self, nhl_command):
+        # real case: the stoppage sat at 04:54, the goal at 05:25
+        text = self._reason_text(nhl_command, stoppage_play("chlg-vis-off-side", "04:54", 3))
+        assert text.endswith("was disallowed (offside challenge)")
+
+    def test_goaltender_interference_challenge_just_after_the_goals_clock(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("chlg-hm-goal-interference", "05:27", 3))
+        assert text.endswith("(goaltender interference challenge)")
+
+    def test_an_unknown_challenge_reason_is_just_a_challenge(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("chlg-hm-something-new", "05:25", 3))
+        assert text.endswith("(challenge)")
+
+    def test_a_stoppage_that_is_not_a_challenge_explains_nothing(self, nhl_command):
+        assert not self._reason_text(nhl_command, stoppage_play("icing", "05:25", 3)).endswith(")")
+
+    def test_a_challenge_too_far_from_the_goal_or_in_another_period_explains_nothing(self, nhl_command):
+        assert not self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "03:00", 3)).endswith(")")
+        assert not self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "05:00", 2)).endswith(")")
+        assert not self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "05:40", 3)).endswith(")")
+
+    def test_a_failed_challenge_is_not_the_reason(self, nhl_command):
+        # a failed challenge costs the challenging team a bench penalty and the goal stands
+        text = self._reason_text(nhl_command, stoppage_play("chlg-vis-off-side", "05:25", 3),
+                                 penalty_play("delaying-game-unsuccessful-challenge", "05:25", 3))
+        assert not text.endswith(")")
+
+    def test_the_nearest_challenge_wins(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("chlg-hm-goal-interference", "04:40", 3),
+                                 stoppage_play("chlg-hm-off-side", "05:20", 3))
+        assert text.endswith("(offside challenge)")
+
+    def test_a_goal_with_an_unreadable_clock_gets_no_explanation(self, nhl_command):
+        goal = self._goal(time_in_period="")
+        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp(
+            stoppage_play("chlg-hm-off-side", "05:25", 3))] * 4))[0]
+        assert not text.endswith(")")
+
+    # -- what is kept for the corrections that build on this -------------------------------
+
+    def test_the_posted_scorer_assists_and_label_are_stored_with_the_goal(self, nhl_command):
+        goal = self._goal(scorer=1, assist1=2, assist2=3)
+        self._run(nhl_command, [self._pbp(goal)])
+        record = nhl_command._channels["#nhl.fi"]["games"][1]["announced"][("score", self.AWAY, 0, 1)]
+        assert record["posted"] == {"team": "Florida Panthers", "scorer": 1, "scorer_name": "P1 X",
+                                    "assists": [2, 3], "period": 3, "clock": "05:25", "label": "05:25 3rd"}
+        assert record["ids"] == [1] and record["missing"] == 0 and record["retracted"] is False

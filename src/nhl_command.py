@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from irc_format import BOLD, RESET, GREEN, ORANGE, prefix as irc_prefix
+from irc_format import BOLD, RESET, GREEN, ORANGE, RED, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
 from nhl_scoreboard import NHLScoreboardMixin
 
@@ -64,6 +64,23 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
+    NO_GOAL_PREFIX = irc_prefix("NO GOAL:", RED)
+
+    # An announced goal is retracted once it has been missing from the feed
+    # for this many polls in a row (about 90-120 s at the 30 s poll rate):
+    # long enough to ride out a feed flicker (seen: 20 s and 82 s), short
+    # enough to still be news. Goals have been seen to vanish for good
+    # 101-281 s after appearing.
+    RETRACT_AFTER_MISSING_POLLS = 4
+    # How far before/after a removed goal's clock a challenge stoppage may
+    # sit and still be taken as its explanation (seen: from 31 s before the
+    # goal to 2 s after it).
+    CHALLENGE_WINDOW_BEFORE_SECONDS = 60
+    CHALLENGE_WINDOW_AFTER_SECONDS = 10
+    CHALLENGE_REASONS = (
+        ("off-side", "offside challenge"),
+        ("goal-interference", "goaltender interference challenge"),
+    )
 
     def execute(self, args=None, irc_bot=None, channel=None, **kwargs):
         arg = (args or "").strip().lower()
@@ -98,7 +115,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         _seed_match_extras()."""
         for gid, pbp in self._fetch_concurrently(list(state.keys()), self._fetch_play_by_play).items():
             if pbp is not None:
-                state[gid]["announced"] = self._resolve_goals(pbp, {})[1]
+                state[gid]["announced"] = self._resolve_goals(pbp, {}, seed=True)[2]
 
     # ---- polling ---------------------------------------------------------
 
@@ -136,7 +153,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                     # Seed a baseline silently instead of replaying old goals.
                     new_state[gid] = self._seed_snapshot(game)
                     if pbp is not None:
-                        new_state[gid]["announced"] = self._resolve_goals(pbp, {})[1]
+                        new_state[gid]["announced"] = self._resolve_goals(pbp, {}, seed=True)[2]
                     if not new_state[gid]["ended"]:
                         all_ended = False
                     continue
@@ -277,47 +294,156 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         return ("time", details.get("eventOwnerTeamId"),
                 (goal.get("periodDescriptor") or {}).get("number"), goal.get("timeInPeriod"))
 
-    def _resolve_goals(self, pbp, announced) -> tuple:
-        """(goals to announce now, the updated record) for one game's feed.
-        `announced` maps a goal's key to the event ids already announced
-        under it. Compared with counting goals per team (which this
+    def _new_record(self, ids, posted) -> dict:
+        return {"ids": list(ids), "posted": posted, "missing": 0, "retracted": False}
+
+    def _resolve_goals(self, pbp, announced, seed=False) -> tuple:
+        """(goals to announce now, posted goals that are gone, the updated
+        record) for one game's feed. `announced` maps a goal's key to a
+        record: the event ids announced under it, what was posted for it
+        (None for goals that were already in the feed when tracking
+        started - nobody saw those announced, so they are never retracted),
+        how many polls in a row it has been missing, and whether it was
+        retracted. Compared with counting goals per team (which this
         replaced), this survives what the feed was seen doing:
           - a goal vanishing for a poll and coming back (same id): known, not
-            announced again;
+            announced again, and not retracted unless it stays away;
           - the same goal listed under two ids at once: announced once;
           - a goal removed and a different goal later reaching the same
             running score (a disallowed goal, then the next real one): the
-            old ids are gone, so the new goal is announced;
+            old ids are gone, so the new goal is announced and the old one
+            is reported gone with it;
           - a goal whose running score was renumbered, but whose id was
-            already announced: known, not announced again.
+            already announced: known, not announced again;
+          - an announced goal that stays missing for
+            RETRACT_AFTER_MISSING_POLLS polls: reported gone.
         New goals come back in play order across both teams."""
-        record = {key: list(ids) for key, ids in announced.items()}
-        seen_ids = {i for ids in record.values() for i in ids}
+        record = {key: dict(rec, ids=list(rec["ids"])) for key, rec in announced.items()}
         by_key = {}
         for goal in self._all_real_goals(pbp):
             by_key.setdefault(self._goal_key(goal), []).append(goal)
 
-        new = []
+        new, gone = [], []
         for key, plays in by_key.items():
             ids = [i for i in (play.get("eventId") for play in plays) if i is not None]
-            known = record.get(key)
-            if known is not None and (not ids or not known or any(i in known for i in ids)):
-                record[key] = known + [i for i in ids if i not in known]
-            elif known is None and any(i in seen_ids for i in ids):
-                record[key] = ids
-            else:
-                new.append(plays[0])
-                record[key] = ids
+            rec = record.get(key)
+            if rec is not None and rec["retracted"]:
+                rec = None  # a retracted goal that returns, or a later goal at this score, is new
+            if rec is not None and (not ids or not rec["ids"] or any(i in rec["ids"] for i in ids)):
+                rec["ids"] += [i for i in ids if i not in rec["ids"]]
+                rec["missing"] = 0
+                continue
+            moved = next((k for k, r in record.items()
+                          if k != key and not r["retracted"] and any(i in r["ids"] for i in ids)), None)
+            if rec is None and moved is not None:
+                record[key] = record.pop(moved)  # renumbered: same goal under a new key
+                record[key]["ids"] += [i for i in ids if i not in record[key]["ids"]]
+                record[key]["missing"] = 0
+                continue
+            if rec is not None and rec["posted"] is not None:
+                gone.append(rec["posted"])  # its ids are gone and another goal took its place
+            new.append(plays[0])
+            record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
+
+        for key, rec in record.items():
+            if key in by_key or rec["posted"] is None or rec["retracted"]:
+                continue
+            rec["missing"] += 1
+            if rec["missing"] >= self.RETRACT_AFTER_MISSING_POLLS:
+                rec["retracted"] = True
+                gone.append(rec["posted"])
+
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
-        return sorted(new, key=lambda goal: position[id(goal)]), record
+        return sorted(new, key=lambda goal: position[id(goal)]), gone, record
+
+    def _posted_info(self, pbp, goal) -> dict:
+        """What the announcement said about a goal, kept so a later poll can
+        retract it (and, later, correct it)."""
+        details = goal.get("details") or {}
+        home = pbp.get("homeTeam") or {}
+        team = self._team_name(home if details.get("eventOwnerTeamId") == home.get("id") else pbp.get("awayTeam") or {})
+        clock = goal.get("timeInPeriod") or ""
+        period = goal.get("periodDescriptor") or {}
+        return {
+            "team": team,
+            "scorer": details.get("scoringPlayerId"),
+            "scorer_name": self._resolve_player_name(pbp, details.get("scoringPlayerId")),
+            "assists": [details.get(f"assist{n}PlayerId") for n in (1, 2) if details.get(f"assist{n}PlayerId")],
+            "period": period.get("number"),
+            "clock": clock,
+            "label": f"{clock} {self._period_label(period)}".strip(),
+        }
 
     def _announce_new_goals(self, irc_bot, channel, pbp, announced) -> dict:
-        """Announces the goals not announced yet and returns the updated
-        record to store."""
-        new, record = self._resolve_goals(pbp, announced)
+        """Retracts the goals that are gone, announces the goals not
+        announced yet, and returns the updated record to store."""
+        new, gone, record = self._resolve_goals(pbp, announced)
+        for posted in gone:
+            print(f"NHL: retracting goal {posted['label']} by {posted['scorer_name']} in {channel}")
+            self._safe_send(irc_bot, channel, self._format_retraction(pbp, posted))
         for goal in new:
             self._safe_send(irc_bot, channel, self._format_goal(pbp, goal))
         return record
+
+    def _format_retraction(self, pbp, posted) -> str:
+        home = self._team_name(pbp.get("homeTeam") or {})
+        away = self._team_name(pbp.get("awayTeam") or {})
+        home_score, away_score = self._current_score(pbp)
+        reason = self._challenge_reason(pbp, posted.get("period"), self._clock_seconds(posted.get("clock")))
+        why = f" ({reason})" if reason else ""
+        return (
+            f"{self.NO_GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
+            f" | the {posted['label']} goal by {posted['scorer_name']} ({posted['team']}) was disallowed{why}"
+        )
+
+    def _current_score(self, pbp) -> tuple:
+        """The score as the remaining goals show it: the running score of the
+        last real goal, 0-0 with none; the header score if that goal has no
+        running score."""
+        goals = self._all_real_goals(pbp)
+        if not goals:
+            return 0, 0
+        details = goals[-1].get("details") or {}
+        home, away = details.get("homeScore"), details.get("awayScore")
+        if isinstance(home, int) and isinstance(away, int):
+            return home, away
+        return (pbp.get("homeTeam") or {}).get("score", "?"), (pbp.get("awayTeam") or {}).get("score", "?")
+
+    def _clock_seconds(self, clock):
+        try:
+            minutes, seconds = str(clock).split(":")
+            return int(minutes) * 60 + int(seconds)
+        except (ValueError, TypeError):
+            return None
+
+    def _challenge_reason(self, pbp, period, seconds):
+        """Why a goal was taken off, from the coach's-challenge stoppage the
+        feed records near it (its clock is where play was stopped, which can
+        be up to half a minute before the goal), or None. A challenge that
+        failed is followed by a bench penalty and the goal stands, so such a
+        stoppage is not an explanation."""
+        if seconds is None:
+            return None
+        plays = pbp.get("plays") or []
+        best = None
+        for index, play in enumerate(plays):
+            reason = (play.get("details") or {}).get("reason") or ""
+            if play.get("typeDescKey") != "stoppage" or not reason.startswith("chlg"):
+                continue
+            if (play.get("periodDescriptor") or {}).get("number") != period:
+                continue
+            at = self._clock_seconds(play.get("timeInPeriod"))
+            if at is None or not (seconds - self.CHALLENGE_WINDOW_BEFORE_SECONDS <= at <= seconds + self.CHALLENGE_WINDOW_AFTER_SECONDS):
+                continue
+            if any(p.get("typeDescKey") == "penalty"
+                   and (p.get("details") or {}).get("descKey") == "delaying-game-unsuccessful-challenge"
+                   for p in plays[index + 1:index + 5]):
+                continue
+            if best is None or abs(at - seconds) < best[0]:
+                best = (abs(at - seconds), reason)
+        if best is None:
+            return None
+        return next((text for fragment, text in self.CHALLENGE_REASONS if fragment in best[1]), "challenge")
 
     def _format_goal(self, pbp, goal) -> str:
         home = self._team_name(pbp.get("homeTeam") or {})
