@@ -94,11 +94,16 @@ class LiigaCommand(LiveTrackerCommand):
                 self._announce_new_goals(irc_bot, channel, game, prev, "homeTeam")
                 self._announce_new_goals(irc_bot, channel, game, prev, "awayTeam")
 
-                if game.get("ended") and not prev["ended"]:
+                # The feed was seen flipping `ended` true -> false -> true within 30 s
+                # (an older cached copy), which would have announced FINAL: twice, so a
+                # game seen as ended stays ended.
+                ended = bool(game.get("ended")) or prev["ended"]
+                if ended and not prev["ended"]:
                     self._announce_end(irc_bot, channel, game)
 
                 new_state[gid] = self._snapshot(game)
-                if not game.get("ended"):
+                new_state[gid]["ended"] = ended
+                if not ended:
                     all_ended = False
             except Exception as e:
                 # Don't let one malformed game entry take down the whole poll

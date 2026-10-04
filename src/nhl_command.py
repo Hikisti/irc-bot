@@ -355,8 +355,16 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             new.append(plays[0])
             record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
 
+        # A feed with no plays at all, or with no goals while two or more announced
+        # ones are missing, looks like a broken response, not a run of disallowed
+        # goals (those leave one at a time): do not count it against the goals.
+        missing = [r for k, r in record.items() if k not in by_key and r["posted"] is not None and not r["retracted"]]
+        broken = not (pbp.get("plays") or []) or (not by_key and len(missing) >= 2)
+        if broken and missing:
+            print(f"NHL: game {pbp.get('id')}: the feed shows no goal for {len(missing)} announced "
+                  f"one(s), not counting this poll as a miss")
         for key, rec in record.items():
-            if key in by_key or rec["posted"] is None or rec["retracted"]:
+            if key in by_key or rec["posted"] is None or rec["retracted"] or broken:
                 continue
             rec["missing"] += 1
             if rec["missing"] >= self.RETRACT_AFTER_MISSING_POLLS:

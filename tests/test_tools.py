@@ -123,7 +123,7 @@ class TestHeaderCheck:
 
 
 class TestLiigaJudge:
-    BASE = {"gameTime": 1241, "home": 0, "away": 0, "ended": False, "period": 2}
+    BASE = {"gameTime": 1241, "home": 0, "away": 0, "events_home": 0, "events_away": 0, "ended": False, "period": 2}
 
     def test_first_poll_has_nothing_to_compare(self):
         assert liiga_sampler.judge(None, self.BASE) == []
@@ -139,6 +139,11 @@ class TestLiigaJudge:
         assert liiga_sampler.judge(dict(self.BASE, ended=True), self.BASE) == ["ENDED-FLAP"]
         assert liiga_sampler.judge(self.BASE, dict(self.BASE, period=1)) == ["PERIOD-BACK 2->1"]
 
+    def test_the_goal_event_list_shrinking_is_flagged_on_its_own(self):
+        prev = dict(self.BASE, events_home=1, home=1)
+        assert liiga_sampler.judge(prev, dict(self.BASE, home=1)) == ["EVENTS-BACK 1-0->0-0"]
+        assert liiga_sampler.judge(self.BASE, dict(self.BASE, events_away=1)) == []
+
     def test_a_missing_clock_is_not_a_backwards_step(self):
         assert liiga_sampler.judge(self.BASE, dict(self.BASE, gameTime=None)) == []
 
@@ -148,8 +153,10 @@ class TestLiigaJudge:
         assert liiga_sampler.edge_of("") == "?"
 
     def test_state_of_a_game(self):
-        game = {"gameTime": 10, "homeTeam": {"goals": 2}, "awayTeam": {}, "ended": 1, "currentPeriod": 3}
-        assert liiga_sampler.state_of(game) == {"gameTime": 10, "home": 2, "away": 0, "ended": True, "period": 3}
+        game = {"gameTime": 10, "homeTeam": {"goals": 2, "goalEvents": [{}, {}]}, "awayTeam": {}, "ended": 1,
+                "currentPeriod": 3}
+        assert liiga_sampler.state_of(game) == {"gameTime": 10, "home": 2, "away": 0, "events_home": 2,
+                                                "events_away": 0, "ended": True, "period": 3}
 
 
 class TestLogger:

@@ -2,8 +2,9 @@
 
 Polls the `runkosarja` games of one date every 10 s (one request per poll) and logs every poll as
 one line with the response's CDN headers (Age, first-hop CloudFront node, X-Cache) and each live
-game's (period / gameTime / score), plus a flag when a game's gameTime, score, period or `ended`
-went BACKWARDS compared with the previous poll. FIELD lines record when a game's `spectators` or
+game's (period / gameTime / score / number of goal events), plus a flag when a game's gameTime, score,
+goal-event count, period or `ended` went BACKWARDS compared with the previous poll. The goal-event
+list is what the tracker counts, so its flag (EVENTS-BACK) is the one that matters for duplicates. FIELD lines record when a game's `spectators` or
 `finishedType` changes (to see whether they appear before `ended`). The summary at the end counts
 the backwards steps by kind, the Age values and the cache nodes seen.
 
@@ -42,6 +43,8 @@ def judge(prev, cur):
         flags.append(f'CLOCK-BACK {prev["gameTime"] - cur["gameTime"]}s')
     if cur["home"] < prev["home"] or cur["away"] < prev["away"]:
         flags.append(f'SCORE-BACK {prev["home"]}-{prev["away"]}->{cur["home"]}-{cur["away"]}')
+    if cur["events_home"] < prev["events_home"] or cur["events_away"] < prev["events_away"]:
+        flags.append(f'EVENTS-BACK {prev["events_home"]}-{prev["events_away"]}->{cur["events_home"]}-{cur["events_away"]}')
     if prev["ended"] and not cur["ended"]:
         flags.append("ENDED-FLAP")
     if cur["period"] is not None and prev["period"] is not None and cur["period"] < prev["period"]:
@@ -53,6 +56,8 @@ def state_of(game):
     return {"gameTime": game.get("gameTime"),
             "home": (game.get("homeTeam") or {}).get("goals") or 0,
             "away": (game.get("awayTeam") or {}).get("goals") or 0,
+            "events_home": len((game.get("homeTeam") or {}).get("goalEvents") or []),
+            "events_away": len((game.get("awayTeam") or {}).get("goalEvents") or []),
             "ended": bool(game.get("ended")), "period": game.get("currentPeriod")}
 
 
@@ -87,7 +92,7 @@ def main():
                 cur = state_of(game)
                 if game.get("started") and not game.get("ended"):
                     cells.append(f'{game["homeTeam"]["teamName"][:4]}:p{cur["period"]}/{cur["gameTime"]}/'
-                                 f'{cur["home"]}-{cur["away"]}')
+                                 f'{cur["home"]}-{cur["away"]}/ev{cur["events_home"]}-{cur["events_away"]}')
                 for flag in judge(previous.get(game["id"]), cur):
                     flagged.append(f"{name}: {flag}")
                     kinds[flag.split()[0]] += 1

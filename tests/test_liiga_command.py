@@ -436,6 +436,41 @@ class TestPollOnce:
 
         assert result is False
 
+    def test_a_feed_flipping_ended_back_does_not_announce_the_final_twice(self, liiga_command):
+        # seen live: ended true -> false -> true within 30 s (an older cached copy in between)
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(ended=False)})
+
+        for ended in (True, False, True):
+            with patch.object(liiga_command, "_fetch_today_games", return_value={1: make_game(ended=ended)}):
+                liiga_command._poll_once(bot, "#chan")
+
+        finals = [c.args[1] for c in bot.send_message.call_args_list if "FINAL" in c.args[1]]
+        assert len(finals) == 1
+
+    def test_a_game_seen_as_ended_stays_ended_in_the_stored_state_and_for_all_ended(self, liiga_command):
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(ended=True)})
+
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: make_game(ended=False)}):
+            result = liiga_command._poll_once(bot, "#chan")
+
+        assert result is True
+        assert liiga_command._channels["#chan"]["games"][1]["ended"] is True
+        bot.send_message.assert_not_called()
+
+    def test_a_game_that_has_not_ended_is_still_not_ended(self, liiga_command):
+        bot = MagicMock()
+        self._seed(liiga_command, "#chan", {1: make_game(ended=False), 2: make_game(gid=2, ended=True)})
+
+        games = {1: make_game(ended=False), 2: make_game(gid=2, ended=False)}
+        with patch.object(liiga_command, "_fetch_today_games", return_value=games):
+            result = liiga_command._poll_once(bot, "#chan")
+
+        assert result is False
+        assert liiga_command._channels["#chan"]["games"][1]["ended"] is False
+        assert liiga_command._channels["#chan"]["games"][2]["ended"] is True
+
     def test_fetch_failure_does_not_crash(self, liiga_command):
         bot = MagicMock()
         self._seed(liiga_command, "#chan", {1: make_game()})

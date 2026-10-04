@@ -1255,6 +1255,11 @@ class TestRetraction:
         roster = [roster_spot(i, f"P{i}", "X") for i in range(1, 9)]
         return make_pbp(game_id=1, home_id=self.HOME, away_id=self.AWAY, plays=list(plays), roster=roster)
 
+    def _quiet(self, *plays):
+        """A feed with other plays in it but none of the goals under test."""
+        return self._pbp({"typeDescKey": "faceoff", "eventId": 900, "periodDescriptor": {"number": 3, "periodType": "REG"},
+                          "timeInPeriod": "01:00", "details": {}}, *plays)
+
     def _goal(self, event_id=1, team=None, home=0, away=1, scorer=1, **kw):
         kw.setdefault("time_in_period", "05:25")
         kw.setdefault("period_number", 3)
@@ -1283,23 +1288,23 @@ class TestRetraction:
 
     def test_a_goal_gone_for_three_polls_is_not_retracted_and_not_repeated_when_it_returns(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal), self._pbp(), self._pbp(), self._pbp(), self._pbp(goal)])
+        lines = self._run(nhl_command, [self._pbp(goal), self._quiet(), self._quiet(), self._quiet(), self._pbp(goal)])
         assert self._retractions(lines) == [] and len(self._goals(lines)) == 1
 
     def test_the_miss_counter_starts_over_when_the_goal_returns(self, nhl_command):
         goal = self._goal()
-        gap = [self._pbp()] * 3
+        gap = [self._quiet()] * 3
         lines = self._run(nhl_command, [self._pbp(goal)] + gap + [self._pbp(goal)] + gap)
         assert self._retractions(lines) == []  # 3 + 3 missed polls, never 4 in a row
 
     def test_a_goal_gone_for_four_polls_is_retracted_once(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 7)
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 7)
         assert len(self._retractions(lines)) == 1
 
     def test_the_retraction_names_the_goal_and_the_current_score(self, nhl_command):
         goal = self._goal(scorer=1)
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4)
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4)
         text = self._retractions(lines)[0]
         assert "NO GOAL:" in text
         assert "Carolina Hurricanes 0-0 Florida Panthers" in text
@@ -1308,22 +1313,22 @@ class TestRetraction:
 
     def test_a_goal_that_returns_after_being_retracted_is_announced_again(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4 + [self._pbp(goal)])
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4 + [self._pbp(goal)])
         assert len(self._retractions(lines)) == 1 and len(self._goals(lines)) == 2
 
     def test_fetch_failures_do_not_count_as_missing(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal), self._pbp(), self._pbp(), None, None, None, None, self._pbp()])
+        lines = self._run(nhl_command, [self._pbp(goal), self._quiet(), self._quiet(), None, None, None, None, self._quiet()])
         assert self._retractions(lines) == []  # only three real misses
 
     def test_goals_already_in_the_feed_when_tracking_started_are_never_retracted(self, nhl_command):
         record = {("score", self.AWAY, 0, 1): seeded(1)}
-        assert self._retractions(self._run(nhl_command, [self._pbp()] * 8, seeded_record=record)) == []
+        assert self._retractions(self._run(nhl_command, [self._quiet()] * 8, seeded_record=record)) == []
 
     def test_the_resolver_reports_nothing_gone_for_goals_that_were_only_seeded(self, nhl_command):
         record = {("score", self.AWAY, 0, 1): seeded(1)}
         for _ in range(8):
-            _, gone, record = nhl_command._resolve_goals(self._pbp(), record)
+            _, gone, record = nhl_command._resolve_goals(self._quiet(), record)
             assert gone == []
 
     def test_a_renumbered_goal_is_not_mistaken_for_a_missing_one(self, nhl_command):
@@ -1338,14 +1343,36 @@ class TestRetraction:
         lines = self._run(nhl_command, [self._pbp(old), self._pbp(new)])
         assert len(lines) == 3 and "NO GOAL:" in lines[1] and "P2 X" in lines[2] and "NO GOAL:" not in lines[2]
 
-    def test_two_goals_gone_at_once_give_two_retractions(self, nhl_command):
-        a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2)
-        lines = self._run(nhl_command, [self._pbp(a, b)] + [self._pbp()] * 4)
+    def test_two_goals_gone_at_once_while_another_goal_is_still_there_give_two_retractions(self, nhl_command):
+        a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2, time_in_period="08:00")
+        keep = self._goal(3, home=1, away=2, scorer=3, time_in_period="12:00")
+        lines = self._run(nhl_command, [self._pbp(a, b, keep)] + [self._quiet(keep)] * 4)
         assert len(self._retractions(lines)) == 2
+
+    # -- a broken feed is not a run of disallowed goals ---------------------------------
+
+    def test_an_empty_feed_does_not_retract_anything(self, nhl_command, capsys):
+        a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2, time_in_period="08:00")
+        lines = self._run(nhl_command, [self._pbp(a, b)] + [self._pbp()] * 8)
+        assert self._retractions(lines) == []
+        assert "the feed shows no goal for 2 announced one(s), not counting this poll as a miss" in capsys.readouterr().out
+
+    def test_an_empty_feed_does_not_retract_a_single_goal_either(self, nhl_command):
+        assert self._retractions(self._run(nhl_command, [self._pbp(self._goal())] + [self._pbp()] * 8)) == []
+
+    def test_two_goals_vanishing_together_with_no_goal_left_are_not_retracted(self, nhl_command):
+        a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2, time_in_period="08:00")
+        lines = self._run(nhl_command, [self._pbp(a, b)] + [self._quiet()] * 8 + [self._pbp(a, b)])
+        assert self._retractions(lines) == [] and len(self._goals(lines)) == 2  # nothing repeated when they return
+
+    def test_polls_skipped_as_broken_do_not_reset_the_count(self, nhl_command):
+        goal = self._goal()
+        feeds = [self._pbp(goal)] + [self._quiet()] * 2 + [self._pbp()] * 3 + [self._quiet()] * 2
+        assert len(self._retractions(self._run(nhl_command, feeds))) == 1  # 2 + 2 real misses
 
     def test_the_label_of_an_overtime_goal(self, nhl_command):
         goal = self._goal(period_number=4, period_type="OT", time_in_period="03:18")
-        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp()] * 4))[0]
+        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4))[0]
         assert "the 03:18 OT goal" in text
 
     # -- the score shown ------------------------------------------------------------
@@ -1354,7 +1381,7 @@ class TestRetraction:
         first = self._goal(1, home=1, away=0, team=self.HOME, scorer=2, time_in_period="03:00")
         removed = self._goal(2, home=1, away=1, scorer=1)
         later = self._goal(3, home=2, away=1, team=self.HOME, scorer=3, time_in_period="09:00")
-        feeds = [self._pbp(first, removed)] + [self._pbp(first)] * 4
+        feeds = [self._pbp(first, removed)] + [self._quiet(first)] * 4
         assert "Carolina Hurricanes 1-0 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
         # a later goal is still there when the earlier one is retracted: the score shown is that goal's
         feeds = [self._pbp(first, removed, later)] + [self._pbp(first, later)] * 4
@@ -1434,8 +1461,10 @@ class TestJournalLinesForIgnoredRepeats:
 
     def test_a_goal_that_comes_back_after_missed_polls_is_logged(self, nhl_command, capsys):
         first = nhl_command._resolve_goals(self._pbp(self._goal(1)), {})[2]
+        quiet = self._pbp({"typeDescKey": "faceoff", "eventId": 900, "periodDescriptor": {"number": 1, "periodType": "REG"},
+                           "timeInPeriod": "01:00", "details": {}})
         for _ in range(2):
-            _, _, first = nhl_command._resolve_goals(self._pbp(), first)
+            _, _, first = nhl_command._resolve_goals(quiet, first)
         capsys.readouterr()
         nhl_command._resolve_goals(self._pbp(self._goal(1)), first)
         assert "NHL: game 77: goal (team 20, 0-1) is back after 2 missed poll(s), not announced again" in capsys.readouterr().out
