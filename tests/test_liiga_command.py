@@ -796,7 +796,7 @@ class TestNext:
         bot = MagicMock()
         with patch.object(
             liiga_command, "_fetch_next_gameday",
-            return_value=("2026-08-25", {1: make_game(home="TPS", away="Jokerit")}),
+            return_value=("2026-08-25", {1: make_game(home="TPS", away="Jokerit", started=False)}),
         ), patch.object(liiga_command, "_format_date_label", return_value="tomorrow"):
             liiga_command._run_next(bot, "#chan")
 
@@ -1042,7 +1042,7 @@ class TestTrackingSummary:
     """The "Tracking N games today: ..." list adds scores for games already
     underway (goals scored before !liiga start are deliberately never
     announced, so without this a mid-game start leaves the channel
-    guessing); "!liiga next" keeps the plain list."""
+    guessing); "!liiga next" shows the same scores for a day that is partly played."""
 
     def test_game_not_started_shows_no_score(self, liiga_command):
         games = [make_game(started=False)]
@@ -1068,6 +1068,17 @@ class TestTrackingSummary:
         del game["homeTeam"]["goals"]  # _team_goals() falls back to "?"
         assert liiga_command._format_tracking_summary([game]) == "17:00 HIFK-Ilves"
 
-    def test_next_keeps_the_plain_list_even_for_a_started_game(self, liiga_command):
+    def test_next_shows_the_score_of_a_started_game(self, liiga_command):
         game = make_game(home_goals=[goal_event()])
-        assert liiga_command._format_period_summary([game]) == "17:00 HIFK-Ilves"
+        assert liiga_command._format_period_summary([game]) == "17:00 HIFK 1-0 Ilves"
+
+    def test_next_on_a_day_nothing_has_started_on_is_the_plain_list(self, liiga_command):
+        assert liiga_command._format_period_summary([make_game(started=False)]) == "17:00 HIFK-Ilves"
+
+    def test_next_on_a_partly_played_day_marks_the_final(self, liiga_command):
+        games = [
+            make_game(gid=1, home="HIFK", away="Ilves", home_goals=[goal_event()], ended=True,
+                      start="2026-09-05T14:00:00Z"),
+            make_game(gid=2, home="JYP", away="Lukko", started=False, start="2026-09-05T15:30:00Z"),
+        ]
+        assert liiga_command._format_period_summary(games) == "17:00 HIFK 1-0 Ilves (final) | 18:30 JYP-Lukko"

@@ -680,7 +680,7 @@ class TestTrackingSummary:
     """The "Tracking N games today: ..." list adds scores for games already
     underway (goals scored before !nhl start are deliberately never
     announced, so without this a mid-game start leaves the channel
-    guessing); "!nhl next" keeps the plain list."""
+    guessing); "!nhl next" shows the same scores for a day that is partly played."""
 
     def _one(self, **kwargs):
         return [make_schedule_game(home_abbrev="TOR", away_abbrev="MTL", **kwargs)]
@@ -715,9 +715,25 @@ class TestTrackingSummary:
         ]
         assert nhl_command._format_tracking_summary(games) == "00:00 CAR 0-1 FLA (final) | 05:00 EDM-VAN"
 
-    def test_next_keeps_the_plain_list_even_for_a_started_game(self, nhl_command):
+    def test_next_shows_the_score_of_a_started_game(self, nhl_command):
         games = self._one(game_state="LIVE", home_score=1, away_score=0)
-        assert nhl_command._format_period_summary(games).endswith("TOR-MTL")
+        assert nhl_command._format_period_summary(games).endswith("TOR 1-0 MTL")
+
+    def test_next_on_a_day_nothing_has_started_on_is_the_plain_list(self, nhl_command):
+        assert nhl_command._format_period_summary(self._one(game_state="FUT")).endswith("TOR-MTL")
+
+    def test_next_on_a_partly_played_day_marks_the_final_and_the_live_game(self, nhl_command):
+        games = [
+            make_schedule_game(gid=1, home_abbrev="DET", away_abbrev="WPG", game_state="FINAL",
+                               home_score=2, away_score=3, start_time_utc="2026-10-04T23:00:00Z"),
+            make_schedule_game(gid=2, home_abbrev="NYR", away_abbrev="UTA", game_state="LIVE",
+                               home_score=0, away_score=0, start_time_utc="2026-10-05T01:00:00Z"),
+            make_schedule_game(gid=3, home_abbrev="VAN", away_abbrev="VGK", game_state="FUT",
+                               start_time_utc="2026-10-05T02:00:00Z"),
+        ]
+        assert nhl_command._format_period_summary(games) == (
+            "02:00 DET 2-3 WPG (final) | 04:00 NYR 0-0 UTA | 05:00 VAN-VGK"
+        )
 
     def test_start_message_includes_the_live_score(self, nhl_command):
         bot = MagicMock()

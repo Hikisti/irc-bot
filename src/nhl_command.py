@@ -94,7 +94,9 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         return self._fetch_next_gameday()
 
     def _format_period_summary(self, items):
-        return self._format_games_summary(items)
+        # The day may be partly played: show scores and (final) so a game
+        # that is over or underway doesn't read as still to come.
+        return self._format_games_summary(items, with_scores=True)
 
     def _fetch_today_items(self, context):
         return self._fetch_today_games()
