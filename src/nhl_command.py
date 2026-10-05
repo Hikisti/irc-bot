@@ -166,7 +166,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
                 ended = self._is_ended(game)
                 if ended and not prev["ended"] and pbp is not None:
-                    self._announce_end(irc_bot, channel, pbp)
+                    self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
 
                 # Play-by-play fetch failed this cycle: `announced` is still
                 # the previous record, carried forward unchanged, so the next
@@ -558,13 +558,21 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     def _is_ended(self, game) -> bool:
         return game.get("gameState") in ("FINAL", "OFF")
 
-    def _announce_end(self, irc_bot, channel, pbp):
+    def _announce_end(self, irc_bot, channel, pbp, slate=None):
         home = self._team_name(pbp.get("homeTeam") or {})
         away = self._team_name(pbp.get("awayTeam") or {})
         home_score = (pbp.get("homeTeam") or {}).get("score", "?")
         away_score = (pbp.get("awayTeam") or {}).get("score", "?")
-
         last_period_type = (pbp.get("gameOutcome") or {}).get("lastPeriodType") or ""
+
+        # The play-by-play header can still hold the pre-overtime score and no
+        # OT outcome for 30 s or more after the game turned FINAL (seen once:
+        # 2-2 posted for a 3-2 overtime win); /score/{date} was already right
+        # while the game was in OVER, in every case watched. See issue #12.
+        official = self._official_result(pbp.get("id"), slate)
+        if official:
+            (home_score, away_score), last_period_type = official
+
         suffix = f" ({last_period_type})" if last_period_type in ("OT", "SO") else ""
 
         # Same "Yleisöä" wording as !liiga's FINAL line; left out whenever
@@ -576,6 +584,21 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             irc_bot, channel,
             f"{self.FINAL_PREFIX} {home} {home_score}-{away_score} {away}{suffix}{attendance_str}",
         )
+
+    def _official_result(self, game_id, slate):
+        """((home, away), lastPeriodType) from /score/{slate} for one game,
+        or None when it can't be had (no slate, request failed, game not
+        listed, no numeric score) - the caller then keeps the play-by-play
+        header's values. Always a fresh request: this is the one moment a
+        15 s old copy could still be the stale one."""
+        if not slate or game_id is None:
+            return None
+        self.__dict__.get("_score_cache", {}).pop(slate, None)
+        game = (self._fetch_scores(slate) or {}).get(game_id)
+        score = self._score_pair(game) if game else None
+        if score is None:
+            return None
+        return score, (game.get("gameOutcome") or {}).get("lastPeriodType") or ""
 
     def _fetch_attendance(self, pbp):
         """The game's attendance as an int, or None if it can't be had -

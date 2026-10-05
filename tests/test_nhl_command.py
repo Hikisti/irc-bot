@@ -1524,3 +1524,85 @@ class TestJournalLinesForIgnoredRepeats:
 
     def test_the_key_text_of_a_shootout_goal(self, nhl_command):
         assert nhl_command._key_text(("id", 1253)) == "(id, 1253)"
+
+
+class TestFinalScoreFromScoreEndpoint:
+    """Issue #12: the play-by-play header can lag the plays at the end of a
+    game (posted 2-2 and no OT for a 3-2 overtime win); the score endpoint
+    already had the right result, so the FINAL: line reads it."""
+
+    GID = 2026010026
+    SLATE = "2026-10-02"
+
+    def _official(self, home, away, last_period="OT", state="OVER", gid=GID):
+        game = {"id": gid, "gameDate": self.SLATE, "gameState": state,
+                "homeTeam": {"abbrev": "CAR", "score": home}, "awayTeam": {"abbrev": "FLA", "score": away}}
+        if last_period:
+            game["gameOutcome"] = {"lastPeriodType": last_period}
+        return game
+
+    def _final(self, nhl_command, pbp, scores, slate=SLATE):
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_scores", return_value=scores), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", pbp, slate)
+        return bot.send_message.call_args[0][1]
+
+    def test_stale_header_is_replaced_by_the_official_score_and_ot_mark(self, nhl_command):
+        stale = make_pbp(home_score=2, away_score=2, last_period_type=None)  # the real shape of the incident
+        message = self._final(nhl_command, stale, {self.GID: self._official(3, 2)})
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT)"
+
+    def test_shootout_winner_comes_from_the_official_score(self, nhl_command):
+        stale = make_pbp(home_score=2, away_score=2, last_period_type=None)
+        message = self._final(nhl_command, stale, {self.GID: self._official(3, 2, last_period="SO")})
+        assert message.endswith("Carolina Hurricanes 3-2 Florida Panthers (SO)")
+
+    def test_a_regulation_game_has_no_suffix(self, nhl_command):
+        message = self._final(nhl_command, make_pbp(home_score=5, away_score=4),
+                              {self.GID: self._official(5, 4, last_period="REG")})
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 5-4 Florida Panthers"
+
+    @pytest.mark.parametrize("scores", [
+        None,                                            # request failed
+        {},                                              # game not listed
+        {GID + 1: {"id": GID + 1}},                      # another game only
+        {GID: {"id": GID, "gameState": "OVER"}},         # no numeric score
+    ])
+    def test_falls_back_to_the_header_when_the_official_result_is_unavailable(self, nhl_command, scores):
+        pbp = make_pbp(home_score=3, away_score=2, last_period_type="OT")
+        message = self._final(nhl_command, pbp, scores)
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT)"
+
+    def test_without_a_slate_no_request_is_made(self, nhl_command):
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_scores") as fetch, \
+                patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", make_pbp(home_score=3, away_score=2))
+        fetch.assert_not_called()
+        assert "3-2" in bot.send_message.call_args[0][1]
+
+    def test_a_cached_copy_is_never_used(self, nhl_command):
+        """!nhl now may have cached the pre-goal board a few seconds ago."""
+        old = {"games": [{**self._official(2, 2, last_period=None, state="LIVE")}]}
+        new = {"games": [self._official(3, 2)]}
+        nhl_command.session.get.side_effect = [make_response(old), make_response(new)]
+        assert nhl_command._fetch_scores(self.SLATE)[self.GID]["homeTeam"]["score"] == 2
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", make_pbp(home_score=2, away_score=2), self.SLATE)
+        assert "3-2" in bot.send_message.call_args[0][1]
+
+    def test_the_poll_looks_the_result_up_on_the_games_own_slate(self, nhl_command):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "slate": self.SLATE},
+        }}
+        game = make_schedule_game(gid=1, game_state="FINAL", home_score=2, away_score=2)
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl_command, "_fetch_play_by_play", return_value=make_pbp(game_id=1, home_score=2, away_score=2)), \
+                patch.object(nhl_command, "_fetch_scores", return_value={1: self._official(3, 2, gid=1)}) as fetch, \
+                patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._poll_once(bot, "#nhl.fi")
+        fetch.assert_called_once_with(self.SLATE)
+        assert "3-2" in bot.send_message.call_args[0][1]
