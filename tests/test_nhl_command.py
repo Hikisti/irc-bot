@@ -533,7 +533,8 @@ class TestPollOnce:
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
 
         with patch.object(nhl_command, "_fetch_today_games", return_value={1: schedule_game}), \
-             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp):
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+             patch.object(nhl_command, "_fetch_attendance", return_value=18000):
             all_ended = nhl_command._poll_once(bot, "#nhl.fi")
 
         message = bot.send_message.call_args[0][1]
@@ -983,7 +984,8 @@ class TestTrackedSlate:
                        game_state="FINAL", last_period_type="OT")
 
         with patch.object(nhl_command, "_fetch_schedule", return_value=payload), \
-             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp):
+             patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+             patch.object(nhl_command, "_fetch_attendance", return_value=18000):
             all_ended = nhl_command._poll_once(bot, "#nhl.fi")
 
         assert "FINAL:" in bot.send_message.call_args[0][1]
@@ -1606,3 +1608,114 @@ class TestFinalScoreFromScoreEndpoint:
             nhl_command._poll_once(bot, "#nhl.fi")
         fetch.assert_called_once_with(self.SLATE)
         assert "3-2" in bot.send_message.call_args[0][1]
+
+
+class TestAttendanceSummary:
+    """Issue #8: the game report's attendance figure shows up 1.5-3 minutes
+    after the final horn in about two games of three, so a FINAL: line often
+    goes out without it. A missing figure is retried for a few minutes, and
+    one results list with every figure follows when the slate is over."""
+
+    SLATE = "2026-10-05"
+
+    def _tracker(self, nhl_command, ended=(False, False)):
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            gid: {"home_id": 10, "away_id": 20, "announced": {}, "ended": was_ended, "slate": self.SLATE}
+            for gid, was_ended in zip((1, 2), ended)
+        }}
+
+    def _poll(self, nhl_command, bot, states, attendance, pbps=None):
+        """One poll; `attendance` answers _fetch_attendance by game id."""
+        games = {gid: make_schedule_game(gid=gid, game_state=state, home_score=3, away_score=2)
+                 for gid, state in states.items()}
+        pbps = pbps or {gid: make_pbp(game_id=gid, home_score=3, away_score=2, game_state="FINAL",
+                                      season=20262027, home_abbrev=f"H{gid}", away_abbrev=f"A{gid}",
+                                      last_period_type="OT" if gid == 2 else None)
+                        for gid in states}
+        for gid, pbp in pbps.items():
+            pbp["startTimeUTC"] = f"2026-10-05T23:{gid:02d}:00Z"
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value=games), \
+                patch.object(nhl_command, "_fetch_play_by_play", side_effect=lambda gid: pbps[gid]), \
+                patch.object(nhl_command, "_fetch_attendance", side_effect=lambda pbp: attendance.get(pbp["id"])):
+            return nhl_command._poll_once(bot, "#nhl.fi")
+
+    def _sent(self, bot):
+        return [c[0][1] for c in bot.send_message.call_args_list]
+
+    def test_a_late_figure_is_found_by_a_later_poll_and_the_slate_summary_has_it(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command, ended=(False, True))
+        nhl_command._channels["#nhl.fi"]["games"][2]["final"] = {
+            "text": "H2 3-2 A2 (OT)", "attendance": 17100, "late": False,
+            "report": {"season": 20262027, "id": 2}, "start": "2026-10-05T23:30:00Z", "at": time.monotonic(),
+        }
+        # the last game ends without its figure: the tracker stays open
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {}) is False
+        assert [m for m in self._sent(bot) if "NHL results" in m] == []
+        # 30 s later the report has it: summary goes out and the tracker may stop
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {1: 18347}) is True
+        assert self._sent(bot)[-1] == "NHL results 6.10.: H1 3-2 A1 (18347), H2 3-2 A2 (OT) (17100)"
+
+    def test_figures_that_were_on_every_final_line_get_no_summary(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {1: 18000, 2: 17000}) is True
+        assert not [m for m in self._sent(bot) if "NHL results" in m]
+
+    def test_a_figure_that_never_arrives_is_left_out_after_the_retry_window(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {2: 17000}) is False  # game 1 still pending
+        for snap in nhl_command._channels["#nhl.fi"]["games"].values():
+            snap["final"]["at"] -= nhl_command.ATTENDANCE_RETRY_SECONDS + 1
+        nhl_command._channels["#nhl.fi"]["games"][2]["final"]["late"] = True  # 2's figure arrived after its line
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {}) is True
+        assert self._sent(bot)[-1] == "NHL results 6.10.: H1 3-2 A1, H2 3-2 A2 (OT) (17000)"
+
+    def test_retrying_stops_after_the_window(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {})
+        for snap in nhl_command._channels["#nhl.fi"]["games"].values():
+            snap["final"]["at"] -= nhl_command.ATTENDANCE_RETRY_SECONDS + 1
+        with patch.object(nhl_command, "_fetch_attendance") as fetch:
+            assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {}) is True
+        fetch.assert_not_called()
+
+    def test_games_not_announced_by_the_tracker_are_not_in_the_summary(self, nhl_command):
+        """A game that was already over when tracking began has no FINAL: record."""
+        bot = MagicMock()
+        self._tracker(nhl_command, ended=(True, False))
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {}) is False
+        assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {2: 17000}) is True
+        assert self._sent(bot)[-1] == "NHL results 6.10.: H2 3-2 A2 (OT) (17000)"
+
+    def test_a_long_slate_is_split_into_several_lines(self, nhl_command):
+        bot = MagicMock()
+        state = {}
+        for gid in range(1, 17):
+            state[gid] = {"home_id": 10, "away_id": 20, "announced": {}, "ended": True, "slate": self.SLATE,
+                          "final": {"text": f"TEAM{gid} 3-2 OTHER{gid}", "attendance": 17000 + gid, "late": True,
+                                    "report": {}, "start": f"2026-10-05T23:{gid:02d}:00Z", "at": time.monotonic()}}
+        nhl_command._announce_slate_summary(bot, "#nhl.fi", state)
+        messages = self._sent(bot)
+        assert len(messages) > 1
+        assert all(m.startswith("NHL results 6.10.: ") and len(m.encode()) <= nhl_command.MAX_LINE_BYTES for m in messages)
+        assert "TEAM1 3-2 OTHER1 (17001)" in messages[0] and "OTHER16 (17016)" in messages[-1]
+
+    def test_the_summary_lists_games_by_start_time(self, nhl_command):
+        bot = MagicMock()
+
+        def snap(text, start):
+            return {"slate": self.SLATE, "final": {"text": text, "attendance": 17000, "late": True,
+                                                   "report": {}, "start": start, "at": time.monotonic()}}
+        state = {1: snap("LATE 1-0 GAME", "2026-10-06T00:00:00Z"), 2: snap("EARLY 2-1 GAME", "2026-10-05T23:00:00Z")}
+        nhl_command._announce_slate_summary(bot, "#nhl.fi", state)
+        assert self._sent(bot)[-1] == "NHL results 6.10.: EARLY 2-1 GAME (17000), LATE 1-0 GAME (17000)"
+
+    def test_a_failure_in_the_follow_up_never_stops_the_poll(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        with patch.object(nhl_command, "_retry_missing_attendance", side_effect=RuntimeError("boom")):
+            assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {1: 18000, 2: 17000}) is True
+        assert any("FINAL:" in m for m in self._sent(bot))

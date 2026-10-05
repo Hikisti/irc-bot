@@ -1,5 +1,6 @@
 import datetime
 import re
+import time
 from zoneinfo import ZoneInfo
 
 import requests
@@ -59,6 +60,10 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     # Attendance isn't in any of api-web.nhle.com's JSON (checked landing,
     # boxscore, play-by-play, right-rail, game-story) - only in NHL's HTML
     # Game Summary report, as "Attendance 19,250&nbsp;at&nbsp;Lenovo Center".
+    # The game report's attendance figure shows up 101-181 s after the final
+    # horn in about two games of three (measured over a full slate, issue #8);
+    # a missing figure is retried every poll for this long.
+    ATTENDANCE_RETRY_SECONDS = 240
     REPORTS_URL = "https://www.nhl.com/scores/htmlreports"
     ATTENDANCE_RE = re.compile(r"Attendance(?:\s|&nbsp;|<[^>]*>){0,40}?(\d[\d,]*)", re.I)
 
@@ -165,20 +170,33 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                     announced = self._announce_new_goals(irc_bot, channel, pbp, announced)
 
                 ended = self._is_ended(game)
+                final = prev.get("final")
                 if ended and not prev["ended"] and pbp is not None:
-                    self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
+                    final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
 
                 # Play-by-play fetch failed this cycle: `announced` is still
                 # the previous record, carried forward unchanged, so the next
                 # successful poll doesn't replay already-announced goals.
                 new_state[gid] = self._seed_snapshot(game)
                 new_state[gid]["announced"] = announced
+                if final:
+                    new_state[gid]["final"] = final
                 if not ended:
                     all_ended = False
             except Exception as e:
                 print(f"NHL: failed to process game {gid} in {channel}: {e}")
                 new_state[gid] = prev_state.get(gid) or self._seed_snapshot(game)
                 all_ended = False
+
+        try:
+            self._retry_missing_attendance(new_state)
+            if all_ended:
+                if any(self._awaiting_attendance(snap, time.monotonic()) for snap in new_state.values()):
+                    all_ended = False  # the slate summary waits for the figures that are still coming
+                else:
+                    self._announce_slate_summary(irc_bot, channel, new_state)
+        except Exception as e:
+            print(f"NHL: attendance follow-up failed in {channel}: {e}")
 
         self._set_state(channel, new_state)
         return all_ended
@@ -584,6 +602,54 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             irc_bot, channel,
             f"{self.FINAL_PREFIX} {home} {home_score}-{away_score} {away}{suffix}{attendance_str}",
         )
+        return {
+            "text": (
+                f"{(pbp.get('homeTeam') or {}).get('abbrev') or '?'} {home_score}-{away_score} "
+                f"{(pbp.get('awayTeam') or {}).get('abbrev') or '?'}{suffix}"
+            ),
+            "attendance": attendance,
+            "late": False,  # True once the figure arrived after the FINAL: line
+            "report": {"season": pbp.get("season"), "id": pbp.get("id")},
+            "start": pbp.get("startTimeUTC"),
+            "at": time.monotonic(),
+        }
+
+    def _retry_missing_attendance(self, state):
+        """Looks again for the attendance of every finished game whose FINAL:
+        line went out without it, until ATTENDANCE_RETRY_SECONDS after that
+        line. Updates the records in `state` in place."""
+        now = time.monotonic()
+        waiting = [gid for gid, snap in state.items() if self._awaiting_attendance(snap, now)]
+        found = self._fetch_concurrently(waiting, lambda gid: self._fetch_attendance(state[gid]["final"]["report"]))
+        for gid, attendance in found.items():
+            if attendance:
+                state[gid]["final"]["attendance"] = attendance
+                state[gid]["final"]["late"] = True
+                print(f"NHL: game {gid}: attendance {attendance} found "
+                      f"{time.monotonic() - state[gid]['final']['at']:.0f} s after the FINAL line")
+
+    def _awaiting_attendance(self, snap, now) -> bool:
+        final = snap.get("final")
+        return bool(final) and not final["attendance"] and now - final["at"] < self.ATTENDANCE_RETRY_SECONDS
+
+    def _announce_slate_summary(self, irc_bot, channel, state):
+        """One results list with every tracked game's attendance, posted when
+        the slate is over - but only if some figure arrived after its FINAL:
+        line, since otherwise those lines already said everything (issue #8).
+        A figure that never arrived is simply left out."""
+        finals = [(snap["slate"], snap["final"]) for snap in state.values() if snap.get("final")]
+        if not any(final["late"] for _, final in finals):
+            return
+        finals.sort(key=lambda item: item[1]["start"] or "")
+        label = self._result_date_label(
+            {i: {"startTimeUTC": final["start"]} for i, (_, final) in enumerate(finals)}, finals[0][0],
+        )
+        items = [
+            f"{final['text']} ({final['attendance']})" if final["attendance"] else final["text"]
+            for _, final in finals
+        ]
+        for message in self._chunk(f"NHL results {label}: ", items, ", "):
+            self._safe_send(irc_bot, channel, message)
 
     def _official_result(self, game_id, slate):
         """((home, away), lastPeriodType) from /score/{slate} for one game,
