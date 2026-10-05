@@ -100,8 +100,7 @@ class URLFetcher:
             response = self.session.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()
 
-            response.encoding = response.apparent_encoding
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(self._page_text(response), "html.parser")
 
             og_title = soup.find("meta", property="og:title")
             if og_title and og_title.get("content"):
@@ -114,6 +113,25 @@ class URLFetcher:
 
         except Exception as e:
             return format_request_error(e, "the webpage")
+
+    CHARSET_PATTERN = re.compile(r"charset=([^;\s]+)", re.IGNORECASE)
+
+    def _page_text(self, response) -> str:
+        """The page decoded the way its server says, not the way a guess
+        says: the statistical guess (`apparent_encoding`) read a UTF-8 Yle
+        page as mac_greek and turned every ä/ö into Greek letters (issue
+        #24). With no declared charset, UTF-8 if the bytes are valid UTF-8
+        (requests would otherwise default to ISO-8859-1), and only then
+        the guess - the case it was added for."""
+        declared = self.CHARSET_PATTERN.search(response.headers.get("content-type", ""))
+        if declared:
+            response.encoding = declared.group(1).strip("\"'")
+            return response.text
+        try:
+            return response.content.decode("utf-8")
+        except UnicodeDecodeError:
+            response.encoding = response.apparent_encoding
+            return response.text
 
     def get_youtube_info(self, url):
         """

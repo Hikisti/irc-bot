@@ -11,6 +11,8 @@ def make_response(text="", status_code=200, apparent_encoding="utf-8"):
     resp.status_code = status_code
     resp.text = text
     resp.apparent_encoding = apparent_encoding
+    resp.content = text.encode("utf-8")
+    resp.headers = {"content-type": "text/html; charset=utf-8"}
     resp.raise_for_status = MagicMock()
     if status_code >= 400:
         resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
@@ -164,6 +166,61 @@ class TestGetTitle:
         with patch.object(fetcher, "get_generic_title", side_effect=RuntimeError("boom")):
             result = fetcher.get_title("https://example.com/page")
         assert "Error fetching title: boom" in result
+
+
+def real_response(body: bytes, content_type=None):
+    """A real requests.Response, so the charset handling under test is
+    requests' own and not a mock's."""
+    resp = requests.Response()
+    resp.status_code = 200
+    resp._content = body
+    if content_type:
+        resp.headers["content-type"] = content_type
+    return resp
+
+
+class TestPageEncoding:
+    """Issue #24: a statistical charset guess must not override a declared one."""
+
+    YLE = "Glen Kamaran lähtö Huuhkajista voi jopa kostautua QPR:lle – Palloliitto aikoo viedä asian Fifalle"
+    HTML = '<html><head><meta property="og:title" content="{}"><title>x</title></head></html>'
+
+    def _title(self, fetcher, resp):
+        with patch.object(fetcher.session, "get", return_value=resp):
+            return fetcher.get_generic_title("https://example.com/a")
+
+    def test_declared_utf8_is_not_overridden_by_a_wrong_guess(self, fetcher):
+        """The real case: apparent_encoding said mac_greek for this page."""
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), "text/html; charset=utf-8")
+        with patch.object(requests.Response, "apparent_encoding", "mac_greek"):
+            assert self._title(fetcher, resp) == self.YLE
+
+    def test_charset_with_quotes_and_other_parameters(self, fetcher):
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), 'text/html; charset="UTF-8"; x=y')
+        assert self._title(fetcher, resp) == self.YLE
+
+    def test_a_declared_legacy_charset_is_honoured(self, fetcher):
+        resp = real_response(self.HTML.format("Häkkinen").encode("iso-8859-1"), "text/html; charset=iso-8859-1")
+        assert self._title(fetcher, resp) == "Häkkinen"
+
+    def test_an_unknown_declared_charset_does_not_break_the_title(self, fetcher):
+        resp = real_response(self.HTML.format("Plain").encode("utf-8"), "text/html; charset=no-such-charset")
+        assert self._title(fetcher, resp) == "Plain"
+
+    def test_no_declaration_and_valid_utf8_is_read_as_utf8(self, fetcher):
+        """requests would default a header without charset to ISO-8859-1."""
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), "text/html")
+        with patch.object(requests.Response, "apparent_encoding", "mac_greek"):
+            assert self._title(fetcher, resp) == self.YLE
+
+    def test_no_content_type_at_all_is_read_as_utf8(self, fetcher):
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"))
+        assert self._title(fetcher, resp) == self.YLE
+
+    def test_no_declaration_and_not_utf8_uses_the_guess(self, fetcher):
+        resp = real_response(self.HTML.format("Häkkinen").encode("iso-8859-1"), "text/html")
+        with patch.object(requests.Response, "apparent_encoding", "iso-8859-1"):
+            assert self._title(fetcher, resp) == "Häkkinen"
 
 
 class TestDetectAndFetch:
