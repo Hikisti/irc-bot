@@ -148,7 +148,10 @@ goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens | the 
 Chinakhov (Pittsburgh Penguins) was disallowed (offside challenge)`. The reason comes from the
 coach's-challenge stoppage the feed records near the goal (offside, goaltender interference, or just
 "challenge"); a challenge that failed, which is followed by a bench penalty, is not taken as a reason.
-Goals that were already in the feed when tracking started are never retracted. A feed with no plays at
+If a new goal takes the running score of a goal that has only just left the feed (seen when the feed corrects a wrong
+first scorer: the first entry disappears and a new one appears seconds later), nothing is retracted: the new goal is
+announced and the first line stays, since the goal was not disallowed. Goals that were already in the feed when
+tracking started are never retracted. A feed with no plays at
 all, or with no goals while two or more announced ones are missing at once, looks like a broken response
 and is not counted as a miss. The scorer or assists
 in a line can still be early guesses. `!nhl next` looks up the next

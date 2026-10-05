@@ -310,9 +310,15 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             announced again, and not retracted unless it stays away;
           - the same goal listed under two ids at once: announced once;
           - a goal removed and a different goal later reaching the same
-            running score (a disallowed goal, then the next real one): the
-            old ids are gone, so the new goal is announced and the old one
-            is reported gone with it;
+            running score: the old ids are gone, so the new goal is announced.
+            If the old goal had already been missing for long enough it was
+            retracted on its own (a disallowed goal, then the team's next
+            goal). If the new goal arrives sooner, the feed has most likely
+            replaced a first entry with the corrected one (the first scorer
+            named was wrong: seen as a removal and a new goal 20 s apart, the
+            same running score, the first scorer then credited with an assist),
+            which is not a disallowed goal, so nothing is retracted and the
+            old line is left as it was;
           - a goal whose running score was renumbered, but whose id was
             already announced: known, not announced again;
           - an announced goal that stays missing for
@@ -350,8 +356,6 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                 record[key]["ids"] += [i for i in ids if i not in record[key]["ids"]]
                 record[key]["missing"] = 0
                 continue
-            if rec is not None and rec["posted"] is not None:
-                gone.append(rec["posted"])  # its ids are gone and another goal took its place
             new.append(plays[0])
             record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
 

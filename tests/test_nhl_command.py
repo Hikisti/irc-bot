@@ -1338,10 +1338,24 @@ class TestRetraction:
 
     # -- replaced by the next goal -----------------------------------------------
 
-    def test_a_goal_replaced_at_once_is_retracted_before_the_new_one_is_announced(self, nhl_command):
+    def test_a_goal_replaced_at_once_is_announced_without_calling_the_old_one_disallowed(self, nhl_command):
+        # real case: a first entry by player A, removed 20 s later, and 20 s after that the same goal
+        # (same team, same running score) under player B: a correction, not a disallowed goal
         old, new = self._goal(1, scorer=1), self._goal(2, scorer=2)
         lines = self._run(nhl_command, [self._pbp(old), self._pbp(new)])
-        assert len(lines) == 3 and "NO GOAL:" in lines[1] and "P2 X" in lines[2] and "NO GOAL:" not in lines[2]
+        assert len(lines) == 2 and "P1 X" in lines[0] and "P2 X" in lines[1]
+        assert self._retractions(lines) == []
+
+    def test_a_replacement_after_a_miss_or_two_is_still_not_a_retraction(self, nhl_command):
+        old, new = self._goal(1, scorer=1), self._goal(2, scorer=2)
+        lines = self._run(nhl_command, [self._pbp(old), self._quiet(), self._quiet(), self._pbp(new)])
+        assert self._retractions(lines) == [] and len(self._goals(lines)) == 2
+
+    def test_a_goal_after_one_that_was_retracted_on_its_own_is_announced_and_nothing_else_is_said(self, nhl_command):
+        disallowed, next_goal = self._goal(1, scorer=1), self._goal(2, scorer=2, time_in_period="15:00")
+        feeds = [self._pbp(disallowed)] + [self._quiet()] * 4 + [self._pbp(next_goal)]
+        lines = self._run(nhl_command, feeds)
+        assert len(self._retractions(lines)) == 1 and len(self._goals(lines)) == 2  # one retraction, from the misses
 
     def test_two_goals_gone_at_once_while_another_goal_is_still_there_give_two_retractions(self, nhl_command):
         a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2, time_in_period="08:00")
