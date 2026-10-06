@@ -1576,6 +1576,27 @@ class TestFinalScoreFromScoreEndpoint:
         message = self._final(nhl_command, pbp, scores)
         assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT)"
 
+    def test_a_header_that_disagrees_is_logged_with_both_values(self, nhl_command, capsys):
+        stale = make_pbp(game_id=self.GID, home_score=2, away_score=2, last_period_type=None)
+        self._final(nhl_command, stale, {self.GID: self._official(3, 2)})
+        assert (f"NHL: game {self.GID}: the play-by-play header says 2-2 REG at FINAL, "
+                "the score endpoint says 3-2 OT; using the endpoint's") in capsys.readouterr().out
+
+    def test_a_header_that_agrees_logs_nothing(self, nhl_command, capsys):
+        for header_type, official_type in ((None, "REG"), ("OT", "OT")):
+            pbp = make_pbp(game_id=self.GID, home_score=3, away_score=2, last_period_type=header_type)
+            self._final(nhl_command, pbp, {self.GID: self._official(3, 2, last_period=official_type)})
+        assert capsys.readouterr().out == ""
+
+    def test_a_missing_official_result_is_logged(self, nhl_command, capsys):
+        self._final(nhl_command, make_pbp(game_id=self.GID, home_score=3, away_score=2), {})
+        assert (f"NHL: game {self.GID}: no result from the score endpoint for the FINAL line, "
+                "using the play-by-play header") in capsys.readouterr().out
+
+    def test_without_a_slate_nothing_is_logged(self, nhl_command, capsys):
+        nhl_command._announce_end(MagicMock(), "#nhl.fi", make_pbp(home_score=3, away_score=2))
+        assert "score endpoint" not in capsys.readouterr().out
+
     def test_without_a_slate_no_request_is_made(self, nhl_command):
         bot = MagicMock()
         with patch.object(nhl_command, "_fetch_scores") as fetch, \

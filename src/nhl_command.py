@@ -589,7 +589,15 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         # while the game was in OVER, in every case watched. See issue #12.
         official = self._official_result(pbp.get("id"), slate)
         if official:
+            shown = lambda period_type: period_type if period_type in ("OT", "SO") else "REG"  # as the line shows it
+            if (official[0], shown(official[1])) != ((home_score, away_score), shown(last_period_type)):
+                print(f"NHL: game {pbp.get('id')}: the play-by-play header says "
+                      f"{home_score}-{away_score} {shown(last_period_type)} at FINAL, the score endpoint says "
+                      f"{official[0][0]}-{official[0][1]} {shown(official[1])}; using the endpoint's")
             (home_score, away_score), last_period_type = official
+        elif slate:
+            print(f"NHL: game {pbp.get('id')}: no result from the score endpoint for the FINAL line, "
+                  f"using the play-by-play header")
 
         suffix = f" ({last_period_type})" if last_period_type in ("OT", "SO") else ""
 
