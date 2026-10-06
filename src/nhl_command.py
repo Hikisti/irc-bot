@@ -171,13 +171,17 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
                 ended = self._is_ended(game)
                 final = prev.get("final")
-                if ended and not prev["ended"] and pbp is not None:
-                    final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
+                if ended and not prev["ended"]:
+                    if pbp is None:
+                        ended = False  # no FINAL: without the play-by-play; try again next poll
+                    else:
+                        final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
 
                 # Play-by-play fetch failed this cycle: `announced` is still
                 # the previous record, carried forward unchanged, so the next
                 # successful poll doesn't replay already-announced goals.
                 new_state[gid] = self._seed_snapshot(game)
+                new_state[gid]["ended"] = ended
                 new_state[gid]["announced"] = announced
                 if final:
                     new_state[gid]["final"] = final
@@ -340,7 +344,10 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             which is not a disallowed goal, so nothing is retracted and the
             old line is left as it was;
           - a goal whose running score was renumbered, but whose id was
-            already announced: known, not announced again;
+            already announced: known, not announced again. When the score it
+            moved to belonged to another announced goal, that goal is the one
+            that is gone (a disallowed goal renumbers the team's later goals
+            into its place) and is retracted in its turn;
           - an announced goal that stays missing for
             RETRACT_AFTER_MISSING_POLLS polls: reported gone.
         New goals come back in play order across both teams."""
@@ -369,12 +376,19 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                 continue
             moved = next((k for k, r in record.items()
                           if k != key and not r["retracted"] and any(i in r["ids"] for i in ids)), None)
-            if rec is None and moved is not None:
+            if moved is not None:
                 print(f"NHL: game {pbp.get('id')}: goal {self._key_text(moved)} is now "
                       f"{self._key_text(key)}, not announced again")
+                displaced = record.get(key)
                 record[key] = record.pop(moved)  # renumbered: same goal under a new key
                 record[key]["ids"] += [i for i in ids if i not in record[key]["ids"]]
                 record[key]["missing"] = 0
+                if displaced is not None and not displaced["retracted"]:
+                    # The goal that used to have this score is the one that is gone (a
+                    # disallowed goal renumbers the team's later goals into its place):
+                    # keep it under a key no play can have, so it counts as missing and
+                    # is retracted after the usual wait.
+                    record[("displaced", *displaced["ids"])] = displaced
                 continue
             new.append(plays[0])
             record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
@@ -589,12 +603,15 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         # while the game was in OVER, in every case watched. See issue #12.
         official = self._official_result(pbp.get("id"), slate)
         if official:
+            (official_home, official_away), official_type = official
+            if official_type is None:
+                official_type = last_period_type
             shown = lambda period_type: period_type if period_type in ("OT", "SO") else "REG"  # as the line shows it
-            if (official[0], shown(official[1])) != ((home_score, away_score), shown(last_period_type)):
+            if ((official_home, official_away), shown(official_type)) != ((home_score, away_score), shown(last_period_type)):
                 print(f"NHL: game {pbp.get('id')}: the play-by-play header says "
                       f"{home_score}-{away_score} {shown(last_period_type)} at FINAL, the score endpoint says "
-                      f"{official[0][0]}-{official[0][1]} {shown(official[1])}; using the endpoint's")
-            (home_score, away_score), last_period_type = official
+                      f"{official_home}-{official_away} {shown(official_type)}; using the endpoint's")
+            home_score, away_score, last_period_type = official_home, official_away, official_type
         elif slate:
             print(f"NHL: game {pbp.get('id')}: no result from the score endpoint for the FINAL line, "
                   f"using the play-by-play header")
@@ -663,8 +680,10 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         """((home, away), lastPeriodType) from /score/{slate} for one game,
         or None when it can't be had (no slate, request failed, game not
         listed, no numeric score) - the caller then keeps the play-by-play
-        header's values. Always a fresh request: this is the one moment a
-        15 s old copy could still be the stale one."""
+        header's values. lastPeriodType is None when that game carries no
+        gameOutcome, which also leaves the header's value alone. Always a
+        fresh request: this is the one moment a 15 s old copy could still
+        be the stale one."""
         if not slate or game_id is None:
             return None
         self.__dict__.get("_score_cache", {}).pop(slate, None)
@@ -672,7 +691,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         score = self._score_pair(game) if game else None
         if score is None:
             return None
-        return score, (game.get("gameOutcome") or {}).get("lastPeriodType") or ""
+        return score, (game.get("gameOutcome") or {}).get("lastPeriodType")
 
     def _fetch_attendance(self, pbp):
         """The game's attendance as an int, or None if it can't be had -

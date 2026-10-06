@@ -286,6 +286,34 @@ class TestAnnounceEnd:
         assert bot.send_message.call_args[0][1].endswith("(SO)")
 
 
+class TestFailedFinalFetch:
+    """Issue #26: a game that turns FINAL in a poll whose play-by-play request
+    fails is not marked as ended, so the next poll still sends its FINAL: line."""
+
+    def _poll(self, nhl_command, bot, pbp):
+        game = make_schedule_game(gid=1, game_state="FINAL", home_score=3, away_score=2)
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=18000):
+            return nhl_command._poll_once(bot, "#nhl.fi")
+
+    def _finals(self, bot):
+        return [c[0][1] for c in bot.send_message.call_args_list if "FINAL:" in c[0][1]]
+
+    def test_the_final_line_is_sent_by_the_next_poll_and_only_once(self, nhl_command):
+        bot = MagicMock()
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+        }}
+        pbp = make_pbp(game_id=1, home_score=3, away_score=2, game_state="FINAL")
+        assert self._poll(nhl_command, bot, None) is False  # the tracker must not stop on the failed poll
+        assert self._finals(bot) == []
+        assert self._poll(nhl_command, bot, pbp) is True
+        assert len(self._finals(bot)) == 1
+        self._poll(nhl_command, bot, pbp)
+        assert len(self._finals(bot)) == 1
+
+
 class TestFetchPlayByPlay:
     def test_happy_path_returns_json(self, nhl_command):
         with patch.object(nhl_command.session, "get", return_value=make_response(make_pbp())):
@@ -1576,6 +1604,18 @@ class TestFinalScoreFromScoreEndpoint:
         message = self._final(nhl_command, pbp, scores)
         assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT)"
 
+    def test_an_endpoint_game_without_game_outcome_keeps_the_headers_ot_mark(self, nhl_command, capsys):
+        """Issue #27: no gameOutcome is not a statement that it was regulation."""
+        pbp = make_pbp(game_id=self.GID, home_score=3, away_score=2, last_period_type="OT")
+        message = self._final(nhl_command, pbp, {self.GID: self._official(3, 2, last_period=None)})
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers (OT)"
+        assert capsys.readouterr().out == ""
+
+    def test_the_endpoint_score_is_still_used_when_it_has_no_game_outcome(self, nhl_command):
+        stale = make_pbp(game_id=self.GID, home_score=2, away_score=2, last_period_type=None)
+        message = self._final(nhl_command, stale, {self.GID: self._official(3, 2, last_period=None)})
+        assert message == f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 3-2 Florida Panthers"
+
     def test_a_header_that_disagrees_is_logged_with_both_values(self, nhl_command, capsys):
         stale = make_pbp(game_id=self.GID, home_score=2, away_score=2, last_period_type=None)
         self._final(nhl_command, stale, {self.GID: self._official(3, 2)})
@@ -1740,3 +1780,37 @@ class TestAttendanceSummary:
         with patch.object(nhl_command, "_retry_missing_attendance", side_effect=RuntimeError("boom")):
             assert self._poll(nhl_command, bot, {1: "FINAL", 2: "FINAL"}, {1: 18000, 2: 17000}) is True
         assert any("FINAL:" in m for m in self._sent(bot))
+
+
+class TestRenumberedGoals:
+    """Issue #25: a disallowed goal renumbers the same team's later goals into
+    its place. The later goal is not announced again, and it is the goal that
+    is gone that gets retracted."""
+
+    HOME, AWAY = TestRetraction.HOME, TestRetraction.AWAY
+    _pbp, _quiet, _goal, _run = TestRetraction._pbp, TestRetraction._quiet, TestRetraction._goal, TestRetraction._run
+    _retractions, _goals = TestRetraction._retractions, TestRetraction._goals
+
+    def _scenario(self):
+        first = self._goal(1, team=self.HOME, home=1, away=0, scorer=1, time_in_period="04:00")
+        second = self._goal(2, team=self.HOME, home=2, away=0, scorer=2, time_in_period="06:00")
+        renumbered = self._goal(2, team=self.HOME, home=1, away=0, scorer=2, time_in_period="06:00")
+        return first, second, renumbered
+
+    def test_the_later_goal_is_not_announced_again(self, nhl_command):
+        first, second, renumbered = self._scenario()
+        lines = self._run(nhl_command, [self._pbp(first), self._pbp(first, second)] + [self._pbp(renumbered)] * 3)
+        assert len(self._goals(lines)) == 2
+
+    def test_the_disallowed_goal_is_retracted_and_the_valid_one_is_not(self, nhl_command):
+        first, second, renumbered = self._scenario()
+        lines = self._run(nhl_command, [self._pbp(first), self._pbp(first, second)] + [self._pbp(renumbered)] * 8)
+        retractions = self._retractions(lines)
+        assert len(retractions) == 1
+        assert "04:00" in retractions[0] and "P1" in retractions[0] and "P2" not in retractions[0]
+
+    def test_a_displaced_goal_nobody_saw_posted_is_never_retracted(self, nhl_command):
+        first, second, renumbered = self._scenario()
+        record = {("score", self.HOME, 1, 0): seeded(1)}
+        lines = self._run(nhl_command, [self._pbp(first, second)] + [self._pbp(renumbered)] * 8, seeded_record=record)
+        assert len(self._goals(lines)) == 1 and self._retractions(lines) == []
