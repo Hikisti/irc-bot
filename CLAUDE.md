@@ -133,9 +133,13 @@ consistent, deliberate discipline - keep following it:
   against real games.
 - Problems and ideas that aren't being fixed now (a known quirk, a
   deferred option, a parked decision) go in GitHub Issues, not in code
-  comments, memory, or a TODO file. The repo is public, so an issue never
-  holds server details, hostnames, paths, keys, or anything from
-  `DEPLOY.md`. Creating or closing one is outward-facing: confirm first.
+  comments, memory, or a TODO file. The repo is public, so nothing on
+  GitHub - an issue or its comments, a commit message, a PR, a tracked
+  file - ever holds server details: IP addresses, hostnames, login or user
+  names, paths, the service name, keys, or anything from `DEPLOY.md`.
+  Journal and log excerpts are quoted only after stripping host prefixes,
+  user addresses and chat. Creating or closing an issue is outward-facing:
+  confirm first.
   Every new issue gets one `priority: high|medium|low` label (high = a
   visible error in a channel that has already happened) and one area label
   (`nhl`, `liiga`, `pesis`, `imdb`); the pinned tracking issue holds the
