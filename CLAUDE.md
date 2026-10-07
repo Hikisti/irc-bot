@@ -40,7 +40,12 @@ not what it is.
   trackers' own fetch methods (`_fetch_scores`, `_fetch_play_by_play`,
   `_current_season`), so renaming one of those means updating `tools/` too.
   `tests/test_tools.py` covers their pure parts; the polling loops are
-  verified by running them.
+  verified by running them. `journal_report.py` is the odd one out: it reads
+  no feed, it turns the bot's own journal (`journalctl -a` text) into a
+  per-game report and an anomalies list. It parses the bot's message
+  wording (GOAL:/NO GOAL:/FINAL: and the `NHL:` prints), so changing one of
+  those means updating it; `tests/test_journal_report.py` round-trips the
+  bot's own message builders to catch that.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on

@@ -21,6 +21,27 @@ git-ignored) and prints the same lines. Every line carries UTC and the bot's dis
 | `state_watch.py DATE [hours]` | NHL `/score/DATE` | every change of a game's state (`LIVE`, `CRIT`, `OVER`, `FINAL`, `OFF`, ...) with score, period and clock; shows how long the transitional `OVER` state lasts |
 | `liiga_sampler.py DATE [hours]` | Liiga games feed (`runkosarja`) every 10 s | every poll with the response's CDN headers (`Age`, cache node) and each live game's period / `gameTime` / score; flags every **backwards** step of clock, score, period or `ended`; `FIELD` lines when `spectators` or `finishedType` change; a summary at the end |
 
+### `journal_report.py` - a report on the bot's own journal
+
+Not a probe: it reads text, not the feeds. It turns a night's `journalctl -a` output (a file or
+stdin) into a plain-text report per channel and game: the `GOAL:` / `NO GOAL:` / `FINAL:` lines the
+bot posted, the delay from the last goal to the FINAL, whether and when the attendance arrived, the
+lines the bot journals about its own decisions (a repeated goal ignored, a goal retracted, the FINAL
+score source), and an **anomalies** list: a duplicate `GOAL:` line, a goal retracted and then
+announced again, a `NO GOAL:` with no reason, a FINAL that differs from the last goal, a FINAL that
+never got its attendance, goals without a FINAL, restarts and errors.
+
+    <journalctl command for the bot's unit> -a --since "..." --until "..." | python3 tools/journal_report.py
+    python3 tools/journal_report.py journal.txt --year 2026
+
+It uses only the bot's own lines and ignores incoming chat; host names, process ids, nicks and
+addresses never reach the report, and printed free text is scrubbed of home paths, addresses and
+user@host strings. Standard library only, so it runs on the server or on a laptop with a copy of the
+journal. NHL and Liiga lines are covered, the Pesis trackers' are not. A raw journal file contains
+chat and addresses: keep it in `tools/logs/` (ignored by git), never commit or post it.
+(`tests/test_journal_report.py` includes round trips through the bot's own message builders, so a
+reworded message breaks a test there.)
+
 `DATE` is `YYYY-MM-DD` (for the NHL, the **US-Eastern** date of the slate; for Liiga, the local
 game date). `hours` is the longest the script runs; each also stops by itself when its games are
 over. Running a script without arguments prints its usage.
