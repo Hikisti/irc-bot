@@ -1354,8 +1354,15 @@ class TestRetraction:
         text = self._retractions(lines)[0]
         assert "NO GOAL:" in text
         assert "Carolina Hurricanes 0-0 Florida Panthers" in text
-        assert "the 05:25 3rd goal by P1 X (Florida Panthers) was disallowed" in text
+        # clock and period right after the score, as in the GOAL: line; never "the 3rd goal"
+        assert f"Florida Panthers{RESET} 05:25 3rd | P1 X (Florida Panthers) was disallowed" in text
+        assert "the 05:25" not in text
         assert "(" not in text.split("disallowed", 1)[1]  # no explanation without a stoppage
+
+    def test_a_goal_without_a_clock_or_period_label_has_no_double_space(self, nhl_command):
+        posted = {"team": "Florida Panthers", "scorer_name": "P1 X", "label": "", "period": 3, "clock": ""}
+        text = nhl_command._format_retraction(self._quiet(), posted)
+        assert f"Florida Panthers{RESET} | P1 X (Florida Panthers) was disallowed" in text
 
     def test_a_goal_that_returns_after_being_retracted_is_announced_again(self, nhl_command):
         goal = self._goal()
@@ -1433,7 +1440,7 @@ class TestRetraction:
     def test_the_label_of_an_overtime_goal(self, nhl_command):
         goal = self._goal(period_number=4, period_type="OT", time_in_period="03:18")
         text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4))[0]
-        assert "the 03:18 OT goal" in text
+        assert f"{RESET} 03:18 OT | P1 X" in text
 
     # -- the score shown ------------------------------------------------------------
 

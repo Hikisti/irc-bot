@@ -452,9 +452,12 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         home_score, away_score = self._current_score(pbp)
         reason = self._challenge_reason(pbp, posted.get("period"), self._clock_seconds(posted.get("clock")))
         why = f" ({reason})" if reason else ""
+        # Same shape as the GOAL: line (score, then clock and period). An earlier
+        # "the 11:47 3rd goal by ..." was read as "the 3rd goal" - the 3rd is the period.
+        when = f" {posted['label']}" if posted.get("label") else ""
         return (
-            f"{self.NO_GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
-            f" | the {posted['label']} goal by {posted['scorer_name']} ({posted['team']}) was disallowed{why}"
+            f"{self.NO_GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}{when}"
+            f" | {posted['scorer_name']} ({posted['team']}) was disallowed{why}"
         )
 
     def _current_score(self, pbp) -> tuple:

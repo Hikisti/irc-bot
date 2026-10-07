@@ -148,8 +148,9 @@ was seen listing one goal twice under different ids and dropping a goal for a po
 back: neither is announced a second time, and the next goal after a disallowed one (same running score)
 still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
 minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving the score as the remaining
-goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens | the 05:25 3rd goal by Egor
-Chinakhov (Pittsburgh Penguins) was disallowed (offside challenge)`. The reason comes from the
+goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 3rd | Egor Chinakhov (Pittsburgh
+Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the
+`GOAL:` line). The reason comes from the
 coach's-challenge stoppage the feed records near the goal (offside, goaltender interference, or just
 "challenge"); a challenge that failed, which is followed by a bench penalty, is not taken as a reason.
 If a new goal takes the running score of a goal that has only just left the feed (seen when the feed corrects a wrong
