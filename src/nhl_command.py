@@ -60,12 +60,12 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     # Attendance isn't in any of api-web.nhle.com's JSON (checked landing,
     # boxscore, play-by-play, right-rail, game-story) - only in NHL's HTML
     # Game Summary report, as "Attendance 19,250&nbsp;at&nbsp;Lenovo Center".
-    # The game report's attendance figure shows up 101-181 s after the final
-    # horn in about two games of three (measured over a full slate, issue #8);
-    # a missing figure is retried every poll for this long.
-    ATTENDANCE_RETRY_SECONDS = 240
     REPORTS_URL = "https://www.nhl.com/scores/htmlreports"
     ATTENDANCE_RE = re.compile(r"Attendance(?:\s|&nbsp;|<[^>]*>){0,40}?(\d[\d,]*)", re.I)
+    # The report's attendance figure shows up 61-212 s after the final horn in
+    # about two games of three (17 games on two nights, issue #8; one more took
+    # longer than 240 s); a missing figure is retried every poll for this long.
+    ATTENDANCE_RETRY_SECONDS = 420
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)

@@ -140,9 +140,9 @@ shots aren't distinguishable in this feed. The attendance isn't in NHL's JSON AP
 read from NHL's HTML game-summary report with one extra request when a game ends, and simply left
 off if that report isn't available yet or NHL changes the page. The report's figure often appears only
 1.5-3 minutes after the final horn (about two games in three), so a missing figure is looked up again every
-poll for four minutes, and when the last game is over one `NHL results D.M.: DET 2-3 WPG (18347), ...` list
+poll for seven minutes, and when the last game is over one `NHL results D.M.: DET 2-3 WPG (18347), ...` list
 with every figure follows - but only if some figure arrived after its `FINAL:` line - before the "all
-finished" message, which waits up to those four minutes. Each goal is remembered by its team
+finished" message, which waits up to those seven minutes. Each goal is remembered by its team
 and running score (with its event id as a second check), not by a count per team, because the feed
 was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
 back: neither is announced a second time, and the next goal after a disallowed one (same running score)
