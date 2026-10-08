@@ -123,9 +123,6 @@ class LiigaCommand(LiveTrackerCommand):
 
     # ---- start-time summary -------------------------------------------
 
-    def _format_tracking_summary(self, items):
-        return self._format_games_summary(items, with_scores=True)
-
     def _format_games_summary(self, games, with_scores=False) -> str:
         """Groups games by scheduled start time, e.g.
         '17:00 HIFK-Ilves, Tappara-Kärpät | 18:30 JYP-Lukko'. With

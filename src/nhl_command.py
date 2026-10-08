@@ -219,9 +219,6 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
     # ---- start-time summary -------------------------------------------
 
-    def _format_tracking_summary(self, items):
-        return self._format_games_summary(items, with_scores=True)
-
     def _format_games_summary(self, games, with_scores=False) -> str:
         """Groups games by scheduled start time, e.g.
         '21:00 CAR-FLA, PHI-BOS | 22:00 EDM-WPG'. Uses each team's short
