@@ -278,6 +278,62 @@ class TestListenDispatch:
         mock_process.assert_called_once_with(line.decode().strip())
 
 
+class TestIncomingLinesInTheJournal:
+    """Issue #31: the journal keeps the server's own answers, not what people say or where they are."""
+
+    def _journal(self, bot, line, capsys):
+        bot._log_incoming(line)
+        return capsys.readouterr().out
+
+    @pytest.mark.parametrize("line", [
+        ":alice!a@host.example PRIVMSG #chan :hello there",
+        ":alice!a@host.example NOTICE #chan :hello there",
+        ":alice!a@host.example JOIN #chan",
+        ":alice!a@host.example PART #chan :bye",
+        ":alice!a@host.example QUIT :Ping timeout",
+        ":alice!a@host.example NICK :alice_",
+        ":alice!a@host.example KICK #chan bob :no",
+        ":alice!a@host.example MODE #chan +o bob",
+    ])
+    def test_chat_and_who_is_where_are_not_journaled(self, bot, capsys, line):
+        assert self._journal(bot, line, capsys) == ""
+
+    @pytest.mark.parametrize("line", [
+        ":irc.example.net 001 KukistiBot :Welcome to the network",
+        ":irc.example.net 404 KukistiBot #chan :Cannot send to channel",
+        "PING :irc.example.net",
+        "ERROR :Closing Link: host.example (Quit)",
+        ":irc.example.net CAP * LS :multi-prefix",
+    ])
+    def test_the_servers_own_answers_are_journaled(self, bot, capsys, line):
+        assert self._journal(bot, line, capsys) == f"< {line}\n"
+
+    def test_chat_that_mentions_a_numeric_or_a_command_is_still_not_journaled(self, bot, capsys):
+        assert self._journal(bot, ":alice!a@host.example PRIVMSG #chan :001 PING 404 ERROR", capsys) == ""
+
+    def test_a_chat_line_is_dispatched_even_though_it_is_not_journaled(self, bot, capsys):
+        line = b":alice!a@host.example PRIVMSG #chan :hello\r\n"
+        calls = {"n": 0}
+
+        def recv_then_stop(bufsize):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return line
+            bot.running = False
+            return b""
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+        mock_process.assert_called_once()
+        assert "hello" not in capsys.readouterr().out
+
+    def test_the_lines_the_bot_sends_are_still_journaled(self, bot, capsys):
+        bot.send_raw("PRIVMSG #chan :GOAL: A 1-0 B")
+        assert "> PRIVMSG #chan :GOAL: A 1-0 B" in capsys.readouterr().out
+
+
 class TestListenBuffering:
     """Regression coverage for lines split across two recv() calls (e.g.
     at the 2048-byte boundary) - a naive per-call split("\n") would

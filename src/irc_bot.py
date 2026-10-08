@@ -82,7 +82,7 @@ class IrcBot:
                     line = line.strip()
                     if not line:
                         continue
-                    print(f"< {line}")  # Debugging
+                    self._log_incoming(line)
 
                     if line.startswith("PING"):
                         self.pong(line)
@@ -113,6 +113,17 @@ class IrcBot:
                 print(f"DISCONNECTED: error in listen loop: {e}")
                 traceback.print_exc()
                 self.running = False
+
+    # What the journal keeps of the lines the server sends: the server's own answers (numerics such as
+    # 001 or the 404 that SEND REFUSED depends on, PING, ERROR, capability negotiation). Chat, joins,
+    # parts, quits and nick changes carry what other people said and their addresses, and are not kept.
+    LOGGED_INCOMING_COMMANDS = ("PING", "PONG", "ERROR", "CAP", "AUTHENTICATE")
+
+    def _log_incoming(self, line):
+        parts = line.split(" ", 2)
+        command = parts[1] if line.startswith(":") and len(parts) > 1 else parts[0]
+        if command.isdigit() or command.upper() in self.LOGGED_INCOMING_COMMANDS:
+            print(f"< {line}")
 
     def pong(self, message):
         """Respond to PING messages from the server."""
