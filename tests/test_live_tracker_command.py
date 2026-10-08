@@ -214,6 +214,28 @@ class TestPollLoop:
         mock_print_exc.assert_called_once()
 
 
+class TestPollIntervals:
+    """NHL and Liiga are polled every 45 s (less load on the unofficial APIs from the server's address);
+    the shared default, which Pesis keeps, is 30 s."""
+
+    def test_nhl_and_liiga_poll_every_45_seconds_and_the_default_and_pesis_stay_at_30(self):
+        from liiga_command import LiigaCommand
+        from nhl_command import NHLCommand
+        from pesis_command import PesisCommand
+        assert (NHLCommand.POLL_INTERVAL_SECONDS, LiigaCommand.POLL_INTERVAL_SECONDS) == (45, 45)
+        assert (PesisCommand.POLL_INTERVAL_SECONDS, LiveTrackerCommand.POLL_INTERVAL_SECONDS) == (30, 30)
+
+    def test_the_loop_waits_the_commands_own_interval_between_polls(self):
+        class Slow(MinimalTracker):
+            POLL_INTERVAL_SECONDS = 45
+        command = Slow()
+        stop_event = MagicMock()
+        stop_event.is_set.side_effect = [False, True]
+        command._poll_once = lambda irc_bot, channel, *ctx: False
+        command._poll_loop(MagicMock(), "#chan", stop_event)
+        stop_event.wait.assert_called_once_with(45)
+
+
 class TestSafeSend:
     def test_safe_send_swallows_exceptions(self, tracker):
         bot = MagicMock()

@@ -1332,21 +1332,28 @@ class TestRetraction:
 
     # -- when -----------------------------------------------------------------
 
-    def test_a_goal_gone_for_three_polls_is_not_retracted_and_not_repeated_when_it_returns(self, nhl_command):
+    def test_a_goal_gone_for_one_poll_less_than_the_limit_is_not_retracted_and_not_repeated_when_it_returns(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal), self._quiet(), self._quiet(), self._quiet(), self._pbp(goal)])
+        gap = [self._quiet()] * (nhl_command.RETRACT_AFTER_MISSING_POLLS - 1)
+        lines = self._run(nhl_command, [self._pbp(goal)] + gap + [self._pbp(goal)])
         assert self._retractions(lines) == [] and len(self._goals(lines)) == 1
 
     def test_the_miss_counter_starts_over_when_the_goal_returns(self, nhl_command):
         goal = self._goal()
-        gap = [self._quiet()] * 3
+        gap = [self._quiet()] * (nhl_command.RETRACT_AFTER_MISSING_POLLS - 1)
         lines = self._run(nhl_command, [self._pbp(goal)] + gap + [self._pbp(goal)] + gap)
-        assert self._retractions(lines) == []  # 3 + 3 missed polls, never 4 in a row
+        assert self._retractions(lines) == []  # never the limit's worth of missed polls in a row
 
-    def test_a_goal_gone_for_four_polls_is_retracted_once(self, nhl_command):
+    def test_a_goal_gone_for_the_limit_of_polls_is_retracted_once(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 7)
+        limit = nhl_command.RETRACT_AFTER_MISSING_POLLS
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * (limit + 3))
         assert len(self._retractions(lines)) == 1
+
+    def test_the_limit_of_polls_is_about_two_minutes_at_the_poll_interval(self, nhl_command):
+        """Issue #13: long enough for the flickers seen (up to 82 s), still news; the poll rate changed from 30 to 45 s."""
+        seconds = nhl_command.RETRACT_AFTER_MISSING_POLLS * nhl_command.POLL_INTERVAL_SECONDS
+        assert 100 <= seconds <= 150 and (nhl_command.RETRACT_AFTER_MISSING_POLLS - 1) * nhl_command.POLL_INTERVAL_SECONDS > 82
 
     def test_the_retraction_names_the_goal_and_the_current_score(self, nhl_command):
         goal = self._goal(scorer=1)
@@ -1371,8 +1378,9 @@ class TestRetraction:
 
     def test_fetch_failures_do_not_count_as_missing(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal), self._quiet(), self._quiet(), None, None, None, None, self._quiet()])
-        assert self._retractions(lines) == []  # only three real misses
+        limit = nhl_command.RETRACT_AFTER_MISSING_POLLS
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * (limit - 2) + [None] * 4 + [self._quiet()])
+        assert self._retractions(lines) == []  # only limit - 1 real misses: the failed fetches in between are not misses
 
     def test_goals_already_in_the_feed_when_tracking_started_are_never_retracted(self, nhl_command):
         record = {("score", self.AWAY, 0, 1): seeded(1)}

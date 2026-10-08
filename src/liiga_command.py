@@ -31,6 +31,9 @@ class LiigaCommand(LiveTrackerCommand):
     CHANNELS = ("#smliiga", "#veikkaus")
 
     DISPLAY_NAME = "Liiga"
+    # Polled every 45 s (the base class default is 30 s, which Pesis keeps): less load on the
+    # unofficial API, at the cost of up to 15 s later announcements.
+    POLL_INTERVAL_SECONDS = 45
     COMMAND_NAME = "!liiga"
     CACHE_SLUG = "Liiga"
     TRACKED_NOUN = "games"

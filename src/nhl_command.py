@@ -72,12 +72,15 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
     NO_GOAL_PREFIX = irc_prefix("NO GOAL:", RED)
 
+    # Polled every 45 s (the base class default is 30 s, which Pesis keeps): less load on the
+    # unofficial API from the server's address, at the cost of up to 15 s later announcements.
+    POLL_INTERVAL_SECONDS = 45
     # An announced goal is retracted once it has been missing from the feed
-    # for this many polls in a row (about 90-120 s at the 30 s poll rate):
+    # for this many polls in a row (about 90-135 s at the 45 s poll rate):
     # long enough to ride out a feed flicker (seen: 20 s and 82 s), short
     # enough to still be news. Goals have been seen to vanish for good
     # 101-281 s after appearing.
-    RETRACT_AFTER_MISSING_POLLS = 4
+    RETRACT_AFTER_MISSING_POLLS = 3
     # How far before/after a removed goal's clock a challenge stoppage may
     # sit and still be taken as its explanation (seen: from 31 s before the
     # goal to 2 s after it).

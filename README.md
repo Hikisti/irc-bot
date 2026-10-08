@@ -93,7 +93,7 @@ start shows what already happened. `!liiga next`/`!nhl next` keep the plain list
 `!superpesis`/`!ykkospesis` don't show scores yet (pesäpallo's per-jakso scoring needs its own
 format, and its not-yet-started data shape hasn't been seen live).
 
-`!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
+`!liiga start` polls today's Finnish Liiga (ice hockey) games every 45s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
 all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the next upcoming
 gameday (today if there's still something scheduled and not already finished, otherwise the next
@@ -127,7 +127,7 @@ plain title, so titles like "Blade Runner 2049" still work. The one known miss: 
 starts with `movie`/`series`/`tv` and whose remainder is also a title (e.g. "Movie 43") - use the
 IMDb ID for those.
 
-`!nhl start` polls today's NHL games every 30s in the channel it was started in (same lifecycle,
+`!nhl start` polls today's NHL games every 45s in the channel it was started in (same lifecycle,
 early-start guard, and already-finished guard as `!liiga start`), announcing goals and final scores
 as they happen, e.g. `GOAL: Carolina Hurricanes 1-0 Florida Panthers 04:31 1st | Carolina
 Hurricanes — Bradly Nadeau (assists: Mike Reilly)` and `FINAL: Carolina Hurricanes 3-2 Florida
@@ -146,7 +146,7 @@ finished" message, which waits up to those seven minutes. Each goal is remembere
 and running score (with its event id as a second check), not by a count per team, because the feed
 was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
 back: neither is announced a second time, and the next goal after a disallowed one (same running score)
-still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
+still is. A goal that was announced and then stays out of the feed for three polls in a row (about two
 minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving the score as the remaining
 goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 3rd | Egor Chinakhov (Pittsburgh
 Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the
