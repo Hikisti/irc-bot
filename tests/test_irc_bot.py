@@ -408,10 +408,9 @@ class TestConnect:
         assert f"BOT STARTED pid={os.getpid()}" in captured.out
 
     def test_successful_connect_logs_connected(self, bot, capsys):
-        # Patch time.sleep so the real 3s wait + "while self.running"
-        # loop can't block the test - the first sleep() call (before
-        # join_channels()) flips running off, same as a real shutdown
-        # would, so the loop below it never actually spins.
+        # Patch time.sleep so the "while self.running" loop can't block
+        # the test - its first sleep() call flips running off, same as a
+        # real shutdown would, so the loop never actually spins.
         with patch("irc_bot.socket.socket", return_value=bot.sock), \
              patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
              patch("irc_bot.threading.Thread"):
@@ -419,6 +418,19 @@ class TestConnect:
 
         captured = capsys.readouterr()
         assert f"CONNECTED: {bot.server}:{bot.port} as {bot.nickname}" in captured.out
+
+    def test_connect_registers_but_does_not_join_the_channels_itself(self, bot):
+        """Issue #32: a JOIN sent on a timer, before registration is complete, is refused with 451; the
+        channels are joined when the welcome (001) arrives."""
+        with patch("irc_bot.socket.socket", return_value=bot.sock), \
+             patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
+             patch("irc_bot.threading.Thread"), \
+             patch.object(bot, "join_channels") as mock_join, \
+             patch.object(bot, "send_raw") as mock_send:
+            bot.connect()
+
+        mock_join.assert_not_called()
+        assert [c.args[0].split()[0] for c in mock_send.call_args_list] == ["NICK", "USER"]
 
     def test_failed_connect_logs_connect_failed_with_traceback(self, bot, capsys):
         bot.sock.connect.side_effect = OSError("unreachable")
@@ -446,6 +458,15 @@ class TestConnect:
 
         mock_socket_cls.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
         assert b.sock is mock_socket_cls.return_value
+
+
+class TestJoinChannels:
+    def test_joins_every_configured_channel_in_order_with_a_pause_between(self, bot):
+        bot.channels = ["#a", "#b", "#c"]
+        with patch("irc_bot.time.sleep") as mock_sleep, patch.object(bot, "send_raw") as mock_send:
+            bot.join_channels()
+        assert [c.args[0] for c in mock_send.call_args_list] == ["JOIN #a", "JOIN #b", "JOIN #c"]
+        assert mock_sleep.call_count == 3
 
 
 class TestStop:

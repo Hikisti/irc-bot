@@ -45,9 +45,8 @@ class IrcBot:
             listener = threading.Thread(target=self.listen, daemon=True)
             listener.start()
 
-            # Wait a few seconds before joining channel
-            time.sleep(3)
-            self.join_channels()
+            # The channels are joined when the server's welcome (001) arrives, see listen():
+            # a JOIN sent earlier is refused with 451 until registration is complete.
 
             # Keep the bot running
             while self.running:
