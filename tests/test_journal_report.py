@@ -128,6 +128,7 @@ class TestParseLine:
         ("NHL: game 45: the play-by-play header says 2-2 REG at FINAL, the score endpoint says 3-2 OT; using the endpoint's",
          "disagree"),
         ("NHL: game 45: no result from the score endpoint for the FINAL line, using the play-by-play header", "no_endpoint"),
+        ("Liiga: game 7: Jokerit: announced goals missing from the feed 0 -> 1", "liiga_missing"),
         ("==== BOT STARTED pid=123 ====", "start"),
         ("DISCONNECTED: server closed the connection (EOF)", "disconnect"),
     ])
@@ -266,6 +267,15 @@ class TestRender:
                         sent("01:50:00", CH, final_text("Reds", 1, 0, "Blues", att=1000)))
         assert "nick" not in out and "host-a" not in out and "host.example" not in out and "python3" not in out
         assert "Anomalies (0)" in out
+
+    def test_liiga_goals_missing_from_the_feed_are_listed(self):
+        out = self.text(GOAL1, line("01:05:00", "Liiga: game 7: Jokerit: announced goals missing from the feed 0 -> 1"),
+                        line("01:05:10", "Liiga: game 7: Jokerit: announced goals missing from the feed 1 -> 0"))
+        assert "announced goals missing from the feed (a dip, or a goal taken away): 2 change(s)" in out
+        assert "01:05:00 Jokerit: 0 -> 1" in out and "01:05:10 Jokerit: 1 -> 0" in out
+
+    def test_nothing_is_said_about_missing_liiga_goals_when_there_are_none(self):
+        assert "missing from the feed" not in self.text(GOAL1)
 
     def test_retracted_goals_are_listed_by_name(self):
         out = self.text(GOAL1, line("01:05:00", "NHL: retracting goal 06:08 2nd by Alice Ann in #chan"))

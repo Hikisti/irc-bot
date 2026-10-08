@@ -58,6 +58,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                             r"the score endpoint says (?P<endpoint>.+?); using the endpoint's$")),
     ("no_endpoint", re.compile(r"^NHL: game (?P<gid>\d+): no result from the score endpoint for the FINAL line, "
                                r"using the play-by-play header$")),
+    ("liiga_missing", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): announced goals missing from the feed "
+                                 r"(?P<before>\d+) -> (?P<after>\d+)$")),
     ("start", re.compile(r"^==== BOT STARTED")),
     ("disconnect", re.compile(r"^(?:DISCONNECTED|CONNECT FAILED)")),
 )
@@ -295,6 +297,10 @@ def render(report):
                f", listed twice: {len(ev['listed_again'])}, renumbered: {len(ev['renumbered'])}"
                f", broken-feed polls not counted: {len(ev['guard'])}")
     out.append(f"  goals retracted: {len(ev['retract'])}")
+    if ev["liiga_missing"]:
+        out.append(f"  Liiga: announced goals missing from the feed (a dip, or a goal taken away): {len(ev['liiga_missing'])} change(s)")
+        for e in ev["liiga_missing"]:
+            out.append(f"    {e['ts']:%H:%M:%S} {e['team']}: {e['before']} -> {e['after']}")
     for e in ev["retract"]:
         out.append(f"    {e['ts']:%H:%M:%S} {e['label']} by {e['name']} in {e['channel']}")
     out.append(f"  FINAL score source: {len(ev['disagree'])} header/endpoint disagreement(s), "
