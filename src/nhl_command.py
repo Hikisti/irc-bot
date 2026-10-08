@@ -135,6 +135,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         if prev_state is None:
             return True
 
+        poll_started = time.monotonic()
         games = self._fetch_tracked_games(prev_state)
         if games is None:
             return False
@@ -193,7 +194,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                 all_ended = False
 
         try:
-            self._retry_missing_attendance(new_state)
+            self._retry_missing_attendance(new_state, poll_started)
             if all_ended:
                 if any(self._awaiting_attendance(snap, time.monotonic()) for snap in new_state.values()):
                     all_ended = False  # the slate summary waits for the figures that are still coming
@@ -642,12 +643,15 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             "at": time.monotonic(),
         }
 
-    def _retry_missing_attendance(self, state):
+    def _retry_missing_attendance(self, state, poll_started):
         """Looks again for the attendance of every finished game whose FINAL:
         line went out without it, until ATTENDANCE_RETRY_SECONDS after that
-        line. Updates the records in `state` in place."""
+        line. Updates the records in `state` in place. A FINAL: sent in this
+        very poll (its record is newer than `poll_started`) was just looked up
+        for, so it waits for the next one."""
         now = time.monotonic()
-        waiting = [gid for gid, snap in state.items() if self._awaiting_attendance(snap, now)]
+        waiting = [gid for gid, snap in state.items()
+                   if self._awaiting_attendance(snap, now) and snap["final"]["at"] < poll_started]
         found = self._fetch_concurrently(waiting, lambda gid: self._fetch_attendance(state[gid]["final"]["report"]))
         for gid, attendance in found.items():
             if attendance:

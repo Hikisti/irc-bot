@@ -1771,6 +1771,20 @@ class TestAttendanceSummary:
         assert all(m.startswith("NHL results 6.10.: ") and len(m.encode()) <= nhl_command.MAX_LINE_BYTES for m in messages)
         assert "TEAM1 3-2 OTHER1 (17001)" in messages[0] and "OTHER16 (17016)" in messages[-1]
 
+    def test_a_figure_missing_at_the_final_is_not_looked_up_again_in_the_same_poll(self, nhl_command):
+        """Issue #28: the lookup made for the FINAL line just came back empty; the retry waits for the next poll."""
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        games = {gid: make_schedule_game(gid=gid, game_state="FINAL", home_score=3, away_score=2) for gid in (1, 2)}
+        pbps = {gid: make_pbp(game_id=gid, home_score=3, away_score=2, game_state="FINAL", season=20262027) for gid in (1, 2)}
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value=games), \
+                patch.object(nhl_command, "_fetch_play_by_play", side_effect=lambda gid: pbps[gid]), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=None) as fetch:
+            nhl_command._poll_once(bot, "#nhl.fi")
+            assert fetch.call_count == 2  # one per game, for the FINAL line
+            nhl_command._poll_once(bot, "#nhl.fi")
+            assert fetch.call_count == 4  # the next poll looks again for both
+
     def test_the_summary_lists_games_by_start_time(self, nhl_command):
         bot = MagicMock()
 
