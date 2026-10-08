@@ -122,6 +122,109 @@ class TestHeaderCheck:
         assert goal_probe.header_state(feed(home=0, away=0))[1] == (0, 0)
 
 
+def score_game(abbrev_home="A", abbrev_away="B", state="LIVE"):
+    return {"gameState": state, "homeTeam": {"abbrev": abbrev_home}, "awayTeam": {"abbrev": abbrev_away}}
+
+
+class FakeNhl:
+    """Stands in for NHLCommand: `scores` is a list of results (None = the request failed), one per
+    cycle, the last one repeating; `pbp` maps a game id to its feed (None = failed)."""
+
+    def __init__(self, scores, pbp):
+        self.scores, self.pbp, self.calls = list(scores), pbp, 0
+
+    def _fetch_scores(self, date):
+        result = self.scores[min(self.calls, len(self.scores) - 1)]
+        self.calls += 1
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def _fetch_play_by_play(self, gid):
+        return self.pbp.get(gid)
+
+
+class FakeClock:
+    def __init__(self):
+        self.t, self.sleeps = 0.0, []
+
+    def now(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+class TestRun:
+    def run(self, command, poll=10, deadline=100000.0):
+        clock = FakeClock()
+        goals, ends, reason = goal_probe.run(command, "2026-10-08", deadline, poll, sleep=clock.sleep, clock=clock.now)
+        return clock, reason
+
+    def test_it_stops_after_ten_silent_cycles_in_a_row_and_says_so(self, log_lines):
+        clock, reason = self.run(FakeNhl([None], {}))
+        assert reason == "API silent"
+        assert len(clock.sleeps) == goal_probe.MAX_SILENT_CYCLES - 1  # no sleep after the cycle that gave up
+        assert log_lines[-1] == "stopping: the API has not answered in 10 cycles in a row"
+
+    def test_one_answer_starts_the_count_over(self, log_lines):
+        answers = [None] * 9 + [{}] + [None] * 9
+        clock, reason = self.run(FakeNhl(answers, {}), poll=10, deadline=190.0)
+        assert reason == "deadline" and not any("stopping" in line for line in log_lines)
+
+    def test_live_games_whose_play_by_play_never_arrives_count_as_silent(self, log_lines):
+        _, reason = self.run(FakeNhl([{1: score_game()}], {1: None}))
+        assert reason == "API silent"
+
+    def test_one_play_by_play_among_failures_counts_as_an_answer(self, log_lines):
+        scores = {1: score_game(), 2: score_game("C", "D")}
+        _, reason = self.run(FakeNhl([scores], {1: None, 2: feed(goal(1, 1))}), deadline=500.0)
+        assert reason == "deadline"
+
+    def test_an_exception_counts_as_silent_and_is_logged(self, log_lines):
+        _, reason = self.run(FakeNhl([RuntimeError("boom")], {}))
+        assert reason == "API silent"
+        assert "error: RuntimeError: boom" in log_lines
+
+    def test_it_stops_when_every_game_has_been_over_for_a_while(self, log_lines):
+        final = {1: score_game(state="FINAL")}
+        clock, reason = self.run(FakeNhl([final], {1: feed(goal(1, 1), home=1, away=0)}), poll=100)
+        assert reason == "all games settled"
+        assert clock.t > goal_probe.WATCH_AFTER_END
+
+    def test_goals_are_logged_while_polling(self, log_lines):
+        self.run(FakeNhl([{1: score_game()}], {1: feed(goal(1, 1))}), deadline=15.0)
+        assert any("FIRST SEEN" in line for line in log_lines)
+
+    @pytest.mark.parametrize("poll, ending", [(10, 5), (20, 10), (30, 15), (8, 5)])
+    def test_the_interval_between_cycles_is_the_given_one_and_half_of_it_while_a_game_is_ending(self, log_lines, poll, ending):
+        over = {1: score_game(state="OVER")}
+        live = {1: score_game()}
+        pbp_over = feed(goal(1, 1), home=0, away=0)  # header behind the plays: the game still needs fast polling
+        clock, _ = self.run(FakeNhl([live, over], {1: pbp_over}), poll=poll, deadline=poll * 2 + ending + 0.5)
+        assert clock.sleeps[0] == poll and clock.sleeps[1] == ending
+
+
+class TestParseArgs:
+    def test_the_defaults(self):
+        assert goal_probe.parse_args(["goal_probe.py", "2026-10-08"]) == ("2026-10-08", 14, goal_probe.LIVE_POLL)
+
+    def test_hours_and_interval(self):
+        assert goal_probe.parse_args(["goal_probe.py", "2026-10-08", "6", "20"]) == ("2026-10-08", 6.0, 20.0)
+
+    @pytest.mark.parametrize("argv", [
+        ["goal_probe.py"],                                  # no date
+        ["goal_probe.py", "d", "1", "20", "extra"],         # too many
+        ["goal_probe.py", "d", "many"],                     # hours not a number
+        ["goal_probe.py", "d", "6", "fast"],                # interval not a number
+        ["goal_probe.py", "d", "6", "2"],                   # faster than the fastest ending poll
+        ["goal_probe.py", "d", "0"],                        # no time at all
+    ])
+    def test_a_usage_error_is_none(self, argv):
+        assert goal_probe.parse_args(argv) is None
+
+
 class TestLiigaJudge:
     BASE = {"gameTime": 1241, "home": 0, "away": 0, "events_home": 0, "events_away": 0, "ended": False, "period": 2}
 

@@ -9,8 +9,11 @@ For every game of one US-Eastern slate date it polls the play-by-play and logs, 
 and, when a game reaches OVER/FINAL, whether the header score agreed with the play list.
 
 Usage (from the repository root):
-    .venv/bin/python tools/goal_probe.py YYYY-MM-DD [max_hours]
-It stops when every game is finished and settled, or after max_hours (default 14).
+    .venv/bin/python tools/goal_probe.py YYYY-MM-DD [max_hours] [poll_seconds]
+It polls every poll_seconds (default 10; half of that, at least 5, while a game is ending). It stops
+when every game is finished and settled, after max_hours (default 14), or when the API has not
+answered for MAX_SILENT_CYCLES cycles in a row (so an outage or a throttle is not hammered). Run
+from the machine that also runs the bot, use a slower interval (20): its requests add to the bot's.
 Log: tools/logs/goal_probe.log
 """
 import statistics
@@ -22,6 +25,7 @@ from nhl_command import NHLCommand
 
 LIVE_POLL, ENDING_POLL = 10, 5      # seconds; faster while a game is ending
 WATCH_AFTER_END = 300               # keep watching a finished game this long
+MAX_SILENT_CYCLES = 10              # stop after this many cycles in a row without an answer from the API
 
 log = make_logger("goal_probe")
 
@@ -160,19 +164,34 @@ def summarize(goals, ends):
         log(f"  {label}: header at first check in an end state: {'agreed' if agreed else 'MISMATCH'}")
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit(__doc__)
-    command = NHLCommand()
-    command.SCORE_CACHE_SECONDS = 0
-    date = sys.argv[1]
-    deadline = time.time() + float(sys.argv[2] if len(sys.argv) > 2 else 14) * 3600
-    log(f"goal probe start, slate {date}")
+def parse_args(argv):
+    """(date, max_hours, poll_seconds) from the command line, or None for a usage error."""
+    if len(argv) < 2 or len(argv) > 4:
+        return None
+    try:
+        max_hours = float(argv[2]) if len(argv) > 2 else 14
+        poll_seconds = float(argv[3]) if len(argv) > 3 else LIVE_POLL
+    except ValueError:
+        return None
+    if poll_seconds < ENDING_POLL or max_hours <= 0:
+        return None
+    return argv[1], max_hours, poll_seconds
+
+
+def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time):
+    """Polls until every game is settled, `deadline` (a clock() value) passes, or the API goes silent for
+    MAX_SILENT_CYCLES cycles in a row. Returns (goals, ends, why it stopped)."""
+    ending_poll = max(ENDING_POLL, poll_seconds / 2)
     goals, ends, ended_at = {}, {}, {}
-    while time.time() < deadline:
+    silent = 0
+    reason = "deadline"
+    while clock() < deadline:
         fast = False
+        answered = False
+        pbp_tried = pbp_ok = 0
         try:
-            games = command._fetch_scores(date) or {}
+            scores = command._fetch_scores(date)
+            games = scores or {}
             all_done = bool(games)
             for gid, game in games.items():
                 label = f'{game["awayTeam"]["abbrev"]}@{game["homeTeam"]["abbrev"]}'
@@ -181,22 +200,43 @@ def main():
                     all_done = False
                     continue
                 if state in ("FINAL", "OFF"):
-                    ended_at.setdefault(gid, time.time())
-                    if time.time() - ended_at[gid] > WATCH_AFTER_END:
+                    ended_at.setdefault(gid, clock())
+                    if clock() - ended_at[gid] > WATCH_AFTER_END:
                         continue
                 all_done = False
                 pbp = command._fetch_play_by_play(gid)
+                pbp_tried += 1
                 if not pbp:
                     continue
-                now = time.time()
+                pbp_ok += 1
+                now = clock()
                 for event in observe(goals, label, pbp, now):
                     log(event)
                 fast = check_header(ends, label, state, pbp, now) or state == "OVER" or fast
+            answered = scores is not None and (pbp_tried == 0 or pbp_ok > 0)
             if all_done:
+                reason = "all games settled"
                 break
         except Exception as e:
             log(f"error: {type(e).__name__}: {e}")
-        time.sleep(ENDING_POLL if fast else LIVE_POLL)
+        silent = 0 if answered else silent + 1
+        if silent >= MAX_SILENT_CYCLES:
+            log(f"stopping: the API has not answered in {silent} cycles in a row")
+            reason = "API silent"
+            break
+        sleep(ending_poll if fast else poll_seconds)
+    return goals, ends, reason
+
+
+def main():
+    args = parse_args(sys.argv)
+    if args is None:
+        sys.exit(__doc__)
+    date, max_hours, poll_seconds = args
+    command = NHLCommand()
+    command.SCORE_CACHE_SECONDS = 0
+    log(f"goal probe start, slate {date}, every {poll_seconds:g} s")
+    goals, ends, _ = run(command, date, time.time() + max_hours * 3600, poll_seconds)
     summarize(goals, ends)
 
 

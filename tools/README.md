@@ -17,7 +17,7 @@ git-ignored) and prints the same lines. Every line carries UTC and the bot's dis
 
 | script | reads | logs |
 |---|---|---|
-| `goal_probe.py DATE [hours]` | NHL play-by-play of every game of a US-Eastern slate date | per goal: first sight (scorer, assists), later changes of scorer / assists / clock with names and the seconds since first seen, goals that **leave** the play list (disallowed or a feed flicker) and **come back**, goals listed **twice**; per game ending, whether the header score agreed with the play list; a summary at the end |
+| `goal_probe.py DATE [hours] [poll_seconds]` | NHL play-by-play of every game of a US-Eastern slate date | per goal: first sight (scorer, assists), later changes of scorer / assists / clock with names and the seconds since first seen, goals that **leave** the play list (disallowed or a feed flicker) and **come back**, goals listed **twice**; per game ending, whether the header score agreed with the play list; a summary at the end |
 | `state_watch.py DATE [hours]` | NHL `/score/DATE` | every change of a game's state (`LIVE`, `CRIT`, `OVER`, `FINAL`, `OFF`, ...) with score, period and clock; shows how long the transitional `OVER` state lasts |
 | `liiga_sampler.py DATE [hours]` | Liiga games feed (`runkosarja`) every 10 s | every poll with the response's CDN headers (`Age`, cache node) and each live game's period / `gameTime` / score; flags every **backwards** step of clock, score, period or `ended`; `FIELD` lines when `spectators` or `finishedType` change; a summary at the end |
 
@@ -42,6 +42,12 @@ journal. NHL and Liiga lines are covered, the Pesis trackers' are not. A raw jou
 chat and addresses: keep it in `tools/logs/` (ignored by git), never commit or post it.
 (`tests/test_journal_report.py` includes round trips through the bot's own message builders, so a
 reworded message breaks a test there.)
+
+`goal_probe.py` polls every `poll_seconds` (default 10, half of that while a game is ending) and stops by
+itself when the games are settled, after `hours`, or when the API has not answered for 10 cycles in a row
+(so an outage or a throttle is not hammered). It makes about 1 + N requests per cycle for N live games:
+run from the machine that also runs the bot, use a slower interval (20) so that its requests add less to the
+bot's own.
 
 `DATE` is `YYYY-MM-DD` (for the NHL, the **US-Eastern** date of the slate; for Liiga, the local
 game date). `hours` is the longest the script runs; each also stops by itself when its games are
