@@ -116,12 +116,17 @@ class IrcBot:
 
     # What the journal keeps of the lines the server sends: the server's own answers (numerics such as
     # 001 or the 404 that SEND REFUSED depends on, PING, ERROR, capability negotiation). Chat, joins,
-    # parts, quits and nick changes carry what other people said and their addresses, and are not kept.
+    # parts, quits and nick changes carry what other people said and their addresses, and are not kept;
+    # nor are the numerics that only repeat who is in a channel and what its topic is (nick lists,
+    # topic and who set it) or the server's message of the day (about 60 lines at every start).
     LOGGED_INCOMING_COMMANDS = ("PING", "PONG", "ERROR", "CAP", "AUTHENTICATE")
+    UNLOGGED_NUMERICS = ("332", "333", "353", "366", "372", "375", "376")
 
     def _log_incoming(self, line):
         parts = line.split(" ", 2)
         command = parts[1] if line.startswith(":") and len(parts) > 1 else parts[0]
+        if command in self.UNLOGGED_NUMERICS:
+            return
         if command.isdigit() or command.upper() in self.LOGGED_INCOMING_COMMANDS:
             print(f"< {line}")
 

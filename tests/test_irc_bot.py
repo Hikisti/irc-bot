@@ -299,7 +299,22 @@ class TestIncomingLinesInTheJournal:
         assert self._journal(bot, line, capsys) == ""
 
     @pytest.mark.parametrize("line", [
+        ":irc.example.net 332 KukistiBot #chan :the topic of the channel",
+        ":irc.example.net 333 KukistiBot #chan someone 1790000000",
+        ":irc.example.net 353 KukistiBot = #chan :@alice bob +carol",
+        ":irc.example.net 366 KukistiBot #chan :End of /NAMES list.",
+        ":irc.example.net 375 KukistiBot :- irc.example.net Message of the Day -",
+        ":irc.example.net 372 KukistiBot :- welcome to the network",
+        ":irc.example.net 376 KukistiBot :End of /MOTD command.",
+    ])
+    def test_the_motd_nick_lists_and_topics_are_not_journaled(self, bot, capsys, line):
+        """Issue #32: about 60 MOTD lines, every member's nick and the topic at every start."""
+        assert self._journal(bot, line, capsys) == ""
+
+    @pytest.mark.parametrize("line", [
         ":irc.example.net 001 KukistiBot :Welcome to the network",
+        ":irc.example.net 005 KukistiBot TARGMAX=PRIVMSG:4 :are supported by this server",
+        ":irc.example.net 451 KukistiBot :You have not registered",
         ":irc.example.net 404 KukistiBot #chan :Cannot send to channel",
         "PING :irc.example.net",
         "ERROR :Closing Link: host.example (Quit)",
