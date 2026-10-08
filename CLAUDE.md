@@ -108,6 +108,13 @@ consistent, deliberate discipline - keep following it:
 
 - After editing a file, run *that file's* tests immediately
   (`pytest tests/test_whatever.py -q`), not just at the very end.
+- Checking that a test can fail by breaking the code, running the tests and
+  restoring the file: clear the `__pycache__` folders afterwards. Python
+  decides a compiled file is current from the source's modification time
+  (to the second) and size, so a restore made within the same second as the
+  edit, to text of the same length, leaves the stale compiled copy in use
+  and a correct change makes a test look broken (this hid a correct
+  `POLL_INTERVAL_SECONDS = 45` behind a failing test once).
 - Before considering any task done: run the **full** suite, check coverage
   hasn't regressed on touched modules, and - where feasible - verify the
   actual behavior against the real live API/data, not just mocks (e.g. a
