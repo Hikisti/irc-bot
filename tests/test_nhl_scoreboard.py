@@ -112,6 +112,21 @@ class TestFetchScores:
         nhl._fetch_scores(TODAY)
         assert nhl.session.get.call_count == 2
 
+    def test_a_shorter_max_age_refuses_a_copy_the_default_window_would_use(self, nhl):
+        nhl.session.get.return_value = make_json_response({"games": [score_game(5)]})
+        nhl._fetch_scores(TODAY)
+        nhl._score_cache[TODAY] = (time.monotonic() - 5, nhl._score_cache[TODAY][1])
+        nhl._fetch_scores(TODAY)  # default window: the 5 s old copy is used
+        assert nhl.session.get.call_count == 1
+        nhl._fetch_scores(TODAY, max_age=3)  # a caller that wants one at most 3 s old fetches again
+        assert nhl.session.get.call_count == 2
+
+    def test_a_copy_younger_than_max_age_is_used(self, nhl):
+        nhl.session.get.return_value = make_json_response({"games": [score_game(5)]})
+        nhl._fetch_scores(TODAY)
+        nhl._fetch_scores(TODAY, max_age=3)
+        assert nhl.session.get.call_count == 1
+
     def test_a_failure_is_not_cached(self, nhl):
         nhl.session.get.side_effect = requests.exceptions.ConnectionError("down")
         nhl._fetch_scores(TODAY)

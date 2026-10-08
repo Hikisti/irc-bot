@@ -1652,16 +1652,28 @@ class TestFinalScoreFromScoreEndpoint:
         fetch.assert_not_called()
         assert "3-2" in bot.send_message.call_args[0][1]
 
-    def test_a_cached_copy_is_never_used(self, nhl_command):
-        """!nhl now may have cached the pre-goal board a few seconds ago."""
+    def test_a_copy_cached_a_while_ago_is_never_used(self, nhl_command):
+        """!nhl now may have cached the pre-goal board some seconds ago."""
         old = {"games": [{**self._official(2, 2, last_period=None, state="LIVE")}]}
         new = {"games": [self._official(3, 2)]}
         nhl_command.session.get.side_effect = [make_response(old), make_response(new)]
         assert nhl_command._fetch_scores(self.SLATE)[self.GID]["homeTeam"]["score"] == 2
+        stamp, games = nhl_command._score_cache[self.SLATE]
+        nhl_command._score_cache[self.SLATE] = (stamp - nhl_command.FINAL_SCORE_MAX_AGE_SECONDS - 1, games)
         bot = MagicMock()
         with patch.object(nhl_command, "_fetch_attendance", return_value=None):
             nhl_command._announce_end(bot, "#nhl.fi", make_pbp(home_score=2, away_score=2), self.SLATE)
         assert "3-2" in bot.send_message.call_args[0][1]
+
+    def test_games_ending_in_the_same_poll_share_one_score_request(self, nhl_command):
+        """Issue #28: each FINAL used to throw the cached copy away and fetch /score again."""
+        nhl_command.session.get.side_effect = [make_response({"games": [self._official(3, 2), self._official(2, 1, gid=self.GID + 1)]})]
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", make_pbp(game_id=self.GID, home_score=2, away_score=2), self.SLATE)
+            nhl_command._announce_end(bot, "#nhl.fi", make_pbp(game_id=self.GID + 1, home_score=1, away_score=1), self.SLATE)
+        assert nhl_command.session.get.call_count == 1
+        assert "3-2" in bot.send_message.call_args_list[0][0][1] and "2-1" in bot.send_message.call_args_list[1][0][1]
 
     def test_the_poll_looks_the_result_up_on_the_games_own_slate(self, nhl_command):
         bot = MagicMock()
@@ -1674,7 +1686,7 @@ class TestFinalScoreFromScoreEndpoint:
                 patch.object(nhl_command, "_fetch_scores", return_value={1: self._official(3, 2, gid=1)}) as fetch, \
                 patch.object(nhl_command, "_fetch_attendance", return_value=None):
             nhl_command._poll_once(bot, "#nhl.fi")
-        fetch.assert_called_once_with(self.SLATE)
+        fetch.assert_called_once_with(self.SLATE, max_age=nhl_command.FINAL_SCORE_MAX_AGE_SECONDS)
         assert "3-2" in bot.send_message.call_args[0][1]
 
 

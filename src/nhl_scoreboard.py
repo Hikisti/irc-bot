@@ -60,12 +60,13 @@ class NHLScoreboardMixin:
 
     # ---- data ---------------------------------------------------------------
 
-    def _fetch_scores(self, date_str):
+    def _fetch_scores(self, date_str, max_age=None):
         """{game_id: game} for one Eastern date, or None on failure.
-        Briefly cached per date; failures are never cached."""
+        Briefly cached per date (SCORE_CACHE_SECONDS, or a shorter `max_age`
+        for a caller that needs a fresher copy); failures are never cached."""
         cache = self.__dict__.setdefault("_score_cache", {})
         hit = cache.get(date_str)
-        if hit and time.monotonic() - hit[0] < self.SCORE_CACHE_SECONDS:
+        if hit and time.monotonic() - hit[0] < (self.SCORE_CACHE_SECONDS if max_age is None else max_age):
             return hit[1]
         try:
             resp = self.session.get(

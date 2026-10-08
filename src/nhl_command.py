@@ -66,6 +66,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     # about two games of three (17 games on two nights, issue #8; one more took
     # longer than 240 s); a missing figure is retried every poll for this long.
     ATTENDANCE_RETRY_SECONDS = 420
+    FINAL_SCORE_MAX_AGE_SECONDS = 3
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
@@ -688,13 +689,13 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         or None when it can't be had (no slate, request failed, game not
         listed, no numeric score) - the caller then keeps the play-by-play
         header's values. lastPeriodType is None when that game carries no
-        gameOutcome, which also leaves the header's value alone. Always a
-        fresh request: this is the one moment a 15 s old copy could still
-        be the stale one."""
+        gameOutcome, which also leaves the header's value alone. Never a
+        copy older than FINAL_SCORE_MAX_AGE_SECONDS: this is the one moment
+        a 15 s old copy (say, from a `!nhl now`) could still be the stale
+        one, while games ending in the same poll can share one request."""
         if not slate or game_id is None:
             return None
-        self.__dict__.get("_score_cache", {}).pop(slate, None)
-        game = (self._fetch_scores(slate) or {}).get(game_id)
+        game = (self._fetch_scores(slate, max_age=self.FINAL_SCORE_MAX_AGE_SECONDS) or {}).get(game_id)
         score = self._score_pair(game) if game else None
         if score is None:
             return None
