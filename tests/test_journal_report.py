@@ -287,8 +287,43 @@ class TestRenderSummaryLines:
             sent("01:50:00", CH, "NHL results 7.10.: RED 1-0 BLU (17583)"),
             sent("01:50:01", CH, "All of today's NHL games have finished. Live tracking stopped.")))
         assert "attendance 17583 found 151 s later" in out
-        assert "results list 01:50:00: 1 games, 1 with a figure" in out
+        assert "end-of-slate results list 01:50:00 in #chan: 1 games, 1 with a figure" in out
         assert "'NHL games finished' 01:50:01 in #chan" in out
+
+
+class TestBoardsAndResultsReplies:
+    """The slate's results list versus someone's `!nhl results`, and the `!nhl now` boards."""
+
+    def test_a_results_line_followed_at_once_by_the_finished_message_is_the_summary(self):
+        r = report(sent("01:50:00", CH, "NHL results 7.10.: RED 1-0 BLU (17583)"),
+                   sent("01:50:01", CH, "All of today's NHL games have finished. Live tracking stopped."))
+        assert len(r["events"]["summary"]) == 1 and r["events"]["results_reply"] == []
+
+    def test_a_results_line_with_no_finished_message_after_it_is_a_reply_to_the_command(self):
+        r = report(sent("01:50:00", CH, "NHL results 7.10.: RED 1-0 BLU (1 game(s) still on: !nhl now)"))
+        assert r["events"]["summary"] == [] and len(r["events"]["results_reply"]) == 1
+        assert "replies to `!nhl results`: 1" in jr.render(r)
+
+    def test_a_finished_message_in_another_channel_does_not_make_it_a_summary(self):
+        r = report(sent("01:50:00", "#a", "NHL results 7.10.: RED 1-0 BLU"),
+                   sent("01:50:01", "#b", "All of today's NHL games have finished. Live tracking stopped."))
+        assert r["events"]["summary"] == [] and len(r["events"]["results_reply"]) == 1
+
+    def test_board_replies_are_counted_and_their_live_statuses_listed(self):
+        out = jr.render(report(
+            sent("01:00:00", CH, "Live: ANA 1-0 EDM 1st 13:14 left || Final: WSH 5-3 PIT"),
+            sent("01:30:00", CH, "Live: ANA 2-0 EDM 1st int. || Final: WSH 5-3 PIT"),
+            sent("02:00:00", CH, "Upcoming: 05:00 ANA-EDM")))
+        assert "`!nhl now` replies: 3; live statuses seen: 1st 13:14 left, 1st int." in out
+
+    def test_a_board_showing_zero_zero_left_is_flagged_as_issue_11(self):
+        r = report(sent("01:00:00", CH, "Live: ANA 1-0 EDM 1st 00:00 left"))
+        assert any("'00:00 left'" in a and "#11" in a for a in r["anomalies"])
+
+    def test_a_board_with_an_intermission_or_end_status_is_not_flagged(self):
+        r = report(sent("01:00:00", CH, "Live: ANA 1-0 EDM 1st end || Final: A 1-0 B"),
+                   sent("01:01:00", CH, "Live: ANA 1-0 EDM 1st int."))
+        assert r["anomalies"] == []
 
 
 class TestMain:

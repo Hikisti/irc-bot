@@ -39,6 +39,9 @@ FINAL = re.compile(r"^FINAL: (?P<home>.+?) (?P<h>\d+)-(?P<a>\d+) (?P<away>.+?)(?
 RESULTS = re.compile(r"^NHL results (?P<label>\S+): (?P<body>.+)$")
 RESULT_ENTRY = re.compile(r"\b[A-Z]{2,3} \d+-\d+ [A-Z]{2,3}(?: \((?:OT|SO)\))?(?: \((?P<att>\d+)\))?")
 FINISHED = re.compile(r"^All of today's (?P<sport>\S+) games have finished")
+BOARD = re.compile(r"^(?:Live|Final|Upcoming): ")  # a `!nhl now` reply
+BOARD_STATUS = re.compile(r"(?:\d?(?:1st|2nd|3rd|OT)|SO)(?: (?:\d+:\d\d left|int\.|end))?|\bover\b|\[[A-Z?]+\]")
+SUMMARY_FOLLOWS_SECONDS = 5  # the end-of-slate results list is followed at once by "all ... games have finished"
 
 PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
     ("retract", re.compile(r"^NHL: retracting goal (?P<label>.+?) by (?P<name>.+?) in (?P<channel>#\S+)$")),
@@ -124,6 +127,8 @@ def _parse_sent(ts, channel, text):
     m = FINISHED.match(text)
     if m:
         return {**base, "kind": "finished", "sport": m["sport"]}
+    if BOARD.match(text):
+        return {**base, "kind": "board", "text": text[:300]}
     return None
 
 
@@ -150,6 +155,7 @@ def build_report(entries):
             _apply(g, e, anomalies)
         else:
             events[e["kind"]].append(e)
+    _split_results(events)
     founds = list(events["found"])
     for key, g in games.items():
         final = g["final"]
@@ -164,10 +170,24 @@ def build_report(entries):
                     anomalies.append(f"{_name(key)} [{key[0]}]: FINAL without attendance and no figure was found later")
         elif g["goals"]:
             anomalies.append(f"{_name(key)} [{key[0]}]: goals posted but no FINAL line in the journal")
+    for e in events["board"]:
+        if "00:00 left" in e["text"]:
+            anomalies.append(f"{e['ts']:%b %d %H:%M:%S}: a `!nhl now` board shows '00:00 left' (issue #11): {e['text'][:120]}")
     for e in events["error"]:
         anomalies.append(f"{e['ts']:%b %d %H:%M:%S}: {e['text']}")
     return {"games": games, "events": events, "anomalies": anomalies,
             "span": (entries[0]["ts"], entries[-1]["ts"]) if entries else None}
+
+
+def _split_results(events):
+    """A results line is the end-of-slate summary only if the 'all ... games have finished' message follows it
+    at once in the same channel; any other one is the reply to someone's `!nhl results`."""
+    finished = defaultdict(list)
+    for e in events["finished"]:
+        finished[e["channel"]].append(e["ts"])
+    for e in events["results"]:
+        follows = any(0 <= (t - e["ts"]).total_seconds() <= SUMMARY_FOLLOWS_SECONDS for t in finished[e["channel"]])
+        events["summary" if follows else "results_reply"].append(e)
 
 
 def _apply(g, e, anomalies):
@@ -281,8 +301,15 @@ def render(report):
                f"{len(ev['no_endpoint'])} without an endpoint result")
     for e in ev["disagree"]:
         out.append(f"    {e['ts']:%H:%M:%S} header {e['header']} -> endpoint {e['endpoint']}")
-    for e in ev["results"]:
-        out.append(f"  results list {e['ts']:%H:%M:%S}: {e['games']} games, {e['with_figure']} with a figure")
+    for e in ev["summary"]:
+        out.append(f"  end-of-slate results list {e['ts']:%H:%M:%S} in {e['channel']}: {e['games']} games, "
+                   f"{e['with_figure']} with a figure")
+    if ev["results_reply"]:
+        out.append(f"  replies to `!nhl results`: {len(ev['results_reply'])}")
+    if ev["board"]:
+        statuses = list(dict.fromkeys(t for e in ev["board"] if e["text"].startswith("Live: ")
+                                      for t in BOARD_STATUS.findall(e["text"].split(" || ")[0])))
+        out.append(f"  `!nhl now` replies: {len(ev['board'])}" + (f"; live statuses seen: {', '.join(statuses)}" if statuses else ""))
     for e in ev["finished"]:
         out.append(f"  '{e['sport']} games finished' {e['ts']:%H:%M:%S} in {e['channel']}")
     out.append("")

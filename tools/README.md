@@ -27,7 +27,8 @@ Not a probe: it reads text, not the feeds. It turns a night's `journalctl -a` ou
 stdin) into a plain-text report per channel and game: the `GOAL:` / `NO GOAL:` / `FINAL:` lines the
 bot posted, the delay from the last goal to the FINAL, whether and when the attendance arrived, the
 lines the bot journals about its own decisions (a repeated goal ignored, a goal retracted, the FINAL
-score source), and an **anomalies** list: a duplicate `GOAL:` line, a goal retracted and then
+score source), the end-of-slate results list (told apart from someone's `!nhl results`), the
+`!nhl now` boards it saw (their live statuses), and an **anomalies** list: a duplicate `GOAL:` line, a goal retracted and then
 announced again, a `NO GOAL:` with no reason, a FINAL that differs from the last goal, a FINAL that
 never got its attendance, goals without a FINAL, restarts and errors.
 
