@@ -1,3 +1,4 @@
+import itertools
 import datetime
 import threading
 import time
@@ -38,9 +39,13 @@ def make_game(gid=1, home="HIFK", away="Ilves", home_goals=None, away_goals=None
     }
 
 
+_event_ids = itertools.count(1)
+
+
 def goal_event(period=1, game_time=125, home_score=1, away_score=0,
-                first="Kristian", last="Vesalainen", assists=None, tags=None):
+                first="Kristian", last="Vesalainen", assists=None, tags=None, event_id=None):
     return {
+        "eventId": next(_event_ids) if event_id is None else event_id,  # every real goal event carries one
         "period": period,
         "gameTime": game_time,
         "homeTeamScore": home_score,
@@ -238,6 +243,96 @@ class TestStop:
             release_fetch.set()  # let the orphaned thread finish so it doesn't leak into other tests
 
 
+class TestAnnounceByIdentity:
+    """Issue #16: the feed was seen to leave a goal out of one 10 s sample and bring it back in the next
+    (2026-10-08, twice). Announcing by the identity of the goal event, not by counting events, means that
+    a poll landing on such a dip does not make the tracker announce the goal again."""
+
+    def _run(self, liiga_command, games, ended=False):
+        """Polls once per game state in `games` (the first one is the baseline); returns the GOAL: lines."""
+        bot = MagicMock()
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {1: liiga_command._snapshot(games[0])}}
+        for game in games[1:]:
+            with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+                liiga_command._poll_once(bot, "#chan")
+        return [c.args[1] for c in bot.send_message.call_args_list if "GOAL:" in c.args[1]]
+
+    def test_a_goal_that_leaves_the_feed_for_one_poll_is_not_announced_again(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        before = make_game(home_goals=[])
+        with_goal = make_game(home_goals=[goal])
+        lines = self._run(liiga_command, [before, with_goal, before, with_goal])
+        assert len(lines) == 1
+
+    def test_a_goal_gone_for_several_polls_is_still_announced_once(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        before, with_goal = make_game(home_goals=[]), make_game(home_goals=[goal])
+        assert len(self._run(liiga_command, [before, with_goal, before, before, before, with_goal])) == 1
+
+    def test_a_dip_before_the_tracker_ever_saw_the_goal_changes_nothing(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        before, with_goal = make_game(home_goals=[]), make_game(home_goals=[goal])
+        assert len(self._run(liiga_command, [before, before, with_goal, with_goal])) == 1
+
+    def test_a_removed_goal_replaced_by_another_in_the_same_poll_is_announced(self, liiga_command):
+        """With counting, one goal removed and another added in one poll left the count unchanged: swallowed."""
+        first = goal_event(home_score=1, away_score=0, first="Eka")
+        replacement = goal_event(home_score=1, away_score=0, first="Toka")
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[first]),
+                                          make_game(home_goals=[replacement])])
+        assert len(lines) == 2 and "Toka" in lines[1]
+
+    def test_two_goals_in_one_poll_are_both_announced_and_one_in_each_team(self, liiga_command):
+        lines = self._run(liiga_command, [make_game(home_goals=[], away_goals=[]),
+                                          make_game(home_goals=[goal_event(home_score=1, away_score=0)],
+                                                    away_goals=[goal_event(home_score=1, away_score=1)])])
+        assert len(lines) == 2
+
+    def test_the_same_event_twice_in_one_feed_is_announced_once(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[goal, dict(goal)])])
+        assert len(lines) == 1
+
+    def test_goals_already_in_the_feed_when_tracking_starts_are_never_announced(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        game = make_game(home_goals=[goal])
+        assert self._run(liiga_command, [game, game, game]) == []
+
+    def test_an_event_without_an_event_id_is_identified_by_period_time_and_scorer(self, liiga_command):
+        def bare(game_time):
+            e = goal_event(home_score=1, away_score=0, game_time=game_time)
+            del e["eventId"]
+            return e
+        goal = bare(300)
+        before, with_goal = make_game(home_goals=[]), make_game(home_goals=[goal])
+        assert len(self._run(liiga_command, [before, with_goal, before, make_game(home_goals=[dict(goal)])])) == 1
+
+    def test_a_disallowed_entry_without_a_scorer_is_never_tracked(self, liiga_command):
+        game = make_game(home_goals=[disallowed_goal_event()])
+        assert liiga_command._snapshot(game)["announced"]["homeTeam"] == set()
+
+    def test_the_announced_set_only_grows(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0)
+        state = liiga_command._snapshot(make_game(home_goals=[goal]))
+        dipped = liiga_command._snapshot(make_game(home_goals=[]), state)
+        assert dipped["announced"]["homeTeam"] == state["announced"]["homeTeam"] and dipped["missing"]["homeTeam"] == 1
+        assert liiga_command._snapshot(make_game(home_goals=[goal]), dipped)["missing"]["homeTeam"] == 0
+
+    def test_a_change_in_the_number_of_missing_goals_is_journaled(self, liiga_command, capsys):
+        goal = goal_event(home_score=1, away_score=0)
+        before, with_goal = make_game(home_goals=[]), make_game(home_goals=[goal])
+        self._run(liiga_command, [before, with_goal, before, with_goal, with_goal])
+        out = capsys.readouterr().out
+        assert out.count("announced goals missing from the feed 0 -> 1") == 1
+        assert out.count("announced goals missing from the feed 1 -> 0") == 1
+
+    def test_nothing_is_journaled_while_nothing_is_missing(self, liiga_command, capsys):
+        goal = goal_event(home_score=1, away_score=0)
+        self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[goal]), make_game(home_goals=[goal])])
+        assert "missing from the feed" not in capsys.readouterr().out
+
+
 class TestPollOnce:
     def _seed(self, liiga_command, channel, games):
         liiga_command._channels[channel] = {
@@ -280,7 +375,7 @@ class TestPollOnce:
 
         bot.send_message.assert_not_called()
         assert all_ended is False
-        assert liiga_command._channels["#chan"]["games"][2]["home_goals"] == 1
+        assert len(liiga_command._channels["#chan"]["games"][2]["announced"]["homeTeam"]) == 1
 
     def test_new_game_seeding_excludes_disallowed_goal_from_baseline(self, liiga_command):
         bot = MagicMock()
@@ -291,7 +386,7 @@ class TestPollOnce:
             liiga_command._poll_once(bot, "#chan")
 
         bot.send_message.assert_not_called()
-        assert liiga_command._channels["#chan"]["games"][2]["home_goals"] == 0
+        assert liiga_command._channels["#chan"]["games"][2]["announced"]["homeTeam"] == set()
 
     def test_new_game_that_already_ended_counts_toward_all_ended(self, liiga_command):
         bot = MagicMock()

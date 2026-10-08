@@ -103,8 +103,9 @@ class LiigaCommand(LiveTrackerCommand):
                 if ended and not prev["ended"]:
                     self._announce_end(irc_bot, channel, game)
 
-                new_state[gid] = self._snapshot(game)
+                new_state[gid] = self._snapshot(game, prev)
                 new_state[gid]["ended"] = ended
+                self._log_missing_goals(gid, game, prev, new_state[gid])
                 if not ended:
                     all_ended = False
             except Exception as e:
@@ -175,10 +176,28 @@ class LiigaCommand(LiveTrackerCommand):
         events = (game.get(side) or {}).get("goalEvents") or []
         return [e for e in events if e.get("scorerPlayer")]
 
+    def _event_key(self, side, event):
+        """What identifies a goal event across polls: its eventId (every real
+        goal carries one), or, for an event without one, its period, game time
+        and scorer - never its position in the list or the number of goals."""
+        event_id = event.get("eventId")
+        if event_id is not None:
+            return (side, "id", event_id)
+        scorer = (event.get("scorerPlayer") or {}).get("playerId") or event.get("scorerPlayerId")
+        return (side, "at", event.get("period"), event.get("gameTime"), scorer)
+
     def _announce_new_goals(self, irc_bot, channel, game, prev, side):
-        events = self._real_goal_events(game, side)
-        key = "home_goals" if side == "homeTeam" else "away_goals"
-        for event in events[prev[key]:]:
+        """Announces the goal events not announced (or seeded at the start)
+        before. Announcing by identity and not by counting events matters
+        because the feed was seen, twice in one afternoon (2026-10-08), to
+        leave a goal out of one 10 s sample and bring it back in the next:
+        a count that was replaced on every poll announced the goal again."""
+        seen = set(prev["announced"][side])
+        for event in self._real_goal_events(game, side):
+            key = self._event_key(side, event)
+            if key in seen:
+                continue
+            seen.add(key)
             self._safe_send(irc_bot, channel, self._format_goal(game, side, event))
 
     def _format_goal(self, game, side, event) -> str:
@@ -413,9 +432,27 @@ class LiigaCommand(LiveTrackerCommand):
     def _all_games_ended(self, games) -> bool:
         return bool(games) and all(bool(g.get("ended")) for g in games.values())
 
-    def _snapshot(self, game) -> dict:
-        return {
-            "home_goals": len(self._real_goal_events(game, "homeTeam")),
-            "away_goals": len(self._real_goal_events(game, "awayTeam")),
-            "ended": bool(game.get("ended")),
-        }
+    SIDES = ("homeTeam", "awayTeam")
+
+    def _snapshot(self, game, prev=None) -> dict:
+        """The state kept per game: `announced`, the identity of every goal
+        event seen so far (it only grows: a goal the feed leaves out for a
+        poll is not forgotten), `missing`, how many of those the feed does not
+        show right now, and `ended`. Seeded from the current events when there
+        is no `prev`, so goals already scored when tracking starts are never
+        announced."""
+        announced, missing = {}, {}
+        for side in self.SIDES:
+            current = {self._event_key(side, e) for e in self._real_goal_events(game, side)}
+            known = set(prev["announced"][side]) if prev else set()
+            announced[side] = known | current
+            missing[side] = len(known - current)
+        return {"announced": announced, "missing": missing, "ended": bool(game.get("ended"))}
+
+    def _log_missing_goals(self, game_id, game, prev, now):
+        """A journal line when the number of announced goals the feed does not
+        show changes: a one-poll dip of a stale copy, or a goal taken away."""
+        for side in self.SIDES:
+            if prev["missing"][side] != now["missing"][side]:
+                print(f"Liiga: game {game_id}: {self._team_name(game, side)}: announced goals missing from the feed "
+                      f"{prev['missing'][side]} -> {now['missing'][side]}")

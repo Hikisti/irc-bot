@@ -100,7 +100,10 @@ gameday (today if there's still something scheduled and not already finished, ot
 date with games) and lists its matchups grouped by start time, e.g. `Next Liiga gameday
 (tomorrow): 18:30 TPS-Jokerit, Pelicans-KooKoo`. A `FINAL:` line gets an `(OT)` or `(SO)` suffix
 when the game was decided in overtime or a shootout, plus the attendance figure when the API
-reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Uses the unofficial liiga.fi
+reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. Each goal is remembered by its
+event id and announced once: the feed was seen to leave a goal out of one poll and bring it back in the
+next, which a plain count of goals would have announced a second time (a goal missing from the feed is
+noted in the journal, not in the channel). Uses the unofficial liiga.fi
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
 `#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
 (see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
