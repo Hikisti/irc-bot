@@ -1,3 +1,4 @@
+import codecs
 import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
@@ -115,6 +116,8 @@ class URLFetcher:
             return format_request_error(e, "the webpage")
 
     CHARSET_PATTERN = re.compile(r"charset=([^;\s]+)", re.IGNORECASE)
+    # Single-byte charsets that servers send by default or by mistake for pages that are in fact UTF-8.
+    SINGLE_BYTE_CHARSETS = ("iso-8859-1", "latin-1", "latin1", "windows-1252", "cp1252", "us-ascii", "ascii")
 
     def _page_text(self, response) -> str:
         """The page decoded the way its server says, not the way a guess
@@ -122,10 +125,27 @@ class URLFetcher:
         page as mac_greek and turned every ä/ö into Greek letters (issue
         #24). With no declared charset, UTF-8 if the bytes are valid UTF-8
         (requests would otherwise default to ISO-8859-1), and only then
-        the guess - the case it was added for."""
+        the guess - the case it was added for. One exception to trusting
+        the declaration: a default single-byte charset (ISO-8859-1 and
+        its kin) on bytes that are valid UTF-8 is a UTF-8 page labelled
+        wrongly - non-ASCII text in a single-byte charset is practically
+        never valid UTF-8 - and reading it as declared would double every
+        ä/ö."""
         declared = self.CHARSET_PATTERN.search(response.headers.get("content-type", ""))
         if declared:
-            response.encoding = declared.group(1).strip("\"'")
+            name = declared.group(1).strip("\"'")
+            if name.lower() in self.SINGLE_BYTE_CHARSETS:
+                try:
+                    text = response.content.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = None
+                if text is not None:
+                    return text
+            try:
+                codecs.lookup(name)
+            except LookupError:
+                print(f"URL title: unknown charset {name!r} declared, decoding with replacement characters")
+            response.encoding = name
             return response.text
         try:
             return response.content.decode("utf-8")

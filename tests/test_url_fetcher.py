@@ -203,6 +203,29 @@ class TestPageEncoding:
         resp = real_response(self.HTML.format("Häkkinen").encode("iso-8859-1"), "text/html; charset=iso-8859-1")
         assert self._title(fetcher, resp) == "Häkkinen"
 
+    @pytest.mark.parametrize("charset", ["iso-8859-1", "ISO-8859-1", "windows-1252", "us-ascii"])
+    def test_a_default_single_byte_charset_on_utf8_text_is_read_as_utf8(self, fetcher, charset):
+        """Issue #28: a server labelling a UTF-8 page ISO-8859-1 would double every ä/ö."""
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), f"text/html; charset={charset}")
+        assert self._title(fetcher, resp) == self.YLE
+
+    def test_a_single_byte_charset_on_text_that_is_not_utf8_is_still_honoured(self, fetcher):
+        resp = real_response(self.HTML.format("H\u00e4kkinen \u20ac").encode("windows-1252"), "text/html; charset=windows-1252")
+        assert self._title(fetcher, resp) == "H\u00e4kkinen \u20ac"
+
+    def test_ascii_text_under_a_single_byte_charset_is_unchanged(self, fetcher):
+        resp = real_response(self.HTML.format("Plain title").encode("ascii"), "text/html; charset=iso-8859-1")
+        assert self._title(fetcher, resp) == "Plain title"
+
+    def test_a_declared_utf8_charset_is_not_second_guessed(self, fetcher):
+        resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), "text/html; charset=utf-8")
+        assert self._title(fetcher, resp) == self.YLE
+
+    def test_an_unknown_declared_charset_is_logged(self, fetcher, capsys):
+        resp = real_response(self.HTML.format("Plain").encode("utf-8"), "text/html; charset=no-such-charset")
+        self._title(fetcher, resp)
+        assert "unknown charset 'no-such-charset'" in capsys.readouterr().out
+
     def test_an_unknown_declared_charset_does_not_break_the_title(self, fetcher):
         resp = real_response(self.HTML.format("Plain").encode("utf-8"), "text/html; charset=no-such-charset")
         assert self._title(fetcher, resp) == "Plain"
