@@ -57,6 +57,8 @@ def observe(goals, label, pbp, now):
     seen_scores = goals.setdefault("_doubly_listed", set())
     keys = {}
     for eid, play in current.items():
+        if (play.get("periodDescriptor") or {}).get("periodType") == "SO":
+            continue  # shootout goals all carry the same running score: not a sign of a doubly listed goal
         d = play.get("details") or {}
         keys.setdefault((d.get("eventOwnerTeamId"), d.get("homeScore"), d.get("awayScore")), []).append(eid)
     for key, ids in keys.items():
@@ -126,18 +128,25 @@ def check_header(ends, label, state, pbp, now):
     Returns True while this game still needs fast polling."""
     if state not in ("OVER", "FINAL", "OFF"):
         return False
-    rec = ends.setdefault(label, {"t0": now, "ok_at": None, "first": None})
+    rec = ends.setdefault(label, {"t0": now, "ok_at": None, "first": None, "first_agrees": None})
     header, plays, outcome, period_type = header_state(pbp)
-    agrees = (header == plays and (period_type != "OT" or outcome in ("OT", "SO"))
-              and (period_type != "SO" or outcome == "SO"))
+    if period_type == "SO":
+        # The shootout winner's goal is only in the header, never in the running score: a header that
+        # is exactly one goal ahead of the plays, with the shootout outcome, is the right one; a header
+        # equal to the plays is the stale one.
+        gap = tuple(h - r for h, r in zip(header, plays)) if all(isinstance(v, int) for v in header + plays) else None
+        agrees = gap in ((1, 0), (0, 1)) and outcome == "SO"
+    else:
+        agrees = header == plays and (period_type != "OT" or outcome in ("OT", "SO"))
     if rec["first"] is None:
         rec["first"] = (header, plays, outcome, period_type, state)
+        rec["first_agrees"] = agrees
         log(f"{label}: first check in state {state}: header score {header[0]}-{header[1]}, plays' running "
             f"score {plays[0]}-{plays[1]}, header outcome {outcome}, last play period type {period_type} -> "
             f'{"AGREE" if agrees else "MISMATCH"}')
     if agrees and rec["ok_at"] is None:
         rec["ok_at"] = now
-        if rec["first"][0] != rec["first"][1]:
+        if not rec["first_agrees"]:
             log(f"{label}: header caught up {now - rec['t0']:.0f}s after the first check")
     return not agrees
 
@@ -160,7 +169,7 @@ def summarize(goals, ends):
     if gained:
         log(f"  median seconds until assists were gained: {statistics.median(gained):.0f}")
     for label, rec in ends.items():
-        agreed = rec["first"] and rec["first"][0] == rec["first"][1]
+        agreed = rec["first_agrees"]
         log(f"  {label}: header at first check in an end state: {'agreed' if agreed else 'MISMATCH'}")
 
 

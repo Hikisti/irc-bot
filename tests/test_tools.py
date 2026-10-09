@@ -86,6 +86,17 @@ class TestObserve:
         assert goal_probe.observe(goals, "C@D", feed(), 5.0) == []
 
 
+class TestShootoutGoalsAreNotDoublyListed:
+    def test_shootout_goals_share_a_running_score_and_are_not_flagged(self):
+        so = [goal(5, 1, home=3, away=3, period_type="SO"), goal(6, 2, home=3, away=3, period_type="SO")]
+        events = goal_probe.observe({}, "A@B", feed(goal(1, 1, home=3, away=3), *so), 0.0)
+        assert not any("DOUBLY LISTED" in e for e in events)
+
+    def test_two_ordinary_goals_with_the_same_team_and_score_still_are(self):
+        events = goal_probe.observe({}, "A@B", feed(goal(1, 1, home=1, away=0), goal(2, 1, home=1, away=0)), 0.0)
+        assert any("DOUBLY LISTED" in e for e in events)
+
+
 class TestHeaderCheck:
     def _pbp(self, header, running, outcome=None, period_type="REG"):
         plays = [goal(1, 1, home=running[0], away=running[1], period_type=period_type)]
@@ -117,6 +128,38 @@ class TestHeaderCheck:
         header, running, outcome, period_type = goal_probe.header_state(
             feed(goal(1, 1, home=1, away=1), so, home=2, away=1, outcome="SO"))
         assert (header, running, outcome, period_type) == ((2, 1), (1, 1), "SO", "SO")
+
+    def _shootout(self, header, outcome="SO"):
+        plays = [goal(1, 1, home=3, away=3), goal(5, 1, home=3, away=3, period_type="SO"),
+                 goal(6, 2, home=3, away=3, period_type="SO")]
+        return feed(*plays, home=header[0], away=header[1], outcome=outcome)
+
+    def test_a_shootout_header_one_goal_ahead_of_the_running_score_is_the_right_one(self, log_lines):
+        assert goal_probe.check_header({}, "A@B", "FINAL", self._shootout((4, 3)), 0.0) is False
+        assert "AGREE" in log_lines[0] and "MISMATCH" not in log_lines[0]
+
+    def test_a_shootout_that_agreed_at_the_first_check_logs_no_catch_up(self, log_lines):
+        ends = {}
+        goal_probe.check_header(ends, "A@B", "FINAL", self._shootout((4, 3)), 0.0)
+        goal_probe.check_header(ends, "A@B", "FINAL", self._shootout((4, 3)), 20.0)
+        assert not any("caught up" in line for line in log_lines)
+
+    def test_the_summary_says_agreed_for_a_shootout_that_agreed_at_the_first_check(self, log_lines):
+        ends = {}
+        goal_probe.check_header(ends, "A@B", "FINAL", self._shootout((4, 3)), 0.0)
+        goal_probe.summarize({}, ends)
+        assert "A@B: header at first check in an end state: agreed" in log_lines[-1]
+
+    def test_a_shootout_header_equal_to_the_running_score_is_the_stale_one(self, log_lines):
+        assert goal_probe.check_header({}, "A@B", "OVER", self._shootout((3, 3)), 0.0) is True
+        assert "MISMATCH" in log_lines[0]
+
+    def test_a_shootout_header_two_goals_ahead_or_without_the_shootout_outcome_is_a_mismatch(self, log_lines):
+        assert goal_probe.check_header({}, "A@B", "FINAL", self._shootout((5, 3)), 0.0) is True
+        assert goal_probe.check_header({}, "C@D", "FINAL", self._shootout((4, 3), outcome="REG"), 0.0) is True
+
+    def test_a_shootout_header_without_numbers_is_a_mismatch_not_a_crash(self, log_lines):
+        assert goal_probe.check_header({}, "A@B", "FINAL", self._shootout((None, None)), 0.0) is True
 
     def test_no_goals_means_0_0(self):
         assert goal_probe.header_state(feed(home=0, away=0))[1] == (0, 0)
