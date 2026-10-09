@@ -131,5 +131,8 @@ class CommandHandler:
             if response:
                 irc_bot.send_message(channel, response)  # Send response to IRC
         except Exception as e:
-            print(f"Error handling command {message}: {e}")
+            # The command's name only: its arguments are what a user typed (a title, a place, ...) and
+            # stay out of the journal. `message` is not assumed to be text; the name is rebuilt here.
+            name = str(message).split(" ", 1)[0].lower()
+            print(f"Error handling command {name}: {e}")
             traceback.print_exc()

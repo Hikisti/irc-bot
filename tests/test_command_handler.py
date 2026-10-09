@@ -134,8 +134,23 @@ class TestCommandHandler:
 
         bot.send_message.assert_not_called()
         captured = capsys.readouterr()
-        assert "Error handling command !weather austin: boom" in captured.out
+        assert "Error handling command !weather: boom" in captured.out
+        assert "austin" not in captured.out  # issue #35: what the user typed after the command stays out of the journal
         assert "Traceback" in captured.err
+
+    def test_the_failing_commands_name_is_lowercased_and_its_arguments_are_dropped(self, handler, capsys):
+        mock_weather = MagicMock()
+        mock_weather.execute.side_effect = RuntimeError("boom")
+        replace_command(handler, "!weather", mock_weather)
+
+        handler.handle_command(MagicMock(), "nick", "#chan", "!WEATHER Some Place With Spaces")
+
+        out = capsys.readouterr().out
+        assert "Error handling command !weather: boom" in out and "Some Place" not in out
+
+    def test_a_message_that_is_not_text_does_not_break_the_error_handling(self, handler, capsys):
+        handler.handle_command(MagicMock(), "nick", "#chan", None)  # must not raise
+        assert "Error handling command none:" in capsys.readouterr().out
 
     def test_needs_irc_context_command_receives_bot_and_channel(self, handler):
         # LiigaCommand/PesisCommand's own dispatch shape - the only
