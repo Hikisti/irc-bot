@@ -95,7 +95,9 @@ format, and its not-yet-started data shape hasn't been seen live).
 
 `!liiga start` polls today's Finnish Liiga (ice hockey) games every 30s in the channel it was
 started in, and announces goals and final scores as they happen. It stops automatically once
-all of today's games have ended, or on `!liiga stop`. `!liiga next` looks up the next upcoming
+all of today's games have ended, or on `!liiga stop`. The feed has no marker for a postponed game (it
+stays "not started" for good), so a game that has not started by its scheduled end counts as not
+played, and the tracker also follows only one game day: it stops when the Helsinki date changes. `!liiga next` looks up the next upcoming
 gameday (today if there's still something scheduled and not already finished, otherwise the next
 date with games) and lists its matchups grouped by start time, e.g. `Next Liiga gameday
 (tomorrow): 18:30 TPS-Jokerit, Pelicans-KooKoo`. A `FINAL:` line gets an `(OT)` or `(SO)` suffix

@@ -108,7 +108,7 @@ def main():
             if flagged:
                 back_ages.append(int(age) if age and age.isdigit() else -1)
                 back_edges[edge] += 1
-            if games and all(g.get("ended") for g in games):
+            if games and all(command._is_over(g) for g in games):  # ended, or postponed (never started)
                 log("all games ended, done")
                 break
         except Exception as e:

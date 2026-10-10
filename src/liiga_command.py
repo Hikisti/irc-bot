@@ -38,7 +38,9 @@ class LiigaCommand(LiveTrackerCommand):
     PERIOD_NOUN = "gameday"
     STATE_KEY = "games"
     START_TIME_KEY = "start"
-    ENDED_STATE_KEY = "ended"
+    # The start-of-tracking guard ("already finished") looks at "over", which also covers a game that was
+    # postponed (see _not_played), not at "ended" alone.
+    ENDED_STATE_KEY = "over"
 
     BASE_URL = "https://www.liiga.fi/api/v2/games"
     TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]
@@ -79,6 +81,9 @@ class LiigaCommand(LiveTrackerCommand):
         if prev_state is None:
             return True
 
+        if self._game_day_is_over(prev_state):
+            return True
+
         all_ended = bool(games)
         new_state = {}
 
@@ -89,7 +94,7 @@ class LiigaCommand(LiveTrackerCommand):
                     # A game we weren't tracking yet (e.g. added after start).
                     # Seed a baseline silently instead of replaying old goals.
                     new_state[gid] = self._snapshot(game)
-                    if not game.get("ended"):
+                    if not new_state[gid]["over"]:
                         all_ended = False
                     continue
 
@@ -106,7 +111,8 @@ class LiigaCommand(LiveTrackerCommand):
                 new_state[gid] = self._snapshot(game, prev)
                 new_state[gid]["ended"] = ended
                 self._log_missing_goals(gid, game, prev, new_state[gid])
-                if not ended:
+                new_state[gid]["over"] = ended or self._not_played(game)
+                if not new_state[gid]["over"]:
                     all_ended = False
             except Exception as e:
                 # Don't let one malformed game entry take down the whole poll
@@ -430,7 +436,44 @@ class LiigaCommand(LiveTrackerCommand):
         return None, None
 
     def _all_games_ended(self, games) -> bool:
-        return bool(games) and all(bool(g.get("ended")) for g in games.values())
+        return bool(games) and all(self._is_over(g) for g in games.values())
+
+    NOT_PLAYED_FALLBACK_HOURS = 3  # a game's scheduled length when the feed gives no `end`
+
+    def _now(self):
+        return datetime.datetime.now(self.HELSINKI_TZ)
+
+    def _not_played(self, game) -> bool:
+        """True for a game the feed still lists as not started after its scheduled end. The feed has no
+        marker for a postponed game: on 2026-10-09 a game postponed because of the ice stayed `started`
+        false, `ended` false, 0-0 for good, which kept the tracker from ever finishing (issue #37). A game
+        delayed by more than its whole scheduled length would be mistaken for one, which has not been seen."""
+        if game.get("started") or game.get("ended"):
+            return False
+        end = self._parse_start_dt(game.get("end"))
+        if end is None:
+            start = self._parse_start_dt(game.get("start"))
+            end = start + datetime.timedelta(hours=self.NOT_PLAYED_FALLBACK_HOURS) if start else None
+        return end is not None and self._now() > end
+
+    def _is_over(self, game) -> bool:
+        """Ended, or never going to be played today: what the stop condition and `next` count as finished."""
+        return bool(game.get("ended")) or self._not_played(game)
+
+    def _game_day(self, game) -> str:
+        start = self._parse_start_dt(game.get("start"))
+        return (start or self._now()).strftime("%Y-%m-%d")
+
+    def _game_day_is_over(self, prev_state) -> bool:
+        """The tracker follows one game day. Once the Helsinki date has moved on from the day of every game it
+        was tracking, it is done, whatever the feed says about those games: otherwise it carried on into the next
+        day, announcing games nobody asked it to follow (#37). Returns True when it should stop."""
+        today = self._now().strftime("%Y-%m-%d")
+        days = {state["day"] for state in prev_state.values() if state.get("day")}
+        if days and all(day < today for day in days):
+            print(f"Liiga: the game day {max(days)} is over, stopping the tracker")
+            return True
+        return False
 
     SIDES = ("homeTeam", "awayTeam")
 
@@ -447,7 +490,8 @@ class LiigaCommand(LiveTrackerCommand):
             known = set(prev["announced"][side]) if prev else set()
             announced[side] = known | current
             missing[side] = len(known - current)
-        return {"announced": announced, "missing": missing, "ended": bool(game.get("ended"))}
+        return {"announced": announced, "missing": missing, "ended": bool(game.get("ended")),
+                "over": self._is_over(game), "day": self._game_day(game)}
 
     def _log_missing_goals(self, game_id, game, prev, now):
         """A journal line when the number of announced goals the feed does not

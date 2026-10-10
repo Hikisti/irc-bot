@@ -14,8 +14,8 @@ from tests.conftest import join_channel_thread
 
 def make_game(gid=1, home="HIFK", away="Ilves", home_goals=None, away_goals=None,
               started=True, ended=False, finished_type="ACTIVE_OR_NOT_STARTED",
-              start="2026-09-05T14:00:00Z"):
-    return {
+              start="2026-09-05T14:00:00Z", end=None):
+    game = {
         "id": gid,
         "start": start,
         "homeTeam": {
@@ -37,6 +37,9 @@ def make_game(gid=1, home="HIFK", away="Ilves", home_goals=None, away_goals=None
         "ended": ended,
         "finishedType": finished_type,
     }
+    if end is not None:
+        game["end"] = end  # the scheduled end, as the feed carries it
+    return game
 
 
 _event_ids = itertools.count(1)
@@ -72,9 +75,17 @@ def disallowed_goal_event(period=1, game_time=446):
     }
 
 
+# The clock the tests see: 18:00 Helsinki time on the day of make_game's default game (it started at 17:00
+# Helsinki time, ends at 20:00). The tracker's rules about a game that never started and about the change of
+# day depend on "now", so no test is allowed to depend on the real clock.
+FIXED_NOW = datetime.datetime(2026, 9, 5, 15, 0, tzinfo=datetime.timezone.utc).astimezone(LiigaCommand.HELSINKI_TZ)
+
+
 @pytest.fixture
 def liiga_command():
-    return LiigaCommand()
+    command = LiigaCommand()
+    command._now = lambda: FIXED_NOW
+    return command
 
 
 class TestStartDoesNotBlock:
@@ -241,6 +252,162 @@ class TestStop:
             assert "#chan" not in liiga_command._channels
 
             release_fetch.set()  # let the orphaned thread finish so it doesn't leak into other tests
+
+
+def at(hour, minute=0, day=5):
+    """An ISO timestamp (UTC) on the test day, for a game's `start` or `end`."""
+    return datetime.datetime(2026, 9, day, hour, minute, tzinfo=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def at_helsinki_midnight_plus(minutes, day=6):
+    return datetime.datetime(2026, 9, day, 0, minutes, tzinfo=LiigaCommand.HELSINKI_TZ)
+
+
+class TestNotPlayed:
+    """Issue #37: the feed has no marker for a postponed game; it stays started=false, ended=false, 0-0.
+    One that has not started by its scheduled end counts as over, so it cannot keep the tracker alive."""
+
+    def test_a_game_not_started_after_its_scheduled_end_is_not_played(self, liiga_command):
+        game = make_game(started=False, start=at(12), end=at(14))   # scheduled to end 17:00 Helsinki, "now" is 18:00
+        assert liiga_command._not_played(game) is True and liiga_command._is_over(game) is True
+
+    def test_a_game_not_started_before_its_scheduled_end_is_still_to_come(self, liiga_command):
+        game = make_game(started=False, start=at(14), end=at(17))
+        assert liiga_command._not_played(game) is False and liiga_command._is_over(game) is False
+
+    def test_a_game_that_started_or_ended_is_never_not_played(self, liiga_command):
+        assert liiga_command._not_played(make_game(started=True, ended=False, start=at(1), end=at(2))) is False
+        assert liiga_command._not_played(make_game(started=True, ended=True, start=at(1), end=at(2))) is False
+
+    def test_without_an_end_the_scheduled_length_is_three_hours(self, liiga_command):
+        late = make_game(started=False, start=at(11))   # 11:00Z + 3 h = 14:00Z < 15:00Z "now"
+        soon = make_game(started=False, start=at(13))   # 13:00Z + 3 h = 16:00Z > 15:00Z
+        assert liiga_command._not_played(late) is True and liiga_command._not_played(soon) is False
+
+    def test_a_game_with_no_times_at_all_is_never_not_played(self, liiga_command):
+        game = make_game(started=False)
+        game.pop("start")
+        assert liiga_command._not_played(game) is False
+
+    def test_the_stop_condition_ignores_a_postponed_game(self, liiga_command):
+        bot = MagicMock()
+        played = make_game(gid=1, ended=True, start=at(10), end=at(13))
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13))
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {1: liiga_command._snapshot(played), 2: liiga_command._snapshot(postponed)}}
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: played, 2: postponed}):
+            assert liiga_command._poll_once(bot, "#chan") is True
+
+    def test_a_postponed_game_is_never_announced_as_finished(self, liiga_command):
+        bot = MagicMock()
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13))
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {2: liiga_command._snapshot(postponed)}}
+        with patch.object(liiga_command, "_fetch_today_games", return_value={2: postponed}):
+            liiga_command._poll_once(bot, "#chan")
+        bot.send_message.assert_not_called()
+
+    def test_a_game_still_to_come_keeps_the_tracker_going(self, liiga_command):
+        bot = MagicMock()
+        played = make_game(gid=1, ended=True, start=at(10), end=at(13))
+        later = make_game(gid=2, started=False, start=at(14), end=at(17))
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {1: liiga_command._snapshot(played), 2: liiga_command._snapshot(later)}}
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: played, 2: later}):
+            assert liiga_command._poll_once(bot, "#chan") is False
+
+    def test_a_game_that_does_start_late_is_followed_after_all(self, liiga_command):
+        bot = MagicMock()
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13), home_goals=[])
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {2: liiga_command._snapshot(postponed)}}
+        started = make_game(gid=2, started=True, start=at(10), end=at(13),
+                            home_goals=[goal_event(home_score=1, away_score=0)])
+        with patch.object(liiga_command, "_fetch_today_games", return_value={2: started}):
+            assert liiga_command._poll_once(bot, "#chan") is False  # it is on now: not over
+        assert any("GOAL:" in c.args[1] for c in bot.send_message.call_args_list)
+
+    def test_a_new_postponed_game_added_mid_tracking_does_not_keep_it_alive(self, liiga_command):
+        bot = MagicMock()
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None, "games": {}}
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13))
+        with patch.object(liiga_command, "_fetch_today_games", return_value={2: postponed}):
+            assert liiga_command._poll_once(bot, "#chan") is True
+
+    def test_next_skips_a_day_whose_only_open_game_was_postponed(self, liiga_command):
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13))
+        played = make_game(gid=1, ended=True, start=at(10), end=at(13))
+        assert liiga_command._all_games_ended({1: played, 2: postponed}) is True
+
+    def test_the_start_guard_says_everything_has_already_finished_when_only_a_postponed_game_is_left(self, liiga_command):
+        postponed = make_game(gid=2, started=False, start=at(10), end=at(13))
+        played = make_game(gid=1, ended=True, start=at(10), end=at(13))
+        state = liiga_command._build_initial_state({1: played, 2: postponed})
+        assert all(s[liiga_command.ENDED_STATE_KEY] for s in state.values())
+
+
+class TestGameDayRollover:
+    """Issue #37: the tracker follows one game day and stops when the Helsinki date moves on, so it cannot go on
+    into the next day announcing games nobody asked it to follow."""
+
+    def _tracking(self, liiga_command, game):
+        liiga_command._channels["#chan"] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {game["id"]: liiga_command._snapshot(game)}}
+
+    def test_at_the_change_of_day_it_stops_whatever_the_feed_says(self, liiga_command):
+        bot = MagicMock()
+        game = make_game(gid=1, started=True, ended=False, start=at(14), end=at(17))   # 5 Sept, never ends in the feed
+        self._tracking(liiga_command, game)
+        liiga_command._now = lambda: at_helsinki_midnight_plus(5)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+            assert liiga_command._poll_once(bot, "#chan") is True
+
+    def test_it_says_so_in_the_journal(self, liiga_command, capsys):
+        game = make_game(gid=1, started=True, start=at(14), end=at(17))
+        self._tracking(liiga_command, game)
+        liiga_command._now = lambda: at_helsinki_midnight_plus(5)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+            liiga_command._poll_once(MagicMock(), "#chan")
+        assert "Liiga: the game day 2026-09-05 is over, stopping the tracker" in capsys.readouterr().out
+
+    def test_the_next_days_games_are_not_announced(self, liiga_command):
+        bot = MagicMock()
+        game = make_game(gid=1, started=True, start=at(14), end=at(17))
+        self._tracking(liiga_command, game)
+        liiga_command._now = lambda: at_helsinki_midnight_plus(5)
+        tomorrow = make_game(gid=9, started=True, start=at(14, day=6), home_goals=[goal_event(home_score=1, away_score=0)])
+        with patch.object(liiga_command, "_fetch_today_games", return_value={9: tomorrow}):
+            assert liiga_command._poll_once(bot, "#chan") is True
+        bot.send_message.assert_not_called()
+
+    def test_before_the_change_of_day_nothing_changes(self, liiga_command):
+        bot = MagicMock()
+        game = make_game(gid=1, started=True, start=at(14), end=at(17))
+        self._tracking(liiga_command, game)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+            assert liiga_command._poll_once(bot, "#chan") is False
+
+    def test_a_game_late_in_the_evening_is_still_followed_at_half_past_ten(self, liiga_command):
+        bot = MagicMock()
+        game = make_game(gid=1, started=True, start=at(16, 30), end=at(19, 30))
+        self._tracking(liiga_command, game)
+        liiga_command._now = lambda: datetime.datetime(2026, 9, 5, 22, 30, tzinfo=LiigaCommand.HELSINKI_TZ)
+        with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+            assert liiga_command._poll_once(bot, "#chan") is False
+
+    def test_the_state_records_the_helsinki_day_of_each_game(self, liiga_command):
+        assert liiga_command._snapshot(make_game(start=at(14)))["day"] == "2026-09-05"
+        assert liiga_command._snapshot(make_game(start=at(22)))["day"] == "2026-09-06"   # 01:00 Helsinki time the next day
+
+    def test_games_from_two_days_do_not_end_the_tracking_while_one_of_them_is_from_today(self, liiga_command):
+        assert liiga_command._game_day_is_over({1: {"day": "2026-09-04"}, 2: {"day": "2026-09-05"}}) is False
+
+    def test_the_real_clock_is_in_helsinki_time(self):
+        now = LiigaCommand()._now()
+        assert now.tzinfo is not None and now.utcoffset() == datetime.datetime.now(LiigaCommand.HELSINKI_TZ).utcoffset()
+
+    def test_an_empty_state_never_triggers_the_rollover(self, liiga_command):
+        assert liiga_command._game_day_is_over({}) is False
 
 
 class TestAnnounceByIdentity:
@@ -1017,6 +1184,26 @@ class TestFetchNextGameday:
 
         assert date_str == tomorrow_str
         assert games == {2: tomorrow_game}
+
+    def test_skips_today_when_the_only_game_left_open_was_postponed(self, liiga_command):
+        """Issue #37: a postponed game stays not started in the feed; it must not make `next` offer today."""
+        finished_today = make_game(gid=1, ended=True, start=at(10), end=at(13))
+        postponed = make_game(gid=3, started=False, start=at(10), end=at(13))
+        tomorrow_game = make_game(gid=2, started=False, start=at(14, day=6), end=at(17, day=6))
+        today_str = datetime.datetime.now(liiga_command.HELSINKI_TZ).strftime("%Y-%m-%d")
+        tomorrow_str = (datetime.datetime.now(liiga_command.HELSINKI_TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+        def fake_get(url, params=None, timeout=None):
+            if params["date"] == today_str and params["tournament"] == "runkosarja":
+                return self._make_response(games=[finished_today, postponed])
+            if params["date"] == tomorrow_str and params["tournament"] == "runkosarja":
+                return self._make_response(games=[tomorrow_game])
+            return self._make_response()
+
+        with patch.object(liiga_command.session, "get", side_effect=fake_get):
+            date_str, games = liiga_command._fetch_next_gameday()
+
+        assert date_str == tomorrow_str and games == {2: tomorrow_game}
 
     def test_returns_today_if_only_some_of_todays_games_have_ended(self, liiga_command):
         finished = make_game(gid=1, ended=True)
