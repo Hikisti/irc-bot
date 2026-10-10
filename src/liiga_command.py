@@ -212,6 +212,7 @@ class LiigaCommand(LiveTrackerCommand):
         scoring_team = home if side == "homeTeam" else away
         home_score = event.get("homeTeamScore", "?")
         away_score = event.get("awayTeamScore", "?")
+        home_score, away_score = self._score_after_winning_shot(side, event, home_score, away_score)
 
         scorer = event.get("scorerPlayer") or {}
         scorer_name = f"{scorer.get('firstName', '')} {scorer.get('lastName', '')}".strip() or "Unknown"
@@ -236,6 +237,18 @@ class LiigaCommand(LiveTrackerCommand):
             f"{self.GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
             f"{time_str} | {scoring_team} — {scorer_name}{tag_str}{assist_str}"
         )
+
+    SHOOTOUT_WINNER_TAG = "VL"  # voittolaukaus, the winning shot of a shootout
+
+    def _score_after_winning_shot(self, side, event, home_score, away_score):
+        """The feed's score on the shootout's winning shot is the tie from before the shootout (2-2), and only the
+        final result adds the winner's goal (2-3): announced as it came, the line and the FINAL: line seemed to
+        disagree (issue #38). The event is the decisive goal, so the line gives the result after it. A score that
+        is not a tie is left alone, in case the feed ever includes the winner's goal itself."""
+        if (self.SHOOTOUT_WINNER_TAG not in (event.get("goalTypes") or [])
+                or not isinstance(home_score, int) or not isinstance(away_score, int) or home_score != away_score):
+            return home_score, away_score
+        return (home_score + 1, away_score) if side == "homeTeam" else (home_score, away_score + 1)
 
     def _format_clock(self, game, event) -> str:
         game_time = event.get("gameTime")

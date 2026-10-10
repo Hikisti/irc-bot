@@ -410,6 +410,51 @@ class TestGameDayRollover:
         assert liiga_command._game_day_is_over({}) is False
 
 
+class TestShootoutWinningShot:
+    """Issue #38: the feed's score on the shootout's winning shot is the tie from before the shootout; the line
+    gives the result after the shot, like the FINAL: line."""
+
+    def _game(self, **kw):
+        game = make_game(home="Ässät", away="HPK", ended=True, **kw)
+        game["periods"] += [{"index": 4, "startTime": 3600, "endTime": 3900}, {"index": 5, "startTime": 3900, "endTime": 3900}]
+        return game
+
+    def _line(self, liiga_command, side, **event):
+        return liiga_command._format_goal(self._game(), side, goal_event(period=5, game_time=3900, **event))
+
+    def test_the_away_teams_winning_shot_adds_its_goal(self, liiga_command):
+        line = self._line(liiga_command, "awayTeam", home_score=2, away_score=2, tags=["VL"])
+        assert f"{BOLD}Ässät 2-3 HPK{RESET} 00:00 SO | HPK" in line
+
+    def test_the_home_teams_winning_shot_adds_its_goal(self, liiga_command):
+        line = self._line(liiga_command, "homeTeam", home_score=1, away_score=1, tags=["VL"])
+        assert f"{BOLD}Ässät 2-1 HPK{RESET}" in line
+
+    def test_a_shootout_event_without_the_winning_shot_tag_is_unchanged(self, liiga_command):
+        line = self._line(liiga_command, "awayTeam", home_score=2, away_score=2, tags=[])
+        assert f"{BOLD}Ässät 2-2 HPK{RESET}" in line
+
+    def test_a_winning_shot_whose_score_already_has_the_goal_is_left_alone(self, liiga_command):
+        line = self._line(liiga_command, "awayTeam", home_score=2, away_score=3, tags=["VL"])
+        assert f"{BOLD}Ässät 2-3 HPK{RESET}" in line
+
+    def test_a_winning_shot_without_numeric_scores_is_left_alone(self, liiga_command):
+        event = goal_event(period=5, game_time=3900, tags=["VL"])
+        del event["homeTeamScore"], event["awayTeamScore"]
+        assert f"{BOLD}Ässät ?-? HPK{RESET}" in liiga_command._format_goal(self._game(), "awayTeam", event)
+
+    def test_the_result_matches_the_final_line_of_the_same_game(self, liiga_command):
+        game = self._game(home_goals=[goal_event(home_score=1, away_score=0), goal_event(home_score=2, away_score=1)],
+                          away_goals=[goal_event(home_score=1, away_score=1), goal_event(home_score=2, away_score=2),
+                                      goal_event(period=5, game_time=3900, home_score=2, away_score=2, tags=["VL"])])
+        game["homeTeam"]["goals"], game["awayTeam"]["goals"] = 2, 3
+        bot = MagicMock()
+        liiga_command._announce_end(bot, "#chan", game)
+        final = bot.send_message.call_args[0][1]
+        assert "Ässät 2-3 HPK" in final
+        assert "Ässät 2-3 HPK" in liiga_command._format_goal(game, "awayTeam", game["awayTeam"]["goalEvents"][-1])
+
+
 class TestAnnounceByIdentity:
     """Issue #16: the feed was seen to leave a goal out of one 10 s sample and bring it back in the next
     (2026-10-08, twice). Announcing by the identity of the goal event, not by counting events, means that
