@@ -73,6 +73,15 @@ class TestParseLine:
         assert (e["clock"], e["period"], e["scorer"], e["assists"], e["tags"]) == ("07:12", "2nd", "Alice Ann", True, ["PP"])
         assert (e["ts"].year, e["ts"].month, e["ts"].day, e["ts"].hour) == (YEAR, 10, 7, 1)
 
+    def test_a_shootout_goal_with_its_tally_instead_of_a_clock(self):
+        text = f"{BOLD}{GREEN}GOAL:{RESET} {BOLD}Reds 2-2 Blues Penguins{RESET} SO 1-0 | Reds \u2014 Alice Ann"
+        e = jr.parse_line(sent("01:00:00", CH, text), YEAR)
+        assert (e["kind"], e["home"], e["away"], e["h"], e["a"]) == ("goal", "Reds", "Blues Penguins", 2, 2)
+        assert (e["period"], e["clock"], e["shootout"], e["scorer"]) == ("SO", None, (1, 0), "Alice Ann")
+
+    def test_an_ordinary_goal_has_no_shootout_tally(self):
+        assert jr.parse_line(GOAL1, YEAR)["shootout"] is None
+
     def test_a_goal_without_assists_or_tags(self):
         e = jr.parse_line(sent("01:00:00", CH, goal_text("Reds", 1, 0, "Blues", "04:38", "OT", "Reds", "Alice Ann")), YEAR)
         assert (e["scorer"], e["assists"], e["tags"], e["period"]) == ("Alice Ann", False, [], "OT")
@@ -377,6 +386,18 @@ class TestRoundTrip:
         nhl._announce_end(bot, CH, final_pbp)
         e = jr.parse_line(sent("01:20:00", CH, bot.send_message.call_args[0][1]), YEAR)
         assert (e["kind"], e["h"], e["a"], e["ot"]) == ("final", 5, 4, "OT")
+
+    def test_nhl_shootout_goal_round_trip(self):
+        from nhl_command import NHLCommand
+        from tests.test_nhl_command import goal_play, make_pbp, roster_spot
+        nhl = NHLCommand()
+        nhl.session.get = MagicMock()
+        goal = goal_play(event_id=7, event_owner_team_id=10, scoring_player_id=100, period_number=5, period_type="SO",
+                         time_in_period="00:00", home_score=2, away_score=2)
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, plays=[goal], roster=[roster_spot(100, "Kent", "Johnson")])
+        e = jr.parse_line(sent("01:00:00", CH, nhl._format_goal(pbp, goal)), YEAR)
+        assert (e["home"], e["away"], e["h"], e["a"], e["period"], e["shootout"], e["scorer"]) == \
+            ("Carolina Hurricanes", "Florida Panthers", 2, 2, "SO", (1, 0), "Kent Johnson")
 
     def test_liiga_goal_and_final(self):
         from liiga_command import LiigaCommand

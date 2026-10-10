@@ -141,7 +141,9 @@ Panthers (SO) | Yleisöä: 19250`. A goal scored in a special situation is tagge
 shootout goals get none. The tag is decoded from the goal's on-ice situation code, so it costs no
 extra request, and was checked against NHL's own labels on 250 real goals with no mismatches; a
 team scoring with its own goalie pulled at even strength gets no tag, matching NHL, and penalty
-shots aren't distinguishable in this feed. The attendance isn't in NHL's JSON API at all, so it's
+shots aren't distinguishable in this feed. A shootout goal does not change the game score, so its line keeps the tied
+score and gives the shootout tally instead of a clock, e.g. `GOAL: Columbus Blue Jackets 2-2 Pittsburgh Penguins SO 1-0 | ...`;
+the `FINAL: ... 3-2 (SO)` then adds the winner's goal. The attendance isn't in NHL's JSON API at all, so it's
 read from NHL's HTML game-summary report with one extra request when a game ends, and simply left
 off if that report isn't available yet or NHL changes the page. The report's figure often appears only
 1.5-3 minutes after the final horn (about two games in three), so a missing figure is looked up again every

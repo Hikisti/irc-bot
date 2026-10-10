@@ -254,15 +254,70 @@ class TestFormatGoal:
         goal = goal_play(event_owner_team_id=10, scoring_player_id=100)
         assert "assists" not in nhl_command._format_goal(pbp, goal)
 
-    def test_shootout_goal_shows_so_label(self, nhl_command):
-        pbp = make_pbp(home_id=10, roster=[roster_spot(100)])
-        goal = goal_play(event_owner_team_id=10, scoring_player_id=100, period_number=5, period_type="SO")
-        assert " SO |" in nhl_command._format_goal(pbp, goal)
+    def test_shootout_goal_shows_the_game_score_and_the_shootout_tally(self, nhl_command):
+        """Issue #38: the game score stays at the tie, the tally says why the final reads 3-2."""
+        goal = goal_play(event_id=7, event_owner_team_id=10, scoring_player_id=100, period_number=5, period_type="SO",
+                         time_in_period="00:00", home_score=2, away_score=2)
+        pbp = make_pbp(home_id=10, away_id=20, plays=[goal], roster=[roster_spot(100)])
+        line = nhl_command._format_goal(pbp, goal)
+        assert f"{BOLD}Carolina Hurricanes 2-2 Florida Panthers{RESET} SO 1-0 | Carolina Hurricanes — " in line
+        assert "00:00" not in line
 
     def test_overtime_goal_shows_ot_label(self, nhl_command):
         pbp = make_pbp(home_id=10, roster=[roster_spot(100)])
         goal = goal_play(event_owner_team_id=10, scoring_player_id=100, period_number=4, period_type="OT")
         assert " OT |" in nhl_command._format_goal(pbp, goal)
+
+
+class TestShootoutTally:
+    """Issue #38: the shootout tally is counted from the play list, in play order, up to the goal being announced."""
+
+    def _so_goal(self, event_id, team, scorer=100):
+        return goal_play(event_id=event_id, event_owner_team_id=team, scoring_player_id=scorer, period_number=5,
+                         period_type="SO", time_in_period="00:00", home_score=2, away_score=2)
+
+    def _pbp(self, *plays):
+        regulation = goal_play(event_id=1, event_owner_team_id=10, home_score=1, away_score=0, scoring_player_id=100)
+        return make_pbp(home_id=10, away_id=20, plays=[regulation, *plays], roster=[roster_spot(100)])
+
+    def test_each_shootout_goal_shows_the_tally_so_far(self, nhl_command):
+        goals = [self._so_goal(10, 10), self._so_goal(11, 20), self._so_goal(12, 20), self._so_goal(13, 10)]
+        pbp = self._pbp(*goals)
+        tallies = [nhl_command._format_goal(pbp, g).split(" | ")[0].split(" SO ")[1] for g in goals]
+        assert tallies == ["1-0", "1-1", "1-2", "2-2"]
+
+    def test_the_tally_is_home_then_away_whichever_team_scores(self, nhl_command):
+        away_goal = self._so_goal(10, 20)
+        assert " SO 0-1 | " in nhl_command._format_goal(self._pbp(away_goal), away_goal)
+
+    def test_regulation_and_overtime_goals_are_not_counted_in_the_tally(self, nhl_command):
+        overtime = goal_play(event_id=2, event_owner_team_id=20, period_number=4, period_type="OT", time_in_period="01:30",
+                             home_score=1, away_score=1, scoring_player_id=100)
+        goal = self._so_goal(10, 10)
+        pbp = self._pbp(overtime, goal)
+        assert " SO 1-0 | " in nhl_command._format_goal(pbp, goal)
+
+    def test_the_tally_follows_play_order_not_event_ids(self, nhl_command):
+        later = self._so_goal(5, 20)      # a lower id, but played second
+        first = self._so_goal(99, 10)
+        pbp = self._pbp(first, later)
+        assert " SO 1-1 | " in nhl_command._format_goal(pbp, later)
+        assert " SO 1-0 | " in nhl_command._format_goal(pbp, first)
+
+    def test_a_goal_that_is_no_longer_in_the_play_list_gets_the_whole_tally(self, nhl_command):
+        gone = self._so_goal(50, 10)
+        assert " SO 1-0 | " in nhl_command._format_goal(self._pbp(self._so_goal(10, 10)), gone)
+
+    def test_a_shootout_goal_without_an_event_id_is_found_by_identity(self, nhl_command):
+        first, second = self._so_goal(None, 10), self._so_goal(None, 20)
+        pbp = self._pbp(first, second)
+        assert " SO 1-1 | " in nhl_command._format_goal(pbp, second)
+
+    def test_other_goal_lines_are_unchanged(self, nhl_command):
+        goal = goal_play(event_id=3, event_owner_team_id=10, period_number=4, period_type="OT", time_in_period="03:23",
+                         home_score=2, away_score=1, scoring_player_id=100)
+        line = nhl_command._format_goal(self._pbp(goal), goal)
+        assert f"{RESET} 03:23 OT | " in line and " SO " not in line
 
 
 class TestAnnounceEnd:

@@ -27,7 +27,10 @@ LINE = re.compile(r"^(?P<mon>[A-Z][a-z]{2}) +(?P<day>\d{1,2}) (?P<time>\d\d:\d\d
 CONTROL = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?|[\x02\x0f\x1d\x1f\x16]")
 
 _WHEN = r"(?: (?P<clock>\d{1,3}:\d{2}) (?P<period>\S+(?: \d+)?))?"
-GOAL = re.compile(r"^GOAL: (?P<home>.+?) (?P<h>\d+)-(?P<a>\d+) (?P<away>.+?)" + _WHEN +
+# A shootout goal carries the shootout tally instead of a clock and period: "... 2-2 Penguins SO 1-0 | ..."
+_WHEN_GOAL = (r"(?: (?P<clock>\d{1,3}:\d{2}) (?P<period>\S+(?: \d+)?)"
+              r"| SO (?P<so_h>\d+)-(?P<so_a>\d+))?")
+GOAL = re.compile(r"^GOAL: (?P<home>.+?) (?P<h>\d+)-(?P<a>\d+) (?P<away>.+?)" + _WHEN_GOAL +
                   r" \| (?P<team>.+?) \u2014 (?P<rest>.+)$")
 NOGOAL_OLD = re.compile(r"^NO GOAL: (?P<home>.+?) (?P<h>\d+)-(?P<a>\d+) (?P<away>.+?) \| the (?P<clock>\d{1,3}:\d{2}) "
                         r"(?P<period>\S+(?: \d+)?) goal by (?P<scorer>.+?) \((?P<team>[^()]+)\) was disallowed"
@@ -111,7 +114,9 @@ def _parse_sent(ts, channel, text):
     m = GOAL.match(text)
     if m:
         rest = m["rest"]
-        return {**base, "kind": "goal", **_game(m), "clock": m["clock"], "period": m["period"],
+        shootout = m["so_h"] is not None
+        return {**base, "kind": "goal", **_game(m), "clock": m["clock"], "period": "SO" if shootout else m["period"],
+                "shootout": (int(m["so_h"]), int(m["so_a"])) if shootout else None,
                 "scorer": re.split(r" \(", rest, maxsplit=1)[0], "assists": "(assists:" in rest,
                 "tags": [t for t in re.findall(r"\(([^()]*)\)", rest) if not t.startswith("assists:")]}
     m = NOGOAL_OLD.match(text) or NOGOAL_NEW.match(text)

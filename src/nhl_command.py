@@ -529,13 +529,34 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
         tag_str = f" ({'/'.join(tags)})" if tags else ""
 
         period = goal.get("periodDescriptor") or {}
-        period_label = self._period_label(period)
-        time_str = f" {goal.get('timeInPeriod', '')} {period_label}".rstrip()
+        if period.get("periodType") == "SO":
+            # A shootout goal does not change the game score (the feed keeps the running score at the tie),
+            # so the line gives that score and the shootout tally; the final line then adds the winner's goal.
+            shootout_home, shootout_away = self._shootout_tally(pbp, goal)
+            time_str = f" SO {shootout_home}-{shootout_away}"
+        else:
+            period_label = self._period_label(period)
+            time_str = f" {goal.get('timeInPeriod', '')} {period_label}".rstrip()
 
         return (
             f"{self.GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
             f"{time_str} | {scoring_team} — {scorer_name}{tag_str}{assist_str}"
         )
+
+    def _shootout_tally(self, pbp, goal) -> tuple:
+        """(home, away) goals scored in the shootout up to and including `goal`, counted from the play list."""
+        home_id = (pbp.get("homeTeam") or {}).get("id")
+        home = away = 0
+        for play in self._all_real_goals(pbp):
+            if (play.get("periodDescriptor") or {}).get("periodType") != "SO":
+                continue
+            if (play.get("details") or {}).get("eventOwnerTeamId") == home_id:
+                home += 1
+            else:
+                away += 1
+            if play is goal or (play.get("eventId") is not None and play.get("eventId") == goal.get("eventId")):
+                break
+        return home, away
 
     def _goal_tags(self, pbp, goal) -> list:
         """["PP"], ["SH"], ["EN"] or a combination (e.g. ["SH", "EN"]),
