@@ -236,6 +236,23 @@ class TestAttendance:
         assert any("FINAL without attendance" in a for a in r["anomalies"])
 
 
+class TestGluedLines:
+    def test_messages_run_together_on_one_journal_line_are_each_read(self):
+        other = "#other"
+        glued = sent("01:00:00", CH, goal_text("Reds", 1, 0, "Blues", "05:00", "1st", "Reds", "Alice Ann")) \
+            + f"> PRIVMSG {other} :" + goal_text("Reds", 1, 0, "Blues", "05:00", "1st", "Reds", "Alice Ann")
+        entries = jr.parse_journal([glued], YEAR)
+        assert [(e["kind"], e["channel"]) for e in entries] == [("goal", CH), ("goal", other)]
+
+    def test_three_run_together_messages_are_all_read(self):
+        text = final_text("Reds", 1, 0, "Blues", att=5)
+        glued = sent("01:00:00", "#a", text) + "".join(f"> PRIVMSG {c} :{text}" for c in ("#b", "#c"))
+        assert [e["channel"] for e in jr.parse_journal([glued], YEAR)] == ["#a", "#b", "#c"]
+
+    def test_a_single_message_is_untouched(self):
+        assert len(jr.parse_journal([GOAL1], YEAR)) == 1
+
+
 class TestReport:
     def test_the_delay_after_the_last_goal_line(self):
         r = report(GOAL1, sent("01:01:30", CH, final_text("Reds", 1, 0, "Blues", att=1000)))

@@ -143,8 +143,17 @@ def _game(m):
     return {"home": m["home"], "away": m["away"], "h": int(m["h"]), "a": int(m["a"])}
 
 
+def _unglue(line):
+    """The lines of one journal line that holds several sent messages. Two threads printing at once
+    (the two channels' GOAL: lines) used to run together as "...> PRIVMSG #a :x> PRIVMSG #b :y"."""
+    head, sep, tail = line.partition("> PRIVMSG ")
+    if not sep or "> PRIVMSG " not in tail:
+        return [line]
+    return [head + sep + part for part in tail.split("> PRIVMSG ")]
+
+
 def parse_journal(lines, year):
-    entries = [e for e in (parse_line(line, year) for line in lines) if e]
+    entries = [e for line in lines for part in _unglue(line) if (e := parse_line(part, year))]
     return sorted(entries, key=lambda e: e["ts"])  # stable: lines of the same second keep their order
 
 
