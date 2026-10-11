@@ -1,5 +1,6 @@
 import os
 import socket
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -347,6 +348,14 @@ class TestIncomingLinesInTheJournal:
     def test_the_lines_the_bot_sends_are_still_journaled(self, bot, capsys):
         bot.send_raw("PRIVMSG #chan :GOAL: A 1-0 B")
         assert "> PRIVMSG #chan :GOAL: A 1-0 B" in capsys.readouterr().out
+
+    def test_a_sent_line_is_journaled_in_one_write(self, bot, monkeypatch):
+        # Two writes (text, then newline) let another thread's line land in between and glue two
+        # sent lines into one journal line.
+        writes = []
+        monkeypatch.setattr(sys.stdout, "write", writes.append)
+        bot.send_raw("PRIVMSG #chan :GOAL: A 1-0 B")
+        assert writes == ["> PRIVMSG #chan :GOAL: A 1-0 B\n"]
 
 
 class TestListenBuffering:

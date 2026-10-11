@@ -137,7 +137,10 @@ class IrcBot:
 
     def send_raw(self, message):
         """Send a raw command to the IRC server."""
-        print(f"> {message}")  # Debugging
+        # One write, newline included: print() writes the text and the newline separately, and a
+        # second thread's line landing between them glued two "> PRIVMSG" lines into one journal
+        # line (seen with the two channels' GOAL: lines, which are sent from different threads).
+        sys.stdout.write(f"> {message}\n")
         try:
             # sendall() (rather than send()) guarantees the whole line goes
             # out in one go rather than potentially partial-writing; the
