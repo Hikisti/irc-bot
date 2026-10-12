@@ -157,7 +157,7 @@ class TestSeriesResolution:
         # after a bot restart) should still hit the cache rather than
         # refetching, as long as SERIES_CACHE_FILE points at the same
         # (still-fresh) file.
-        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())) as mock_get:
+        with patch.object(sc.session, "get", return_value=make_response(series_list_payload())):
             sc._resolve_series_id()
 
         fresh_instance = SuperpesisCommand()

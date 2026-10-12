@@ -95,6 +95,10 @@ failure never affects any other's.
   for a real incident this caused and how to avoid it).
 - `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r
   requirements-dev.txt`
+- `ruff check src tests tools` for lint (CI runs it before the tests, and a
+  finding fails the build). Config is `ruff.toml`; it checks for real mistakes
+  (unused names, undefined names, bugbear), not formatting - there is no
+  auto-formatter on purpose, to keep `git blame` meaningful.
 - `pytest` for the suite; `pytest --cov=src --cov-report=term-missing` for
   coverage. Tests mirror `src/` one-to-one under `tests/`. Shared test
   builders/fixtures live in `tests/conftest.py` (e.g. `make_json_response`)

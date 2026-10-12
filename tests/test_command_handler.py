@@ -353,7 +353,7 @@ class TestExclusiveChannel:
         mock.execute.return_value = "ok"
         replace_command(handler, "!liiga", mock)
 
-        bot = self._run(handler, "#veikkaus", "!liiga start")
+        self._run(handler, "#veikkaus", "!liiga start")
 
         mock.execute.assert_called_once()
         assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"

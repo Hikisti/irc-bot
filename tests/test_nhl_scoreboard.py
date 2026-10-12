@@ -67,8 +67,10 @@ class TestFetchScores:
         assert set(nhl._fetch_scores(TODAY)) == {5}
 
     def test_keeps_a_game_with_no_gamedate_and_drops_one_with_no_id(self, nhl):
-        no_date = score_game(5); del no_date["gameDate"]
-        no_id = score_game(6); del no_id["id"]
+        no_date = score_game(5)
+        del no_date["gameDate"]
+        no_id = score_game(6)
+        del no_id["id"]
         nhl.session.get.return_value = make_json_response({"games": [no_date, no_id]})
         assert set(nhl._fetch_scores(TODAY)) == {5}
 

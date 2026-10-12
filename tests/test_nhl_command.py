@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from irc_format import BOLD, RESET, GREEN, ORANGE
+from irc_format import BOLD, RESET
 from nhl_command import NHLCommand
 from tests.conftest import join_channel_thread, make_json_response as make_response
 
@@ -632,7 +632,7 @@ class TestPollOnce:
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
 
         with patch.object(nhl_command, "_fetch_today_games", return_value={1: schedule_game}), \
-             patch.object(nhl_command, "_fetch_play_by_play") as mock_pbp:
+             patch.object(nhl_command, "_fetch_play_by_play"):
             all_ended = nhl_command._poll_once(bot, "#nhl.fi")
 
         bot.send_message.assert_not_called()

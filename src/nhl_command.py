@@ -629,7 +629,9 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             (official_home, official_away), official_type = official
             if official_type is None:
                 official_type = last_period_type
-            shown = lambda period_type: period_type if period_type in ("OT", "SO") else "REG"  # as the line shows it
+            def shown(period_type):  # as the line shows it
+                return period_type if period_type in ("OT", "SO") else "REG"
+
             if ((official_home, official_away), shown(official_type)) != ((home_score, away_score), shown(last_period_type)):
                 print(f"NHL: game {pbp.get('id')}: the play-by-play header says "
                       f"{home_score}-{away_score} {shown(last_period_type)} at FINAL, the score endpoint says "

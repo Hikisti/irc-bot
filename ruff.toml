@@ -1,0 +1,9 @@
+[lint]
+select = ["F", "E4", "E7", "E9", "B"]
+# zip() without strict= is a style choice here, not a bug (tools/goal_probe.py pairs two tuples it has just checked).
+ignore = ["B905"]
+
+[lint.per-file-ignores]
+# The Pesis tests import the `sc` pytest fixture from pesis_test_helpers (it is not in conftest.py), which
+# Ruff reads as an unused import (F401) that every test's `sc` parameter then redefines (F811).
+"tests/test_pesis_*.py" = ["F401", "F811"]

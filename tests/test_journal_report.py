@@ -175,7 +175,8 @@ class TestAnomalies:
         assert r["anomalies"] == []
 
     def test_a_retracted_goal_that_returns_is_flagged_as_reinstated_with_the_gap(self):
-        g = lambda t: sent(t, CH, goal_text("Reds", 4, 2, "Blues", "06:08", "2nd", "Blues", "Alice Ann (PP)"))
+        def g(t):
+            return sent(t, CH, goal_text("Reds", 4, 2, "Blues", "06:08", "2nd", "Blues", "Alice Ann (PP)"))
         r = report(g("01:13:43"), sent("01:27:13", CH, nogoal_text("Reds", 4, 1, "Blues", "06:08", "2nd", "Alice Ann", "Blues")),
                    g("02:16:54"))
         assert any("retracted and announced again 49 min 41 s later (reinstated)" in a for a in r["anomalies"])
@@ -265,7 +266,8 @@ class TestReport:
         assert (len(r["events"]["back"]), len(r["events"]["retract"]), len(r["events"]["start"])) == (1, 1, 1)
 
     def test_entries_are_ordered_by_time_even_if_the_input_is_not(self):
-        g = lambda t: sent(t, CH, goal_text("Reds", 4, 2, "Blues", "06:08", "2nd", "Blues", "Alice Ann"))
+        def g(t):
+            return sent(t, CH, goal_text("Reds", 4, 2, "Blues", "06:08", "2nd", "Blues", "Alice Ann"))
         nogoal = sent("01:27:13", CH, nogoal_text("Reds", 4, 1, "Blues", "06:08", "2nd", "Alice Ann", "Blues"))
         r = report(g("02:16:54"), nogoal, g("01:13:43"))  # a later GOAL first, the earlier one last
         assert any("announced again 49 min 41 s later" in a for a in r["anomalies"])
