@@ -254,6 +254,72 @@ class TestFallbackToPlainTitle:
         assert result == "Error: Error getting data."
 
 
+def search_result(*items):
+    return {"Response": "True", "Search": [
+        {"Title": t, "Year": y, "Type": k, "imdbID": f"tt{n:07d}"} for n, (t, y, k) in enumerate(items, 1)
+    ], "totalResults": str(len(items))}
+
+
+class TestSuggestionsOnAMissedSequelNumber:
+    def test_a_miss_on_title_and_number_lists_the_search_results_for_the_title(self, imdb_command):
+        responses = [
+            make_response(not_found()),
+            make_response(search_result(("Sisu", "2022", "movie"), ("Sisu: Road to Revenge", "2025", "movie"))),
+        ]
+        with patch.object(imdb_command.session, "get", side_effect=responses) as mock_get:
+            result = imdb_command.execute("sisu 2")
+
+        assert result == "Error: Movie not found! Did you mean: Sisu (2022), Sisu: Road to Revenge (2025)?"
+        assert mock_get.call_count == 2
+        params = mock_get.call_args_list[1].kwargs["params"]
+        assert params["s"] == "sisu" and "t" not in params
+
+    def test_at_most_three_distinct_movies_or_series_are_listed(self, imdb_command):
+        results = search_result(
+            ("Dune", "2021", "movie"), ("Dune", "2021", "movie"), ("Dune: Part Two", "2024", "movie"),
+            ("Dune", "1984", "movie"), ("Dune: Prophecy", "2024", "series"),
+        )
+        results["Search"].insert(1, {"Title": "Dune Making Of", "Year": "2021", "Type": "episode", "imdbID": "tt1"})
+        with patch.object(imdb_command.session, "get", side_effect=[make_response(not_found()), make_response(results)]):
+            result = imdb_command.execute("dune 2")
+        assert result == "Error: Movie not found! Did you mean: Dune (2021), Dune: Part Two (2024), Dune (1984)?"
+
+    def test_a_type_keyword_is_kept_in_the_search(self, imdb_command):
+        responses = [make_response(not_found("Series not found!")), make_response(not_found("Series not found!")),
+                     make_response(search_result(("Flipper", "1995", "series")))]
+        with patch.object(imdb_command.session, "get", side_effect=responses) as mock_get:
+            imdb_command.execute("series flipper 2")
+        params = mock_get.call_args_list[-1].kwargs["params"]
+        assert params["s"] == "flipper" and params["type"] == "series"
+
+    def test_a_search_with_no_results_leaves_the_plain_reply(self, imdb_command):
+        responses = [make_response(not_found()), make_response(not_found("Too many results."))]
+        with patch.object(imdb_command.session, "get", side_effect=responses):
+            assert imdb_command.execute("zzzz 2") == "Error: Movie not found!"
+
+    def test_a_failing_search_leaves_the_plain_reply(self, imdb_command):
+        responses = [make_response(not_found()), requests.exceptions.Timeout()]
+        with patch.object(imdb_command.session, "get", side_effect=responses):
+            assert imdb_command.execute("sisu 2") == "Error: Movie not found!"
+
+    @pytest.mark.parametrize("text", ["sisu", "sisu 2025", "sisu two", "2", "movie 2", "sisu 123"])
+    def test_no_search_when_the_text_does_not_end_in_a_sequel_number(self, imdb_command, text):
+        with patch.object(imdb_command.session, "get", return_value=make_response(not_found())) as mock_get:
+            result = imdb_command.execute(text)
+        assert result == "Error: Movie not found!"
+        assert all("s" not in call.kwargs["params"] for call in mock_get.call_args_list)
+
+    def test_a_hit_does_no_search(self, imdb_command):
+        with patch.object(imdb_command.session, "get", return_value=make_response(found())) as mock_get:
+            imdb_command.execute("flipper 2")
+        assert mock_get.call_count == 1
+
+    def test_other_errors_get_no_suggestions(self, imdb_command):
+        with patch.object(imdb_command.session, "get", return_value=make_response(not_found("Something else broke!"))) as mock_get:
+            assert imdb_command.execute("sisu 2") == "Error: Something else broke!"
+        assert mock_get.call_count == 1
+
+
 class TestUsage:
     def test_usage_mentions_the_new_syntax(self, imdb_command):
         result = imdb_command.execute("   ")

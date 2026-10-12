@@ -28,6 +28,8 @@ class ImdbCommand(BaseCommand):
     IMDB_ID_RE = re.compile(r"(tt\d{7,})", re.I)
     IMDB_URL_RE = re.compile(r"imdb\.com/(?:[a-z]{2}/)?title/(tt\d{7,})", re.I)
     YEAR_RE = re.compile(r"\(?((?:18|19|20)\d{2})\)?")
+    SEQUEL_NUMBER_RE = re.compile(r"\d{1,2}")
+    MAX_SUGGESTIONS = 3
 
     def __init__(self):
         load_dotenv()  # Load environment variables from .env
@@ -67,6 +69,37 @@ class ImdbCommand(BaseCommand):
             return [plain]
         return [{"t": " ".join(tokens), **hints}, plain]
 
+    def _suggestions(self, text):
+        """The text " Did you mean: A (2022), B (2025)?" for a miss on "<title> <number>", or "". OMDb's title
+        lookup only knows a sequel by its own title ("Sisu: Road to Revenge", not "sisu 2"), so the
+        number is dropped and the rest searched; the candidates are listed, never picked for the
+        user. Any failure here leaves the plain "not found" reply as it was."""
+        tokens = text.split()
+        hints = {}
+        if len(tokens) >= 2 and tokens[0].lower() in self.TYPE_KEYWORDS:
+            hints["type"] = self.TYPE_KEYWORDS[tokens[0].lower()]
+            tokens = tokens[1:]
+        if len(tokens) < 2 or not self.SEQUEL_NUMBER_RE.fullmatch(tokens[-1]):
+            return ""
+        try:
+            response = self.session.get(
+                self.BASE_URL,
+                params={"s": " ".join(tokens[:-1]), **hints, "apikey": self.api_key},
+                timeout=DEFAULT_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            found = response.json().get("Search") or []
+            names = []
+            for item in found:
+                if item.get("Type") not in ("movie", "series"):
+                    continue
+                name = f"{item['Title']} ({item['Year']})"
+                if name not in names:
+                    names.append(name)
+            return f" Did you mean: {', '.join(names[:self.MAX_SUGGESTIONS])}?" if names else ""
+        except Exception:
+            return ""
+
     def execute(self, args):
         text = (args or "").strip()
         if not text:
@@ -97,7 +130,10 @@ class ImdbCommand(BaseCommand):
             # above already turns into a friendly error via the except
             # branch below.
             if data.get("Response") == "False":
-                return f"Error: {data.get('Error', 'Movie not found.')}"
+                error = f"Error: {data.get('Error', 'Movie not found.')}"
+                if "not found" in str(data.get("Error", "")).lower():
+                    error += self._suggestions(text)
+                return error
 
             title = data.get("Title", text)
             year = data.get("Year", "N/A")

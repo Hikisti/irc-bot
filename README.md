@@ -131,7 +131,9 @@ movies), so an ambiguous title can be narrowed down: a leading `series`/`tv`/`mo
 (`!imdb series flipper`), a trailing year picks the release or start year (`!imdb flipper 1995`),
 and the two combine (`!imdb series flipper 1995`). To be exact, paste an IMDb ID or an imdb.com
 link (`!imdb tt0111964`). If a year or type hint finds nothing, the whole text is retried as a
-plain title, so titles like "Blade Runner 2049" still work. The one known miss: a title that itself
+plain title, so titles like "Blade Runner 2049" still work. A title that ends in a small number and is
+not found (`!imdb sisu 2`: OMDb knows the sequel as "Sisu: Road to Revenge") adds up to three candidates
+from a search for the title without the number (`Did you mean: Sisu (2022), ...?`); it never picks one. The one known miss: a title that itself
 starts with `movie`/`series`/`tv` and whose remainder is also a title (e.g. "Movie 43") - use the
 IMDb ID for those.
 
