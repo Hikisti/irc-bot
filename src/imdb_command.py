@@ -104,12 +104,20 @@ class ImdbCommand(BaseCommand):
             kind = data.get("Type")
             when = f"{year}, {kind}" if kind else year
             rating = data.get("imdbRating", "N/A")
-            rating_str = f"{rating}/10" if rating != "N/A" else "not yet rated"
+            # OMDb's "N/A" means it has nothing, not that nobody has rated the title: a stub record
+            # (rating, plot and runtime all empty) is OMDb's gap, so the reply says so.
+            rating_str = f"{rating}/10" if rating != "N/A" else "no rating in OMDb"
             plot = data.get("Plot", "N/A")
             imdb_id = data.get("imdbID")
             url = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else "N/A"
 
-            return f"{title} ({when}) - IMDb: {rating_str} - {plot} - {url}"
+            parts = [f"{title} ({when})", f"IMDb: {rating_str}"]
+            if plot != "N/A":
+                parts.append(plot)
+            elif rating == "N/A" and data.get("Runtime", "N/A") == "N/A":
+                parts.append("OMDb has only a basic record for this title")
+            parts.append(url)
+            return " - ".join(parts)
 
         except Exception as e:
             return format_request_error(e, "OMDb")

@@ -67,7 +67,38 @@ class TestImdbCommand:
         with patch.object(imdb_command.session, "get", return_value=make_response(data)):
             result = imdb_command.execute("some upcoming movie")
 
-        assert "IMDb: not yet rated" in result
+        assert "IMDb: no rating in OMDb" in result
+        assert " - N/A - " not in result
+
+    def test_a_stub_record_says_omdb_has_only_a_basic_record_and_leaves_out_the_plot(self, imdb_command):
+        # The shape OMDb returned for a real title (issue #17): everything but title, year and id empty.
+        data = {
+            "Response": "True", "Title": "Häjyt 2", "Year": "2025", "Type": "movie", "imdbRating": "N/A",
+            "Plot": "N/A", "Runtime": "N/A", "imdbVotes": "N/A", "imdbID": "tt31972791",
+        }
+        with patch.object(imdb_command.session, "get", return_value=make_response(data)):
+            result = imdb_command.execute("häjyt 2")
+
+        assert result == (
+            "Häjyt 2 (2025, movie) - IMDb: no rating in OMDb - OMDb has only a basic record for this title - "
+            "https://www.imdb.com/title/tt31972791/"
+        )
+
+    def test_a_rated_title_without_a_plot_leaves_the_plot_out_without_the_stub_note(self, imdb_command):
+        data = found()
+        data["Plot"] = "N/A"
+        with patch.object(imdb_command.session, "get", return_value=make_response(data)):
+            result = imdb_command.execute("flipper")
+
+        assert result == "Flipper (1995–2000, series) - IMDb: 5.3/10 - https://www.imdb.com/title/tt0111964/"
+
+    def test_a_missing_plot_field_is_left_out_too(self, imdb_command):
+        data = found()
+        del data["Plot"]
+        with patch.object(imdb_command.session, "get", return_value=make_response(data)):
+            result = imdb_command.execute("flipper")
+
+        assert " - N/A - " not in result
 
     def test_invalid_api_key_returns_friendly_error(self, imdb_command):
         error_response = make_response({"Response": "False", "Error": "Invalid API key!"}, status_code=401)

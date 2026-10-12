@@ -124,8 +124,9 @@ this avoids silently misreading a multi-word city name as the wrong split.
 IMDb's data - IMDb's own official API is an enterprise-only AWS Data Exchange product, not viable
 for a free personal bot) and replies with its year and type, IMDb rating, a short plot summary,
 and its IMDb URL, e.g. `Terminator 2: Judgment Day (1991, movie) - IMDb: 8.6/10 - A cyborg from
-the future... - https://www.imdb.com/title/tt0103064/`. An unreleased/unrated title shows "not yet
-rated" instead of a score. A bare title returns OMDb's single best match (which tends to prefer
+the future... - https://www.imdb.com/title/tt0103064/`. A title OMDb has no rating for shows "no
+rating in OMDb" instead of a score, the plot is left out when OMDb has none, and a record that is empty
+apart from the title adds "OMDb has only a basic record for this title" (the gap is OMDb's, not IMDb's). A bare title returns OMDb's single best match (which tends to prefer
 movies), so an ambiguous title can be narrowed down: a leading `series`/`tv`/`movie` picks the type
 (`!imdb series flipper`), a trailing year picks the release or start year (`!imdb flipper 1995`),
 and the two combine (`!imdb series flipper 1995`). To be exact, paste an IMDb ID or an imdb.com
