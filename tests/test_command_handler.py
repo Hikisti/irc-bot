@@ -340,8 +340,8 @@ class TestUsageConvention:
 
 
 class TestExclusiveChannel:
-    """#veikkaus allows only !liiga and !nhl (and !help, which lists just
-    those two there). Every other channel keeps the default rules."""
+    """#veikkaus allows only !liiga, !nhl, !stock and !crypto (and !help, which lists just
+    those there). Every other channel keeps the default rules."""
 
     def _run(self, handler, channel, message):
         bot = MagicMock()
@@ -359,7 +359,7 @@ class TestExclusiveChannel:
         assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
 
     @pytest.mark.parametrize("message", [
-        "!weather helsinki", "!w helsinki", "!stock aapl", "!crypto btc", "!sähkö", "!sahko",
+        "!weather helsinki", "!w helsinki", "!sähkö", "!sahko",
         "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck",
         "!superpesis start",
     ])
@@ -383,14 +383,26 @@ class TestExclusiveChannel:
         mock.execute.assert_called_once()
         assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
 
-    def test_help_works_in_veikkaus_and_lists_only_liiga_and_nhl(self, handler):
+    @pytest.mark.parametrize("alias, message", [("!stock", "!stock aapl"), ("!crypto", "!crypto btc")])
+    def test_stock_and_crypto_are_dispatched_in_veikkaus(self, handler, alias, message):
+        mock = MagicMock()
+        mock.execute.return_value = "ok"
+        replace_command(handler, alias, mock)
+
+        bot = self._run(handler, "#veikkaus", message)
+
+        mock.execute.assert_called_once()
+        bot.send_message.assert_called_once_with("#veikkaus", "ok")
+
+    def test_help_works_in_veikkaus_and_lists_only_its_four_commands(self, handler):
         bot = self._run(handler, "#veikkaus", "!help")
         assert bot.send_message.call_args[0] == (
-            "#veikkaus", "Commands: !liiga start|stop|next | !nhl start|stop|next|now|results")
+            "#veikkaus",
+            "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next | !nhl start|stop|next|now|results")
 
     def test_channel_name_matching_is_case_insensitive(self, handler):
-        assert handler.help_text("#Veikkaus") == "Commands: !liiga start|stop|next | !nhl start|stop|next|now|results"
-        bot = self._run(handler, "#VEIKKAUS", "!stock aapl")
+        assert handler.help_text("#Veikkaus") == "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next | !nhl start|stop|next|now|results"
+        bot = self._run(handler, "#VEIKKAUS", "!weather helsinki")
         bot.send_message.assert_not_called()
 
     def test_liiga_still_works_in_smliiga_and_general_commands_stay_out_of_it_only_via_veikkaus(self, handler):
