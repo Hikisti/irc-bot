@@ -29,8 +29,8 @@ class DistanceCommand(BaseCommand):
     ALIASES = ("!distance",)
     HELP = "!distance <city1>,<city2>"
 
-    GEOCODE_URL = "https://api.openrouteservice.org/geocode/search"
-    DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
+    GEOCODE_URL = "https://api.heigit.org/pelias/v1/search"
+    DIRECTIONS_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
     REQUEST_TIMEOUT_SECONDS = 10
 
     USAGE = (

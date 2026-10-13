@@ -301,6 +301,23 @@ class TestDrivingDistance:
             "88.4 km (54.9 mi), ~1h 12min drive."
         )
 
+    def test_requests_go_to_the_heigit_hosts_not_the_deprecated_openrouteservice_one(self, distance_command):
+        # api.openrouteservice.org is shut down in stages up to 2026-11 (issue #43).
+        responses = [
+            make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
+            make_response(geocode_payload("Vimpeli, Finland", 23.81, 63.19)),
+            make_response(directions_payload(88400, 4320)),
+        ]
+        with patch.object(distance_command.session, "get", side_effect=responses) as mock_get:
+            distance_command.execute("Kokkola,Vimpeli")
+
+        urls = [call.args[0] for call in mock_get.call_args_list]
+        assert urls == [
+            "https://api.heigit.org/pelias/v1/search",
+            "https://api.heigit.org/pelias/v1/search",
+            "https://api.heigit.org/openrouteservice/v2/directions/driving-car",
+        ]
+
     def test_legacy_routes_shape_still_parses(self, distance_command):
         responses = [
             make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
