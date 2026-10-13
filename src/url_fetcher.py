@@ -24,6 +24,17 @@ class URLFetcher:
         "nettiauto.com"
     }
 
+    # Wikimedia sites throttle by User-Agent and address: the generic browser string below, sent from the
+    # server's datacenter address, got "HTTP 403 Too many requests. Please respect our robot policy" for an
+    # ordinary article link (issue #40). Their policy asks bots for an agent that says who they are and where
+    # to read about them, so these domains get one; every other site keeps the browser string, which some
+    # sites require.
+    WIKIMEDIA_DOMAINS = (
+        "wikipedia.org", "wikimedia.org", "wikidata.org", "wiktionary.org", "wikibooks.org", "wikiquote.org",
+        "wikisource.org", "wikinews.org", "wikiversity.org", "wikivoyage.org", "mediawiki.org",
+    )
+    WIKIMEDIA_USER_AGENT = "KukistiBot/1.0 (+https://github.com/Hikisti/irc-bot; IRC link-title bot)"
+
     def __init__(self, bot):
         """
         Initialize the URLFetcher with a reference to the IRC bot.
@@ -98,7 +109,10 @@ class URLFetcher:
         Ensures encoding is properly handled.
         """
         try:
-            response = self.session.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
+            domain = urlparse(url).netloc.lower()
+            wikimedia = any(self._matches_domain(domain, d) for d in self.WIKIMEDIA_DOMAINS)
+            headers = {"User-Agent": self.WIKIMEDIA_USER_AGENT} if wikimedia else None
+            response = self.session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS)
             response.raise_for_status()
 
             soup = BeautifulSoup(self._page_text(response), "html.parser")

@@ -79,6 +79,32 @@ class TestGetTitle:
             result = fetcher.get_title("https://example.com/page")
         assert result == "OG Title"
 
+    @pytest.mark.parametrize("url", [
+        "https://fi.wikipedia.org/wiki/Suomi",
+        "https://en.wikipedia.org/wiki/Finland?wprov=sfla1",
+        "https://commons.wikimedia.org/wiki/File:X.jpg",
+        "https://www.wikidata.org/wiki/Q33",
+    ])
+    def test_wikimedia_links_send_a_descriptive_user_agent(self, fetcher, url):
+        html = "<html><head><title>Suomi</title></head></html>"
+        with patch.object(fetcher.session, "get", return_value=make_response(html)) as mock_get:
+            assert fetcher.get_generic_title(url) == "Suomi"
+        agent = mock_get.call_args.kwargs["headers"]["User-Agent"]
+        assert agent == URLFetcher.WIKIMEDIA_USER_AGENT
+        assert "KukistiBot" in agent and "github.com" in agent
+
+    @pytest.mark.parametrize("url", [
+        "https://example.com/wiki/Suomi",
+        "https://notwikipedia.org/wiki/Suomi",
+        "https://wikipedia.org.example.com/wiki/Suomi",
+    ])
+    def test_other_links_keep_the_browser_user_agent(self, fetcher, url):
+        html = "<html><head><title>Suomi</title></head></html>"
+        with patch.object(fetcher.session, "get", return_value=make_response(html)) as mock_get:
+            fetcher.get_generic_title(url)
+        assert mock_get.call_args.kwargs["headers"] is None
+        assert fetcher.session.headers["User-Agent"].startswith("Mozilla/5.0")
+
     def test_generic_page_falls_back_to_title_tag(self, fetcher):
         html = "<html><head><title>Plain Title</title></head></html>"
         with patch.object(fetcher.session, "get", return_value=make_response(html)):
