@@ -5,6 +5,8 @@ import requests
 
 from url_fetcher import URLFetcher
 
+REAL_RESOLVE = URLFetcher._resolve  # the autouse public_dns fixture replaces it for every test
+
 
 def make_response(text="", status_code=200, apparent_encoding="utf-8"):
     resp = MagicMock()
@@ -14,6 +16,8 @@ def make_response(text="", status_code=200, apparent_encoding="utf-8"):
     resp.content = text.encode("utf-8")
     resp.headers = {"content-type": "text/html; charset=utf-8"}
     resp.raise_for_status = MagicMock()
+    resp.iter_content = lambda chunk_size=1: iter([resp.content])
+    resp.close = MagicMock()
     if status_code >= 400:
         resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
     return resp
@@ -22,6 +26,12 @@ def make_response(text="", status_code=200, apparent_encoding="utf-8"):
 @pytest.fixture
 def bot():
     return MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    """No test resolves a name for real: every host is a public address unless a test says otherwise."""
+    monkeypatch.setattr(URLFetcher, "_resolve", lambda self, host: {"93.184.216.34"})
 
 
 @pytest.fixture
@@ -200,9 +210,172 @@ def real_response(body: bytes, content_type=None):
     resp = requests.Response()
     resp.status_code = 200
     resp._content = body
+    resp._content_consumed = True  # as after a real read; close() then has no connection to release
     if content_type:
         resp.headers["content-type"] = content_type
     return resp
+
+
+def resolving_to(mapping):
+    """A _resolve() replacement: host -> the addresses it resolves to."""
+    def resolve(self, host):
+        return set(mapping[host]) if host in mapping else {"93.184.216.34"}
+    return resolve
+
+
+def redirect(location, status=302):
+    resp = make_response("", status_code=status)
+    resp.headers = {"location": location}
+    resp.raise_for_status = MagicMock()  # a redirect is not an error
+    return resp
+
+
+class TestOnlyPublicAddressesAreFetched:
+    """A link anyone can post must not make the bot read services on its own machine or network."""
+
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1/", "http://127.0.0.1:8080/admin", "http://localhost/", "http://0.0.0.0/",
+        "http://10.1.2.3/", "http://192.168.0.10/", "http://172.16.5.5/", "http://169.254.169.254/latest/meta-data/",
+        "http://100.64.0.1/", "http://[::1]/", "http://[fe80::1]/", "http://[fc00::1]/", "http://[::ffff:127.0.0.1]/",
+    ])
+    def test_non_public_addresses_are_never_requested(self, fetcher, url):
+        # No fixture override here: _resolve() is the real one, a literal address resolves to itself;
+        # "localhost" is the one name resolved for real, and always to a loopback address.
+        with patch.object(URLFetcher, "_resolve", REAL_RESOLVE), \
+                patch.object(fetcher.session, "get") as mock_get:
+            assert fetcher.get_title(url) is None  # nothing is said in the channel
+        mock_get.assert_not_called()
+
+    def test_a_name_that_resolves_to_a_private_address_is_refused(self, fetcher, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "_resolve", resolving_to({"intranet.example": ["10.0.0.7"]}))
+        with patch.object(fetcher.session, "get") as mock_get:
+            assert fetcher.get_title("https://intranet.example/page") is None
+        mock_get.assert_not_called()
+
+    def test_one_private_address_among_public_ones_is_enough_to_refuse(self, fetcher, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "_resolve", resolving_to({"mixed.example": ["93.184.216.34", "127.0.0.1"]}))
+        with patch.object(fetcher.session, "get") as mock_get:
+            assert fetcher.get_title("https://mixed.example/") is None
+        mock_get.assert_not_called()
+
+    def test_a_refusal_is_journaled_without_the_path(self, fetcher, capsys):
+        with patch.object(URLFetcher, "_resolve", REAL_RESOLVE):
+            fetcher.get_title("http://127.0.0.1/secret?token=abc")
+        out = capsys.readouterr().out
+        assert "127.0.0.1" in out and "token" not in out
+
+    def test_a_public_address_is_fetched_as_before(self, fetcher):
+        html = "<html><head><title>Hello</title></head></html>"
+        with patch.object(fetcher.session, "get", return_value=make_response(html)) as mock_get:
+            assert fetcher.get_title("https://example.com/") == "Hello"
+        assert mock_get.call_args.kwargs["allow_redirects"] is False
+
+    def test_a_name_that_does_not_resolve_fails_with_the_ordinary_error(self, fetcher, monkeypatch):
+        def no_such_host(self, host):
+            raise OSError("Name or service not known")
+        monkeypatch.setattr(URLFetcher, "_resolve", no_such_host)
+        with patch.object(fetcher.session, "get", side_effect=requests.exceptions.ConnectionError):
+            assert fetcher.get_title("https://no-such-host.example/") == "Error: Could not connect to the webpage."
+
+
+class TestRedirects:
+    def test_a_redirect_to_a_public_page_is_followed(self, fetcher):
+        html = "<html><head><title>Final</title></head></html>"
+        responses = [redirect("https://example.org/next"), make_response(html)]
+        with patch.object(fetcher.session, "get", side_effect=responses) as mock_get:
+            assert fetcher.get_title("https://example.com/") == "Final"
+        assert [c.args[0] for c in mock_get.call_args_list] == ["https://example.com/", "https://example.org/next"]
+
+    def test_a_relative_redirect_is_resolved_against_the_current_address(self, fetcher):
+        html = "<html><head><title>Final</title></head></html>"
+        responses = [redirect("/moved", 301), make_response(html)]
+        with patch.object(fetcher.session, "get", side_effect=responses) as mock_get:
+            fetcher.get_title("https://example.com/old")
+        assert mock_get.call_args_list[1].args[0] == "https://example.com/moved"
+
+    def test_a_redirect_to_an_internal_address_is_refused_at_that_hop(self, fetcher, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "_resolve", resolving_to({"metadata.internal": ["169.254.169.254"]}))
+        with patch.object(fetcher.session, "get", side_effect=[redirect("http://metadata.internal/latest")]) as mock_get:
+            assert fetcher.get_title("https://example.com/short") is None
+        assert mock_get.call_count == 1  # the first, public hop only
+
+    @pytest.mark.parametrize("location", ["file:///etc/passwd", "ftp://example.com/x", "gopher://example.com/"])
+    def test_a_redirect_to_a_non_http_scheme_is_refused(self, fetcher, location):
+        with patch.object(fetcher.session, "get", side_effect=[redirect(location)]) as mock_get:
+            assert fetcher.get_title("https://example.com/") is None
+        assert mock_get.call_count == 1
+
+    def test_a_redirect_loop_ends_with_an_ordinary_error(self, fetcher):
+        with patch.object(fetcher.session, "get", side_effect=lambda *a, **k: redirect("https://example.com/again")) as mock_get:
+            result = fetcher.get_title("https://example.com/")
+        assert result == "Error: Failed to contact the webpage."
+        assert mock_get.call_count == URLFetcher.MAX_REDIRECTS + 1
+
+    def test_the_headers_stay_with_every_hop(self, fetcher):
+        html = "<html><head><title>Final</title></head></html>"
+        with patch.object(fetcher.session, "get", side_effect=[redirect("https://en.wikipedia.org/x"), make_response(html)]) as mock_get:
+            fetcher.get_title("https://fi.wikipedia.org/x")
+        assert all(c.kwargs["headers"]["User-Agent"] == URLFetcher.WIKIMEDIA_USER_AGENT for c in mock_get.call_args_list)
+
+
+class FakeStream:
+    """The raw body of a response: `chunks` first, then (optionally) endless filler; counts what was read."""
+    def __init__(self, chunks, endless=False):
+        self.chunks, self.endless, self.read_bytes, self.closed = list(chunks), endless, 0, False
+
+    def read(self, amt=None, *args, **kwargs):
+        if self.chunks:
+            data = self.chunks.pop(0)
+        elif self.endless:
+            data = b"x" * (amt or 16384)
+        else:
+            data = b""
+        self.read_bytes += len(data)
+        return data
+
+    def close(self):
+        self.closed = True
+
+
+def streamed_response(raw):
+    """A real, unread requests.Response over `raw`, as session.get(stream=True) returns it."""
+    resp = requests.Response()
+    resp.status_code = 200
+    resp.raw = raw
+    resp.headers["content-type"] = "text/html; charset=utf-8"
+    return resp
+
+
+class TestBoundedRead:
+    def test_a_response_that_never_ends_is_read_only_up_to_the_cap(self, fetcher):
+        raw = FakeStream([b"<html><head><title>Early title</title></head><body>"], endless=True)
+        with patch.object(fetcher.session, "get", return_value=streamed_response(raw)):
+            assert fetcher.get_title("https://example.com/big") == "Early title"
+        assert raw.read_bytes <= URLFetcher.MAX_PAGE_BYTES + 16384  # it stopped at the cap, not at the end
+        assert raw.closed
+
+    def test_the_body_handed_on_is_never_longer_than_the_cap(self, fetcher):
+        raw = FakeStream([b"<html><head><title>T</title></head><body>"], endless=True)
+        with patch.object(fetcher.session, "get", return_value=streamed_response(raw)):
+            response = fetcher._fetch_page("https://example.com/", None)
+        assert len(response.content) == URLFetcher.MAX_PAGE_BYTES
+
+    def test_a_slow_drip_is_cut_off_at_the_time_limit(self, fetcher):
+        clock = iter([0, 1, 2, 11, 12, 13, 14])  # monotonic(): start, then past MAX_FETCH_SECONDS on the 3rd chunk
+        raw = FakeStream([b"<html><head><title>Slow</title>", b"a", b"b", b"c", b"d", b"e"])
+        with patch.object(fetcher.session, "get", return_value=streamed_response(raw)), \
+                patch("url_fetcher.time.monotonic", side_effect=lambda: next(clock)):
+            response = fetcher._fetch_page("https://example.com/", None)
+        assert response.content == b"<html><head><title>Slow</title>ab"  # what arrived before the limit
+
+    def test_an_error_status_closes_the_stream_and_reports_it(self, fetcher):
+        raw = FakeStream([b"<html>nope</html>"])
+        resp = streamed_response(raw)
+        resp.status_code = 403
+        resp.reason = "Forbidden"
+        with patch.object(fetcher.session, "get", return_value=resp):
+            assert fetcher.get_title("https://example.com/") == "Error: the webpage returned HTTP 403 Forbidden."
+        assert raw.closed
 
 
 class TestPageEncoding:

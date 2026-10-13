@@ -1,10 +1,19 @@
 import codecs
+import ipaddress
 import re
+import socket
+import time
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs
+
+import requests
 
 from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
+
+
+class _RefusedURL(Exception):
+    """A link the bot will not fetch (a non-public address, or not http(s))."""
 
 
 class URLFetcher:
@@ -34,6 +43,16 @@ class URLFetcher:
         "wikisource.org", "wikinews.org", "wikiversity.org", "wikivoyage.org", "mediawiki.org",
     )
     WIKIMEDIA_USER_AGENT = "KukistiBot/1.0 (+https://github.com/Hikisti/irc-bot; IRC link-title bot)"
+
+    # A link anyone in a channel can post is fetched from the server, so the fetch is limited: it
+    # only goes to public addresses (a title would otherwise be a window onto services on the server
+    # itself or its network, and the answer a port scanner), and it reads a bounded amount in a bounded
+    # time (a huge file or a server that drips bytes would otherwise tie up the thread and the memory
+    # of a small machine). Titles sit at the top of a page, so the cap costs nothing real.
+    MAX_PAGE_BYTES = 2 * 1024 * 1024
+    MAX_FETCH_SECONDS = 10
+    MAX_REDIRECTS = 5
+    REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
     def __init__(self, bot):
         """
@@ -112,8 +131,7 @@ class URLFetcher:
             domain = urlparse(url).netloc.lower()
             wikimedia = any(self._matches_domain(domain, d) for d in self.WIKIMEDIA_DOMAINS)
             headers = {"User-Agent": self.WIKIMEDIA_USER_AGENT} if wikimedia else None
-            response = self.session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS)
-            response.raise_for_status()
+            response = self._fetch_page(url, headers)
 
             soup = BeautifulSoup(self._page_text(response), "html.parser")
 
@@ -126,8 +144,65 @@ class URLFetcher:
 
             return None  # No usable title found
 
+        except _RefusedURL as e:
+            print(f"URL title: not fetching {e}")
+            return None  # like a blacklisted domain: nothing is said in the channel
         except Exception as e:
             return format_request_error(e, "the webpage")
+
+    def _resolve(self, host):
+        """The IP addresses `host` resolves to (a literal address resolves to itself)."""
+        return {info[4][0] for info in socket.getaddrinfo(host, None)}
+
+    def _is_public_host(self, host) -> bool:
+        """False if `host` is, or resolves to, a loopback, private, link-local or other non-public
+        address (any one of several addresses is enough to refuse). A name that does not resolve is
+        let through: the request then fails with its own, ordinary error."""
+        try:
+            addresses = self._resolve(host)
+        except OSError:
+            return True
+        for address in addresses:
+            ip = ipaddress.ip_address(address.split("%")[0])
+            ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 is 127.0.0.1
+            if not ip.is_global:
+                return False
+        return True
+
+    def _fetch_page(self, url, headers):
+        """The page at `url` as a response whose body is at most MAX_PAGE_BYTES, read for at most
+        MAX_FETCH_SECONDS. Redirects are followed by hand so that every hop is checked, not only the
+        first: a public address can redirect to an internal one."""
+        deadline = time.monotonic() + self.MAX_FETCH_SECONDS
+        for _ in range(self.MAX_REDIRECTS + 1):
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise _RefusedURL(f"{url[:80]} (not an http(s) address)")
+            if not self._is_public_host(parsed.hostname):
+                raise _RefusedURL(f"{parsed.hostname} (not a public address)")
+            response = self.session.get(
+                url, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS, allow_redirects=False, stream=True
+            )
+            location = response.headers.get("location")
+            if response.status_code in self.REDIRECT_STATUSES and location:
+                response.close()
+                url = urljoin(url, location)
+                continue
+            try:
+                response.raise_for_status()
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=16384):
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size >= self.MAX_PAGE_BYTES or time.monotonic() > deadline:
+                        break
+            finally:
+                response.close()
+            # The rest of the code reads response.content/.text; hand it the bounded body.
+            response._content = b"".join(chunks)[:self.MAX_PAGE_BYTES]
+            response._content_consumed = True
+            return response
+        raise requests.exceptions.TooManyRedirects(f"more than {self.MAX_REDIRECTS} redirects")
 
     CHARSET_PATTERN = re.compile(r"charset=([^;\s]+)", re.IGNORECASE)
     # Single-byte charsets that servers send by default or by mistake for pages that are in fact UTF-8.
