@@ -11,6 +11,8 @@ file you were reading) - not just repeated code, but an inconsistent
 user-facing experience with no reason to pick one wording over another.
 """
 
+from http import HTTPStatus
+
 import requests
 
 # yfinance 1.x (StockCommand's dependency) does its HTTP via curl_cffi by
@@ -48,7 +50,14 @@ def format_request_error(e: Exception, service_name: str) -> str:
         response = e.response
         status = response.status_code if response is not None else "unknown"
         reason = response.reason if response is not None else "Unknown"
-        return f"Error: {service_name} returned HTTP {status} {reason}."
+        if response is not None and not reason:
+            # Some services send no status text (the time service's 401 read "HTTP 401 ."): use the
+            # standard one, or none at all for a code that has none.
+            try:
+                reason = HTTPStatus(status).phrase
+            except ValueError:
+                reason = ""
+        return f"Error: {service_name} returned HTTP {status}{' ' + reason if reason else ''}."
     if isinstance(e, _JSON_DECODE_ERROR_TYPES):
         # Checked before the plain RequestException below: JSONDecodeError
         # is *also* a RequestException (it inherits from both that and

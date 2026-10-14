@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import curl_cffi.requests.exceptions as curl_exceptions
+import pytest
 import requests
 
 from request_errors import format_request_error
@@ -20,6 +21,23 @@ class TestFormatRequestError:
         error = requests.exceptions.HTTPError(response=response)
         result = format_request_error(error, "Weather API")
         assert result == "Error: Weather API returned HTTP 404 Not Found."
+
+    @pytest.mark.parametrize("status, text", [
+        (401, "Unauthorized"), (403, "Forbidden"), (429, "Too Many Requests"), (502, "Bad Gateway"),
+    ])
+    @pytest.mark.parametrize("empty", ["", None])
+    def test_a_missing_status_text_is_filled_in_from_the_standard_one(self, status, text, empty):
+        # The time service answered 401 with no text and the line read "returned HTTP 401 ."
+        error = requests.exceptions.HTTPError(response=MagicMock(status_code=status, reason=empty))
+        assert format_request_error(error, "time service") == f"Error: time service returned HTTP {status} {text}."
+
+    def test_a_missing_status_text_for_a_code_that_has_none_leaves_no_stray_space(self):
+        error = requests.exceptions.HTTPError(response=MagicMock(status_code=599, reason=""))
+        assert format_request_error(error, "time service") == "Error: time service returned HTTP 599."
+
+    def test_a_status_text_the_server_sent_is_kept(self):
+        error = requests.exceptions.HTTPError(response=MagicMock(status_code=403, reason="Too many requests"))
+        assert format_request_error(error, "the webpage") == "Error: the webpage returned HTTP 403 Too many requests."
 
     def test_http_error_with_no_response_object(self):
         # requests.exceptions.HTTPError can in principle be raised without
