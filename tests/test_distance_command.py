@@ -1,10 +1,19 @@
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
 from distance_command import DistanceCommand
 from tests.conftest import make_json_response as make_response
+
+
+@contextmanager
+def both_methods(distance_command, responses):
+    """The geocoder is asked with GET and the router with POST (#44): one reply sequence for both, in call order."""
+    shared = MagicMock(side_effect=responses)
+    with patch.object(distance_command.session, "get", shared), patch.object(distance_command.session, "post", shared):
+        yield shared
 
 
 def geocode_payload(label, lon, lat):
@@ -142,7 +151,7 @@ class TestGeocoding:
             make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
             make_response({"features": []}),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("Kokkola,Nonexistentville")
         assert "Could not find a location" in result
         assert "Nonexistentville" in result
@@ -278,7 +287,7 @@ class TestAmbiguousCityDisambiguation:
             make_response(self.REAL_MIAMI_CANDIDATES),
             make_response(directions_payload(2100000, 72000)),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("Austin,Miami")
 
         assert "Austin, TX, USA" in result
@@ -293,7 +302,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("Vimpeli, Finland", 23.81, 63.19)),
             make_response(directions_payload(88400, 4320)),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("Kokkola,Vimpeli")
 
         assert result == (
@@ -308,7 +317,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("Vimpeli, Finland", 23.81, 63.19)),
             make_response(directions_payload(88400, 4320)),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses) as mock_get:
+        with both_methods(distance_command, responses) as mock_get:
             distance_command.execute("Kokkola,Vimpeli")
 
         urls = [call.args[0] for call in mock_get.call_args_list]
@@ -318,13 +327,79 @@ class TestDrivingDistance:
             "https://api.heigit.org/openrouteservice/v2/directions/driving-car",
         ]
 
+    def test_the_route_is_asked_with_a_post_and_a_snapping_radius(self, distance_command):
+        # Issue #44: Helsinki's and San Antonio's centre points are not within the router's default 350 m
+        # of a road ("Could not find routable point"); the radius can only be set in a POST body.
+        geocodes = MagicMock(side_effect=[
+            make_response(geocode_payload("Helsinki, Finland", 24.99935, 60.20787)),
+            make_response(geocode_payload("Tampere, Finland", 23.88146, 61.62611)),
+        ])
+        route = MagicMock(return_value=make_response(directions_payload(205200, 8880)))
+        with patch.object(distance_command.session, "get", geocodes), patch.object(distance_command.session, "post", route):
+            result = distance_command.execute("Helsinki,Tampere")
+
+        assert result == "Driving distance from Helsinki, Finland to Tampere, Finland: 205.2 km (127.5 mi), ~2h 28min drive."
+        assert geocodes.call_count == 2  # the geocoder is still a GET, one request per city
+        route.assert_called_once()
+        assert route.call_args.args[0] == "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
+        assert route.call_args.kwargs["json"] == {
+            "coordinates": [[24.99935, 60.20787], [23.88146, 61.62611]],  # longitude first, origin then destination
+            "radiuses": [DistanceCommand.SNAP_RADIUS_METERS, DistanceCommand.SNAP_RADIUS_METERS],
+        }
+        assert DistanceCommand.SNAP_RADIUS_METERS == 5000
+
+    @staticmethod
+    def _routing_404(distance_command, body, status_code=404):
+        responses = [
+            make_response(geocode_payload("Lopyavara, KI, Russia", 31.5, 62.7)),
+            make_response(geocode_payload("Imatra, Finland", 28.76, 61.19)),
+            make_response(body, status_code=status_code),
+        ]
+        with both_methods(distance_command, responses):
+            return distance_command.execute("Leppavaara,Imatra")
+
+    UNROUTABLE = "Could not find routable point within a radius of 5000.0 meters of specified coordinate {n}: 31.5 62.7."
+
+    @pytest.mark.parametrize("n, label", [(0, "Lopyavara, KI, Russia"), (1, "Imatra, Finland")])
+    def test_a_point_without_a_road_nearby_names_that_point(self, distance_command, capsys, n, label):
+        # The real router answer (error 2010); the geocoder had picked a faraway namesake for the first city.
+        body = {"error": {"code": 2010, "message": self.UNROUTABLE.format(n=n)}, "info": {"engine": {}}}
+        assert self._routing_404(distance_command, body) == f"Error: No road found near {label}."
+        assert "Distance API routing 404:" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("body", [
+        {"error": {"code": 2009, "message": "Route could not be found"}},          # another router error
+        {"error": {"code": 2009, "message": UNROUTABLE.format(n=0)}},              # same words, another error code
+        {"error": {"code": 2010, "message": "Could not find routable point"}},     # no coordinate named
+        {"error": {"code": 2010, "message": UNROUTABLE.format(n=7)}},              # a coordinate that is not ours
+        {"error": "oops"},
+        {},
+    ])
+    def test_any_other_404_stays_the_generic_http_error(self, distance_command, body):
+        assert self._routing_404(distance_command, body) == "Error: Distance service (routing) returned HTTP 404 Not Found."
+
+    def test_a_404_that_is_not_json_stays_the_generic_http_error(self, distance_command):
+        responses = [
+            make_response(geocode_payload("A", 1, 2)),
+            make_response(geocode_payload("B", 3, 4)),
+            make_response({}, status_code=404),
+        ]
+        responses[2].json.side_effect = ValueError("not json")
+        with both_methods(distance_command, responses):
+            assert distance_command.execute("A,B") == "Error: Distance service (routing) returned HTTP 404 Not Found."
+
+    def test_a_non_404_http_error_is_not_read_as_an_unroutable_point(self, distance_command):
+        body = {"error": {"code": 2010, "message": self.UNROUTABLE.format(n=0)}}
+        assert self._routing_404(distance_command, body, status_code=500) == \
+            "Error: Distance service (routing) returned HTTP 500 Not Found."
+
     def test_legacy_routes_shape_still_parses(self, distance_command):
         responses = [
             make_response(geocode_payload("Kokkola, Finland", 23.13, 63.84)),
             make_response(geocode_payload("Vimpeli, Finland", 23.81, 63.19)),
             make_response(legacy_directions_payload(88400, 4320)),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("Kokkola,Vimpeli")
 
         assert "88.4 km" in result
@@ -341,7 +416,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             make_response(directions_payload(5000, 300)),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "~5min drive" in result
 
@@ -351,7 +426,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("Reykjavik, Iceland", -21.9, 64.1)),
             make_response({}, status_code=400),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("Helsinki,Reykjavik")
         assert "No driving route found" in result
         assert "Helsinki, Finland" in result
@@ -363,7 +438,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             make_response({"routes": []}),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "No driving route found" in result
 
@@ -372,10 +447,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("A", 1, 2)),
             make_response(geocode_payload("B", 3, 4)),
         ]
-        with patch.object(
-            distance_command.session, "get",
-            side_effect=responses + [requests.exceptions.Timeout()],
-        ):
+        with both_methods(distance_command, responses + [requests.exceptions.Timeout()]):
             result = distance_command.execute("A,B")
         assert "timed out" in result
 
@@ -385,7 +457,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             make_response({}, status_code=429),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "rate limit" in result.lower()
 
@@ -397,7 +469,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             bad_json_resp,
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "Invalid response from distance service" in result
 
@@ -407,7 +479,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             make_response(["not", "a", "dict"]),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "No driving route found" in result
 
@@ -420,7 +492,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("B", 3, 4)),
             make_response(payload),
         ]
-        with patch.object(distance_command.session, "get", side_effect=responses):
+        with both_methods(distance_command, responses):
             result = distance_command.execute("A,B")
         assert "unexpected data" in result.lower()
 

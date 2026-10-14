@@ -1,4 +1,5 @@
 import os
+import re
 
 from dotenv import load_dotenv
 import requests
@@ -32,6 +33,7 @@ class DistanceCommand(BaseCommand):
     GEOCODE_URL = "https://api.heigit.org/pelias/v1/search"
     DIRECTIONS_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
     REQUEST_TIMEOUT_SECONDS = 10
+    SNAP_RADIUS_METERS = 5000  # how far from a city's centre point the nearest road may be
 
     USAGE = (
         "Usage: !distance <city1>,<city2> "
@@ -182,13 +184,35 @@ class DistanceCommand(BaseCommand):
 
     # ---- routing --------------------------------------------------------
 
+    @staticmethod
+    def _unroutable_point(response, origin, destination):
+        """The label of the point the router could not place on a road (its error 2010, "Could not find
+        routable point within a radius of ... of specified coordinate 0: ..."), or None for any other
+        answer. A geocoder that picked a faraway namesake (an unaccented Finnish name that matches a
+        village in Russia) ends up here."""
+        if response is None or response.status_code != 404:
+            return None
+        try:
+            error = response.json().get("error") or {}
+        except ValueError:
+            return None
+        if not isinstance(error, dict) or error.get("code") != 2010:
+            return None
+        found = re.search(r"specified coordinate (\d+)", str(error.get("message", "")))
+        if not found or int(found.group(1)) not in (0, 1):
+            return None
+        return (origin, destination)[int(found.group(1))]["label"]
+
     def _driving_distance(self, origin, destination):
         try:
-            resp = self.session.get(
+            # A city's geocoded point is its centre, which for some cities (Helsinki, San Antonio) is
+            # not within the router's default 350 m of a road: "Could not find routable point" (issue
+            # #44). The snapping radius can only be set in a POST body (a GET ignores it).
+            resp = self.session.post(
                 self.DIRECTIONS_URL,
-                params={
-                    "start": f"{origin['lon']},{origin['lat']}",
-                    "end": f"{destination['lon']},{destination['lat']}",
+                json={
+                    "coordinates": [[origin["lon"], origin["lat"]], [destination["lon"], destination["lat"]]],
+                    "radiuses": [self.SNAP_RADIUS_METERS, self.SNAP_RADIUS_METERS],
                 },
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
@@ -200,6 +224,10 @@ class DistanceCommand(BaseCommand):
                     f"Error: No driving route found between "
                     f"{origin['label']} and {destination['label']}."
                 )
+            unreachable = self._unroutable_point(e.response, origin, destination)
+            if unreachable:
+                print(f"Distance API routing 404: {e.response.text[:300]}")
+                return None, f"Error: No road found near {unreachable}."
             return None, self._describe_http_error(e, "routing")
         except Exception as e:
             return None, format_request_error(e, "Distance service (routing)")
