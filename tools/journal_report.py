@@ -61,6 +61,10 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                             r"the score endpoint says (?P<endpoint>.+?); using the endpoint's$")),
     ("no_endpoint", re.compile(r"^NHL: game (?P<gid>\d+): no result from the score endpoint for the FINAL line, "
                                r"using the play-by-play header$")),
+    ("from_plays", re.compile(r"^NHL: game (?P<gid>\d+): level at (?P<level>\d+-\d+) at FINAL, "
+                              r"the plays say (?P<plays>\d+-\d+ \w+); using the plays'$")),
+    ("held", re.compile(r"^NHL: game (?P<gid>\d+): FINAL held back, level at (?P<level>\d+-\d+) "
+                        r"and the plays do not decide it$")),
     ("liiga_missing", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): announced goals missing from the feed "
                                  r"(?P<before>\d+) -> (?P<after>\d+)$")),
     ("start", re.compile(r"^==== BOT STARTED")),
@@ -233,6 +237,9 @@ def _apply(g, e, anomalies):
 
 
 def _check_final(key, g, final, anomalies):
+    if final["h"] == final["a"]:
+        anomalies.append(f"{_name(key)} [{key[0]}]: FINAL {final['h']}-{final['a']} is level - a game never ends level, "
+                         f"so a stale result went out (issue #12)")
     if final["ot"] == "SO":
         return  # the shootout winner's extra goal is not a GOAL line
     posted = sorted(g["goals"] + g["nogoals"], key=lambda e: e["ts"])
@@ -321,6 +328,12 @@ def render(report):
                f"{len(ev['no_endpoint'])} without an endpoint result")
     for e in ev["disagree"]:
         out.append(f"    {e['ts']:%H:%M:%S} header {e['header']} -> endpoint {e['endpoint']}")
+    out.append(f"  FINAL read from the plays after a level score: {len(ev['from_plays'])}"
+               f", held back for a level score: {len(ev['held'])}")
+    for e in ev["from_plays"]:
+        out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: level {e['level']} -> plays {e['plays']}")
+    for e in ev["held"]:
+        out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: held back, level {e['level']}")
     for e in ev["summary"]:
         out.append(f"  end-of-slate results list {e['ts']:%H:%M:%S} in {e['channel']}: {e['games']} games, "
                    f"{e['with_figure']} with a figure")

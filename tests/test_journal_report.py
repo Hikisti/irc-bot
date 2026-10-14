@@ -2,7 +2,7 @@
 round trips through the bot's own message builders so a changed wording breaks a test here."""
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -198,8 +198,9 @@ class TestAnomalies:
         assert report(GOAL1, sent("01:50:00", CH, final_text("Reds", 2, 1, "Blues", ot="SO", att=1000)))["anomalies"] == []
 
     def test_the_last_no_goal_scores_is_what_the_final_is_compared_with(self):
-        r = report(GOAL1, sent("01:10:00", CH, nogoal_text("Reds", 0, 0, "Blues", "05:00", "1st", "Alice Ann", "Reds", "x")),
-                   sent("01:50:00", CH, final_text("Reds", 0, 0, "Blues", att=1000)))
+        second = sent("01:05:00", CH, goal_text("Reds", 2, 0, "Blues", "09:00", "1st", "Reds", "Bo Bee"))
+        r = report(GOAL1, second, sent("01:10:00", CH, nogoal_text("Reds", 1, 0, "Blues", "09:00", "1st", "Bo Bee", "Reds", "x")),
+                   sent("01:50:00", CH, final_text("Reds", 1, 0, "Blues", att=1000)))
         assert r["anomalies"] == []
 
     def test_goals_without_a_final_are_flagged(self):
@@ -380,6 +381,52 @@ class TestMain:
     def test_help_exits_with_the_usage(self):
         with pytest.raises(SystemExit):
             jr.main(["--help"])
+
+
+class TestLevelFinal:
+    """Issue #12, the second live case: a FINAL posted for a level score is a stale result, and the lines the
+    fix journals (the result read from the plays, a FINAL held back) are counted."""
+
+    def test_a_level_final_is_an_anomaly(self):
+        r = report(GOAL1, sent("01:10:00", CH, final_text("Reds", 2, 2, "Blues", att=1000)))
+        assert any("FINAL 2-2 is level" in a and "issue #12" in a for a in r["anomalies"])
+
+    def test_a_level_shootout_final_is_an_anomaly_too(self):
+        r = report(GOAL1, sent("01:10:00", CH, final_text("Reds", 2, 2, "Blues", ot="SO", att=1000)))
+        assert any("FINAL 2-2 is level" in a for a in r["anomalies"])
+
+    def test_a_decided_final_is_not(self):
+        r = report(GOAL1, sent("01:10:00", CH, final_text("Reds", 1, 0, "Blues", att=1000)))
+        assert not any("is level" in a for a in r["anomalies"])
+
+    def test_the_new_journal_lines_are_parsed(self):
+        e = jr.parse_line(line("02:03:37", "NHL: game 2026020094: level at 2-2 at FINAL, the plays say 2-3 SO; using the plays'"), YEAR)
+        assert (e["kind"], e["gid"], e["level"], e["plays"]) == ("from_plays", "2026020094", "2-2", "2-3 SO")
+        e = jr.parse_line(line("02:03:37", "NHL: game 2026020094: FINAL held back, level at 2-2 and the plays do not decide it"), YEAR)
+        assert (e["kind"], e["gid"], e["level"]) == ("held", "2026020094", "2-2")
+
+    def test_they_are_counted_and_listed_in_the_report(self):
+        text = jr.render(report(
+            line("02:03:37", "NHL: game 7: level at 2-2 at FINAL, the plays say 2-3 SO; using the plays'"),
+            line("02:03:07", "NHL: game 8: FINAL held back, level at 1-1 and the plays do not decide it"),
+        ))
+        assert "FINAL read from the plays after a level score: 1, held back for a level score: 1" in text
+        assert "game 7: level 2-2 -> plays 2-3 SO" in text and "game 8: held back, level 1-1" in text
+
+    def test_the_bots_own_lines_round_trip(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.test_nhl_command import goal_play, make_pbp, roster_spot
+        nhl = NHLCommand()
+        nhl.session.get = MagicMock()
+        so = [goal_play(event_id=n, event_owner_team_id=team, scoring_player_id=100, period_number=5, period_type="SO",
+                        time_in_period="00:00", home_score=2, away_score=2) for n, team in ((10, 20), (11, 10), (12, 20))]
+        decided = make_pbp(game_id=7, home_id=10, away_id=20, home_score=2, away_score=2, plays=so, roster=[roster_spot(100)])
+        with patch.object(nhl, "_fetch_attendance", return_value=None):
+            nhl._announce_end(MagicMock(), CH, decided)
+            nhl._announce_end(MagicMock(), CH, make_pbp(game_id=8, home_score=1, away_score=1), hold_allowed=True)
+        events = [jr.parse_line(line("02:03:37", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        kinds = [(e["kind"], e["gid"]) for e in events if e and e["kind"] in ("from_plays", "held")]
+        assert kinds == [("from_plays", "7"), ("held", "8")]
 
 
 class TestRoundTrip:
