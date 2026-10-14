@@ -70,21 +70,29 @@ class ImdbCommand(BaseCommand):
         return [{"t": " ".join(tokens), **hints}, plain]
 
     def _suggestions(self, text):
-        """The text " Did you mean: A (2022), B (2025)?" for a miss on "<title> <number>", or "". OMDb's title
-        lookup only knows a sequel by its own title ("Sisu: Road to Revenge", not "sisu 2"), so the
-        number is dropped and the rest searched; the candidates are listed, never picked for the
-        user. Any failure here leaves the plain "not found" reply as it was."""
+        """The text " Did you mean: A (2022), B (2025)?" for any "not found", or "". OMDb's title lookup only
+        knows a film by the title it lists it under ("Sisu: Road to Revenge", not "sisu 2"; a Finnish film
+        under its English name), so the title without the extras - a type word, a year before or after it,
+        a sequel number after it - is searched, and what OMDb does have under that name is listed, never
+        picked for the user. An IMDb id is an exact lookup and gets none. Any failure here leaves the plain
+        "not found" reply as it was."""
+        if self._extract_imdb_id(text):
+            return ""
         tokens = text.split()
         hints = {}
         if len(tokens) >= 2 and tokens[0].lower() in self.TYPE_KEYWORDS:
             hints["type"] = self.TYPE_KEYWORDS[tokens[0].lower()]
             tokens = tokens[1:]
-        if len(tokens) < 2 or not self.SEQUEL_NUMBER_RE.fullmatch(tokens[-1]):
-            return ""
+        if len(tokens) >= 2 and self.YEAR_RE.fullmatch(tokens[0]):
+            tokens = tokens[1:]
+        if len(tokens) >= 2 and (self.YEAR_RE.fullmatch(tokens[-1]) or self.SEQUEL_NUMBER_RE.fullmatch(tokens[-1])):
+            tokens = tokens[:-1]
+        if not any(ch.isalpha() for token in tokens for ch in token):
+            return ""  # nothing to search for but a number
         try:
             response = self.session.get(
                 self.BASE_URL,
-                params={"s": " ".join(tokens[:-1]), **hints, "apikey": self.api_key},
+                params={"s": " ".join(tokens), **hints, "apikey": self.api_key},
                 timeout=DEFAULT_TIMEOUT_SECONDS,
             )
             response.raise_for_status()

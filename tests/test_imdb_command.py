@@ -225,10 +225,10 @@ class TestFallbackToPlainTitle:
         assert mock_get.call_count == 2
 
     def test_both_attempts_missing_reports_not_found(self, imdb_command):
-        responses = [make_response(not_found("Series not found!")), make_response(not_found())]
+        responses = [make_response(not_found("Series not found!")), make_response(not_found()), make_response(not_found())]
         with patch.object(imdb_command.session, "get", side_effect=responses) as mock_get:
             result = imdb_command.execute("series zzzz")
-        assert mock_get.call_count == 2
+        assert mock_get.call_count == 3  # the hinted lookup, the plain one, then the search for suggestions
         assert result == "Error: Movie not found!"
 
     def test_other_errors_do_not_trigger_the_fallback(self, imdb_command):
@@ -242,7 +242,8 @@ class TestFallbackToPlainTitle:
     def test_plain_title_with_no_hints_is_only_tried_once(self, imdb_command):
         with patch.object(imdb_command.session, "get", return_value=make_response(not_found())) as mock_get:
             result = imdb_command.execute("asdkjaslkdjaslkdj")
-        assert mock_get.call_count == 1
+        lookups = [c for c in mock_get.call_args_list if "t" in c.kwargs["params"]]
+        assert len(lookups) == 1  # (the search for suggestions is a second request, without "t")
         assert result == "Error: Movie not found!"
 
     def test_nonexistent_imdb_id_reports_the_error_without_retrying(self, imdb_command):
@@ -260,7 +261,7 @@ def search_result(*items):
     ], "totalResults": str(len(items))}
 
 
-class TestSuggestionsOnAMissedSequelNumber:
+class TestSuggestionsOnAMiss:
     def test_a_miss_on_title_and_number_lists_the_search_results_for_the_title(self, imdb_command):
         responses = [
             make_response(not_found()),
@@ -302,12 +303,38 @@ class TestSuggestionsOnAMissedSequelNumber:
         with patch.object(imdb_command.session, "get", side_effect=responses):
             assert imdb_command.execute("sisu 2") == "Error: Movie not found!"
 
-    @pytest.mark.parametrize("text", ["sisu", "sisu 2025", "sisu two", "2", "movie 2", "sisu 123"])
-    def test_no_search_when_the_text_does_not_end_in_a_sequel_number(self, imdb_command, text):
+    @pytest.mark.parametrize("text, searched, hints", [
+        ("talvisota", "talvisota", {}),
+        ("tuntematon sotilas 1955", "tuntematon sotilas", {}),
+        ("1955 tuntematon sotilas", "tuntematon sotilas", {}),
+        ("movie tuntematon sotilas 1955", "tuntematon sotilas", {"type": "movie"}),
+        ("series flipper 2", "flipper", {"type": "series"}),
+        ("sisu two", "sisu two", {}),
+        ("sisu 123", "sisu 123", {}),
+    ])
+    def test_any_miss_searches_the_title_without_the_extras(self, imdb_command, text, searched, hints):
+        miss = make_response(not_found())
+        found_items = make_response(search_result(("Tuntematon sotilas", "2018–2019", "series")))
+        with patch.object(imdb_command.session, "get", side_effect=lambda *a, **k: found_items if "s" in k["params"] else miss) as mock_get:
+            result = imdb_command.execute(text)
+        search = [c for c in mock_get.call_args_list if "s" in c.kwargs["params"]]
+        assert len(search) == 1
+        params = search[0].kwargs["params"]
+        assert params["s"] == searched and {k: params[k] for k in hints} == hints
+        assert result == "Error: Movie not found! Did you mean: Tuntematon sotilas (2018–2019)?"
+
+    @pytest.mark.parametrize("text", ["2", "movie 2", "1955", "tv 2001"])
+    def test_a_number_alone_is_not_searched_for(self, imdb_command, text):
         with patch.object(imdb_command.session, "get", return_value=make_response(not_found())) as mock_get:
             result = imdb_command.execute(text)
         assert result == "Error: Movie not found!"
         assert all("s" not in call.kwargs["params"] for call in mock_get.call_args_list)
+
+    def test_an_imdb_id_is_an_exact_lookup_and_gets_no_suggestions(self, imdb_command):
+        with patch.object(imdb_command.session, "get") as mock_get:
+            assert imdb_command._suggestions("tt1234567") == ""
+            assert imdb_command._suggestions("https://www.imdb.com/title/tt1234567/") == ""
+        mock_get.assert_not_called()
 
     def test_a_hit_does_no_search(self, imdb_command):
         with patch.object(imdb_command.session, "get", return_value=make_response(found())) as mock_get:
