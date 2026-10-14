@@ -6,6 +6,8 @@ For every game of one US-Eastern slate date it polls the play-by-play and logs, 
               (SCORER also says whether the old scorer became one of the assists);
   REMOVED / REAPPEARED  a goal that leaves the play list (disallowed, or a feed flicker);
   DOUBLY LISTED  two goal plays with the same team and running score;
+  SCORES CONTRADICT  the listed goals' running scores cannot all be right (a score that goes down), with the
+              whole goal list at that moment, and "consistent again" when it clears (issue #47);
 and, when a game reaches OVER/FINAL, whether the header score agreed with the play list.
 
 Usage (from the repository root):
@@ -123,6 +125,49 @@ def header_state(pbp):
     return header, last if last else (0, 0), (pbp.get("gameOutcome") or {}).get("lastPeriodType"), period_type
 
 
+def _seconds(clock):
+    try:
+        minutes, seconds = str(clock).split(":")
+        return int(minutes) * 60 + int(seconds)
+    except (ValueError, TypeError):
+        return 0
+
+
+def score_conflict(pbp):
+    """The listed goals - (period, clock, home, away, team id, event id) in game order - when their running
+    scores contradict each other (a score that goes down: a goal at 0-2 listed with a later goal at 1-1 cannot
+    both be valid), else None. Shootout goals are left out: they all carry the tie. Ordered by period and
+    clock, not by the feed's list order: on 2026-10-13 a goal appeared late, after the goal scored after it."""
+    goals = []
+    for play in pbp.get("plays", []):
+        period = play.get("periodDescriptor") or {}
+        details = play.get("details") or {}
+        home, away = details.get("homeScore"), details.get("awayScore")
+        if (play.get("typeDescKey") != "goal" or period.get("periodType") == "SO"
+                or not isinstance(home, int) or not isinstance(away, int)):
+            continue
+        goals.append((period.get("number") or 0, _seconds(play.get("timeInPeriod")), play.get("sortOrder") or 0,
+                      play.get("timeInPeriod"), home, away, details.get("eventOwnerTeamId"), play.get("eventId")))
+    goals.sort(key=lambda g: g[:3])
+    for earlier, later in zip(goals, goals[1:]):
+        if later[4] < earlier[4] or later[5] < earlier[5]:
+            return [(g[0], g[3], g[4], g[5], g[6], g[7]) for g in goals]
+    return None
+
+
+def check_scores(state, label, pbp):
+    """Log lines for a game whose goal list contradicts itself: once when it starts, again if the list changes
+    while it does, and once when it is consistent again. `state` holds the last conflict per game."""
+    conflict = score_conflict(pbp)
+    if conflict is None:
+        return [f"{label}: scores consistent again"] if state.pop(label, None) is not None else []
+    if state.get(label) == conflict:
+        return []
+    state[label] = conflict
+    listed = " | ".join(f"P{p} {clock} {home}-{away} team {team} id {eid}" for p, clock, home, away, team, eid in conflict)
+    return [f"{label}: SCORES CONTRADICT in the feed (home-away): {listed}"]
+
+
 def check_header(ends, label, state, pbp, now):
     """Logs header-vs-plays agreement once a game is OVER/FINAL/OFF, and when it catches up.
     Returns True while this game still needs fast polling."""
@@ -191,7 +236,7 @@ def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time
     """Polls until every game is settled, `deadline` (a clock() value) passes, or the API goes silent for
     MAX_SILENT_CYCLES cycles in a row. Returns (goals, ends, why it stopped)."""
     ending_poll = max(ENDING_POLL, poll_seconds / 2)
-    goals, ends, ended_at = {}, {}, {}
+    goals, ends, ended_at, conflicts = {}, {}, {}, {}
     silent = 0
     reason = "deadline"
     while clock() < deadline:
@@ -219,7 +264,7 @@ def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time
                     continue
                 pbp_ok += 1
                 now = clock()
-                for event in observe(goals, label, pbp, now):
+                for event in observe(goals, label, pbp, now) + check_scores(conflicts, label, pbp):
                     log(event)
                 fast = check_header(ends, label, state, pbp, now) or state == "OVER" or fast
             answered = scores is not None and (pbp_tried == 0 or pbp_ok > 0)

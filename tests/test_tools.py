@@ -36,6 +36,73 @@ def log_lines(monkeypatch):
     return lines
 
 
+class TestScoreConflict:
+    """Issue #47: a goal listed after a later goal contradicts it (0-2 next to 1-1): the probe keeps the whole list."""
+
+    def late(self):  # the 2026-10-13 shape: a visiting goal at 18:25 (0-2) listed with the home goal at 18:33 (1-1)
+        return feed(goal(1, 1, clock="06:07", home=0, away=1, team=20),
+                    goal(2, 2, clock="18:25", home=0, away=2, team=20),
+                    goal(3, 3, clock="18:33", home=1, away=1, team=10))
+
+    def test_a_score_that_goes_down_is_a_conflict_and_lists_every_goal(self):
+        assert goal_probe.score_conflict(self.late()) == [
+            (1, "06:07", 0, 1, 20, 1), (1, "18:25", 0, 2, 20, 2), (1, "18:33", 1, 1, 10, 3)]
+
+    def test_goals_are_ordered_by_the_clock_not_by_the_feeds_list(self):
+        pbp = self.late()
+        pbp["plays"].reverse()
+        assert goal_probe.score_conflict(pbp) is not None
+
+    def test_a_consistent_game_listed_out_of_order_is_not_a_conflict(self):
+        """Only the clock decides the order: listed backwards, 1-1 comes before 1-0 and would look like a fall."""
+        pbp = feed(goal(2, 2, clock="10:00", home=1, away=1, team=10), goal(1, 1, clock="05:00", home=1, away=0, team=10))
+        assert goal_probe.score_conflict(pbp) is None
+
+    def test_a_shootout_goal_with_a_lower_score_than_an_earlier_goal_is_ignored(self):
+        shootout = dict(goal(2, 2, clock="00:00", home=0, away=0, period_type="SO"),
+                        periodDescriptor={"number": 5, "periodType": "SO"})  # the 5th period, after the regular goal
+        pbp = feed(goal(1, 1, clock="05:00", home=1, away=0), shootout)
+        assert goal_probe.score_conflict(pbp) is None
+
+    def test_a_consistent_list_is_not_a_conflict(self):
+        pbp = feed(goal(1, 1, clock="06:07", home=0, away=1), goal(2, 2, clock="18:25", home=0, away=2),
+                   goal(3, 3, clock="18:40", home=1, away=2, team=10))
+        assert goal_probe.score_conflict(pbp) is None
+
+    def test_shootout_goals_all_carry_the_tie_and_are_left_out(self):
+        pbp = feed(goal(1, 1, clock="06:07", home=2, away=2),
+                   goal(2, 2, clock="00:00", home=2, away=2, period_type="SO"),
+                   goal(3, 3, clock="00:00", home=2, away=2, period_type="SO"))
+        assert goal_probe.score_conflict(pbp) is None
+
+    def test_goals_without_numeric_scores_and_other_plays_are_ignored(self):
+        pbp = feed(goal(1, 1, home=None, away=None), {"typeDescKey": "stoppage"}, goal(2, 2, clock="08:00", home=1, away=0))
+        assert goal_probe.score_conflict(pbp) is None
+        assert goal_probe.score_conflict({}) is None
+
+    def test_a_missing_clock_does_not_crash(self):
+        # a goal with no clock sorts first (0 s): 1-0 then 0-1 is a score that goes down
+        pbp = feed(goal(1, 1, clock=None, home=1, away=0), goal(2, 2, clock="05:00", home=0, away=1))
+        assert goal_probe.score_conflict(pbp) == [(1, None, 1, 0, 20, 1), (1, "05:00", 0, 1, 20, 2)]
+
+    def test_it_is_logged_once_again_when_the_list_changes_and_once_when_it_clears(self):
+        state = {}
+        first = goal_probe.check_scores(state, "A@B", self.late())
+        assert len(first) == 1 and first[0].startswith("A@B: SCORES CONTRADICT in the feed (home-away): P1 06:07 0-1 team 20 id 1 | P1 18:25 0-2")
+        assert goal_probe.check_scores(state, "A@B", self.late()) == []  # unchanged: nothing more
+        changed = self.late()
+        changed["plays"].append(goal(4, 4, clock="19:10", home=1, away=3))
+        assert len(goal_probe.check_scores(state, "A@B", changed)) == 1
+        cleared = feed(goal(1, 1, clock="06:07", home=0, away=1), goal(3, 3, clock="18:33", home=1, away=1, team=10))
+        assert goal_probe.check_scores(state, "A@B", cleared) == ["A@B: scores consistent again"]
+        assert goal_probe.check_scores(state, "A@B", cleared) == []  # and only once
+
+    def test_each_game_has_its_own_state(self):
+        state = {}
+        assert len(goal_probe.check_scores(state, "A@B", self.late())) == 1
+        assert len(goal_probe.check_scores(state, "C@D", self.late())) == 1
+
+
 class TestObserve:
     def test_first_sight_then_a_scorer_correction_that_swaps_roles(self):
         goals = {}
