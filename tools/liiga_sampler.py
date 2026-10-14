@@ -61,6 +61,25 @@ def state_of(game):
             "ended": bool(game.get("ended")), "period": game.get("currentPeriod")}
 
 
+def goal_identities(game):
+    """(home, away): for each side the identity of every real goal event as the tracker sees it - eventId,
+    period, game time, scorer's player id (numbers only) - in feed order. A goal with no scorer is a goal
+    disallowed by video review and is left out, as in the tracker. Logged whenever it changes, to see the
+    feed re-keying a goal (issue #48: a shootout's winning shot was announced twice)."""
+    def side(name):
+        return tuple((e.get("eventId"), e.get("period"), e.get("gameTime"),
+                      (e.get("scorerPlayer") or {}).get("playerId") or e.get("scorerPlayerId"))
+                     for e in (game.get(name) or {}).get("goalEvents") or [] if e.get("scorerPlayer"))
+    return side("homeTeam"), side("awayTeam")
+
+
+def describe_goals(identities):
+    def cell(goal):
+        return "/".join("-" if part is None else str(part) for part in goal)
+    return " | ".join(f"{label} " + (", ".join(cell(g) for g in goals) or "-")
+                      for label, goals in zip(("home", "away"), identities))
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -69,7 +88,7 @@ def main():
     deadline = time.time() + float(sys.argv[2] if len(sys.argv) > 2 else 8) * 3600
     season = command._current_season(datetime.strptime(date, "%Y-%m-%d"))
     log(f"liiga sampler start, date {date}")
-    previous, field_state = {}, {}
+    previous, field_state, goal_state = {}, {}, {}
     kinds = collections.Counter()
     ages, back_ages = [], []
     edges, back_edges = collections.Counter(), collections.Counter()
@@ -97,6 +116,10 @@ def main():
                     flagged.append(f"{name}: {flag}")
                     kinds[flag.split()[0]] += 1
                 previous[game["id"]] = cur
+                identities = goal_identities(game)
+                if goal_state.get(game["id"]) != identities:
+                    log(f"GOALS {name}: {describe_goals(identities)}  (eventId/period/gameTime/scorer)")
+                    goal_state[game["id"]] = identities
                 fields = (game.get("spectators"), game.get("finishedType"))
                 if field_state.get(game["id"]) != fields:
                     log(f'FIELD {name}: spectators={fields[0]} finishedType={fields[1]} (ended={cur["ended"]}, '

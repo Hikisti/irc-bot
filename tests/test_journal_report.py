@@ -429,6 +429,34 @@ class TestLevelFinal:
         assert kinds == [("from_plays", "7"), ("held", "8")]
 
 
+class TestLiigaIdentityLine:
+    """Issue #48: the line the Liiga tracker journals when a goal's eventId changes but the goal is still recognised."""
+
+    def test_the_bots_own_line_round_trips_into_the_report(self, capsys):
+        from liiga_command import LiigaCommand
+        from tests.test_liiga_command import goal_event, make_game
+        liiga = LiigaCommand()
+        first = goal_event(period=5, game_time=3900, home_score=3, away_score=3, tags=["VL"], event_id=218)
+        rekeyed = dict(first, eventId=219)
+        state = liiga._snapshot(make_game(away_goals=[first]))
+        now = liiga._snapshot(make_game(away_goals=[rekeyed]), state)
+        liiga._log_missing_goals(7, make_game(away_goals=[rekeyed]), state, now)
+        lines = [jr.parse_line(line("18:10:59", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        events = [e for e in lines if e and e["kind"] == "liiga_identity"]
+        assert len(events) == 1
+        assert (events[0]["gid"], events[0]["what"], events[0]["change"]) == ("7", "changed", "eventId 218 -> eventId 219")
+
+    def test_it_is_counted_and_listed_in_the_report(self):
+        text = jr.render(report(line(
+            "18:10:59", "Liiga: game 2701360: TPS: a goal's eventId appeared, still the same goal: none -> eventId 219 "
+                        "(period 5 time 3900 scorer 4014)")))
+        assert "a goal's eventId changed or appeared, the goal still recognised (issue #48): 1 change(s)" in text
+        assert "TPS: eventId appeared: none -> eventId 219 (period 5 time 3900 scorer 4014)" in text
+
+    def test_a_report_without_such_a_line_says_nothing_about_it(self):
+        assert "issue #48" not in jr.render(report(GOAL1))
+
+
 class TestRoundTrip:
     """The bot's own message builders feed the parser, so a reworded message fails here."""
 

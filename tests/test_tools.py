@@ -293,6 +293,38 @@ class TestLiigaJudge:
     def test_a_missing_clock_is_not_a_backwards_step(self):
         assert liiga_sampler.judge(self.BASE, dict(self.BASE, gameTime=None)) == []
 
+    def _game(self, home=(), away=()):
+        def event(event_id, period, game_time, scorer, name=True):
+            e = {"eventId": event_id, "period": period, "gameTime": game_time}
+            if name:
+                e["scorerPlayer"] = {"playerId": scorer, "firstName": "A", "lastName": "B"}
+            return e
+        return {"homeTeam": {"goalEvents": [event(*g) for g in home]}, "awayTeam": {"goalEvents": [event(*g) for g in away]}}
+
+    def test_goal_identities_are_numbers_only_per_side_in_feed_order(self):
+        game = self._game(home=[(11, 1, 125, 501), (12, 2, 40, 502)], away=[(219, 5, 3900, 777)])
+        assert liiga_sampler.goal_identities(game) == (((11, 1, 125, 501), (12, 2, 40, 502)), ((219, 5, 3900, 777),))
+
+    def test_an_event_without_a_scorer_is_a_disallowed_goal_and_is_left_out(self):
+        game = {"homeTeam": {"goalEvents": [{"eventId": 3, "period": 1, "gameTime": 446}]}, "awayTeam": {}}
+        assert liiga_sampler.goal_identities(game) == ((), ())
+
+    def test_a_rekeyed_goal_gives_different_identities(self):
+        before, after = self._game(away=[(218, 5, 3900, 777)]), self._game(away=[(219, 5, 3900, 777)])
+        assert liiga_sampler.goal_identities(before) != liiga_sampler.goal_identities(after)
+
+    def test_a_missing_part_is_shown_as_a_dash(self):
+        game = self._game(away=[(None, 5, 3900, 777)])
+        assert liiga_sampler.describe_goals(liiga_sampler.goal_identities(game)) == "home - | away -/5/3900/777"
+
+    def test_the_description_lists_both_sides(self):
+        game = self._game(home=[(11, 1, 125, 501), (12, 2, 40, 502)], away=[(219, 5, 3900, 777)])
+        assert liiga_sampler.describe_goals(liiga_sampler.goal_identities(game)) == \
+            "home 11/1/125/501, 12/2/40/502 | away 219/5/3900/777"
+
+    def test_a_game_with_no_goals_is_described_without_error(self):
+        assert liiga_sampler.describe_goals(liiga_sampler.goal_identities({})) == "home - | away -"
+
     def test_cache_node_id_from_a_via_header(self):
         via = "1.1 b7248001409a22dcf06ac3c9df2f5fac.cloudfront.net (CloudFront), 1.1 7995acb4.cloudfront.net (CloudFront)"
         assert liiga_sampler.edge_of(via) == "b72480"

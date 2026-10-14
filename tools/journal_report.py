@@ -67,6 +67,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                         r"and the plays do not decide it$")),
     ("liiga_missing", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): announced goals missing from the feed "
                                  r"(?P<before>\d+) -> (?P<after>\d+)$")),
+    ("liiga_identity", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): a goal's eventId (?P<what>changed|appeared), "
+                                  r"still the same goal: (?P<change>.+?) \((?P<at>[^()]*)\)$")),
     ("start", re.compile(r"^==== BOT STARTED")),
     ("disconnect", re.compile(r"^(?:DISCONNECTED|CONNECT FAILED)")),
 )
@@ -322,6 +324,11 @@ def render(report):
         out.append(f"  Liiga: announced goals missing from the feed (a dip, or a goal taken away): {len(ev['liiga_missing'])} change(s)")
         for e in ev["liiga_missing"]:
             out.append(f"    {e['ts']:%H:%M:%S} {e['team']}: {e['before']} -> {e['after']}")
+    if ev["liiga_identity"]:
+        out.append(f"  Liiga: a goal's eventId changed or appeared, the goal still recognised (issue #48): "
+                   f"{len(ev['liiga_identity'])} change(s)")
+        for e in ev["liiga_identity"]:
+            out.append(f"    {e['ts']:%H:%M:%S} {e['team']}: eventId {e['what']}: {e['change']} ({e['at']})")
     for e in ev["retract"]:
         out.append(f"    {e['ts']:%H:%M:%S} {e['label']} by {e['name']} in {e['channel']}")
     out.append(f"  FINAL score source: {len(ev['disagree'])} header/endpoint disagreement(s), "
