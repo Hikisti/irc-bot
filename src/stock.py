@@ -1,3 +1,5 @@
+import math
+
 import curl_cffi.requests.exceptions as curl_exceptions
 import requests
 import yfinance as yf
@@ -46,10 +48,18 @@ class StockCommand(BaseCommand):
             # IRC color: green or red
             color = signed_change_color(change_currency)
 
+            # The 52-week range comes in the same response (no extra request); left out when either end is missing.
+            low, high = info.get("fiftyTwoWeekLow"), info.get("fiftyTwoWeekHigh")
+            week_range = (
+                f" 52W: {low:.2f} - {high:.2f}."
+                if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (low, high))
+                else ""
+            )
+
             return (
                 f"{BOLD}{short_name} ({symbol}):{BOLD} {price:.2f} {currency}, "
                 f"today {color}{change_currency:+.2f} ({change_percent:+.2f}%){RESET}. "
-                f"Volume {volume_k:.2f}k."
+                f"Volume {volume_k:.2f}k.{week_range}"
             )
 
         except (ValueError, TypeError):

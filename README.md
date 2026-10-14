@@ -117,6 +117,11 @@ is an *exclusive* channel: only `!liiga`, `!nhl`, `!stock`, `!crypto` and `!help
 Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
 default of all commands.
 
+`!stock <ticker>` answers from Yahoo Finance with the company name, price, today's change (green or red),
+volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (+1.18%). Volume 17111.01k. 52W: 243.42 - 348.15.`
+The range comes in the same response, so it costs no extra request, and is left out when Yahoo has no
+usable low and high for the symbol. It works for stocks, ETFs, indexes and crypto pairs (`!stock btc-usd`).
+
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
 unless both are a single word, in which case a space works too (`!distance Kokkola Vimpeli`) —

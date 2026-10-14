@@ -40,6 +40,35 @@ class TestStockCommand:
         assert "+10.00 (+10.00%)" in result
         assert "Volume 5000.00k." in result
 
+    BASE = {"regularMarketPrice": 345.18, "regularMarketPreviousClose": 341.14, "regularMarketVolume": 17_111_010,
+            "currency": "USD", "shortName": "Apple Inc."}
+
+    def _run(self, stock_command, **extra):
+        with patch("stock.yf.Ticker", return_value=make_ticker({**self.BASE, **extra})):
+            return stock_command.execute("aapl")
+
+    def test_the_52_week_range_ends_the_line(self, stock_command):
+        result = self._run(stock_command, fiftyTwoWeekLow=243.42, fiftyTwoWeekHigh=348.1499)
+        assert result.endswith("Volume 17111.01k. 52W: 243.42 - 348.15.")
+        assert result.startswith("\x02Apple Inc. (AAPL):\x02 345.18 USD, today ")  # the rest of the line is as before
+
+    @pytest.mark.parametrize("extra", [
+        {},                                                            # neither end in the response
+        {"fiftyTwoWeekLow": 243.42},                                   # one end only
+        {"fiftyTwoWeekHigh": 348.15},
+        {"fiftyTwoWeekLow": None, "fiftyTwoWeekHigh": 348.15},
+        {"fiftyTwoWeekLow": "n/a", "fiftyTwoWeekHigh": 348.15},         # not numbers
+        {"fiftyTwoWeekLow": float("nan"), "fiftyTwoWeekHigh": 348.15},
+        {"fiftyTwoWeekLow": 243.42, "fiftyTwoWeekHigh": float("inf")},
+        {"fiftyTwoWeekLow": True, "fiftyTwoWeekHigh": 348.15},
+    ])
+    def test_a_missing_or_unusable_end_leaves_the_range_out(self, stock_command, extra):
+        result = self._run(stock_command, **extra)
+        assert result.endswith("Volume 17111.01k.") and "52W" not in result
+
+    def test_whole_number_ends_and_a_crypto_pair_format_like_the_price(self, stock_command):
+        assert self._run(stock_command, fiftyTwoWeekLow=57747.766, fiftyTwoWeekHigh=116273).endswith("52W: 57747.77 - 116273.00.")
+
     def test_symbol_is_uppercased(self, stock_command):
         info = {
             "regularMarketPrice": 1.0,
