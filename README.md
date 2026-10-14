@@ -135,7 +135,10 @@ plain title, so titles like "Blade Runner 2049" still work. A title that ends in
 not found (`!imdb sisu 2`: OMDb knows the sequel as "Sisu: Road to Revenge") adds up to three candidates
 from a search for the title without the number (`Did you mean: Sisu (2022), ...?`); it never picks one. The one known miss: a title that itself
 starts with `movie`/`series`/`tv` and whose remainder is also a title (e.g. "Movie 43") - use the
-IMDb ID for those.
+IMDb ID for those. Titles are matched against the name OMDb lists, which for some films is the English
+one: the 1955 *Tuntematon sotilas* is found as `!imdb the unknown soldier 1955` (or by its ID,
+`!imdb tt0048752`), not by its Finnish name, so a film that is "not found" under its local title may
+only turn up under its English title or by its IMDb ID or link.
 
 `!nhl start` polls today's NHL games every 30s in the channel it was started in (same lifecycle,
 early-start guard, and already-finished guard as `!liiga start`), announcing goals and final scores
