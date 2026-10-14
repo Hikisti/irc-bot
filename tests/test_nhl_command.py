@@ -341,6 +341,139 @@ class TestAnnounceEnd:
         assert bot.send_message.call_args[0][1].endswith("(SO)")
 
 
+class TestLevelScoreAtFinal:
+    """Issue #12, second live case (2026-10-13): a shootout game turned FINAL while the header and the score
+    endpoint still said 2-2 with no outcome, and the line went out as "2-2" with no (SO). An NHL game never
+    ends level, so such a score is stale: the plays decide it, or the line waits."""
+
+    def _so(self, event_id, team):
+        return goal_play(event_id=event_id, event_owner_team_id=team, scoring_player_id=100, period_number=5,
+                         period_type="SO", time_in_period="00:00", home_score=2, away_score=2)
+
+    def _regulation(self, *scores):
+        return [goal_play(event_id=n, event_owner_team_id=10 if h > (scores[n - 2][0] if n > 1 else 0) else 20,
+                          scoring_player_id=100, home_score=h, away_score=a)
+                for n, (h, a) in enumerate(scores, 1)]
+
+    def _pbp(self, plays, home=2, away=2, last_period_type=None):
+        return make_pbp(home_id=10, away_id=20, plays=plays, roster=[roster_spot(100)],
+                        home_score=home, away_score=away, last_period_type=last_period_type)
+
+    def _final(self, nhl_command, pbp, hold_allowed=False):
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            record = nhl_command._announce_end(bot, "#nhl.fi", pbp, hold_allowed=hold_allowed)
+        return record, [c[0][1] for c in bot.send_message.call_args_list]
+
+    def test_the_real_case_a_shootout_won_by_the_away_side(self, nhl_command, capsys):
+        # 0-1, 0-2, 1-2, 2-2 in regulation, then away, home, away in the shootout (the 2026-10-13 game)
+        plays = self._regulation((0, 1), (0, 2), (1, 2), (2, 2)) + [self._so(10, 20), self._so(11, 10), self._so(12, 20)]
+        record, sent = self._final(nhl_command, self._pbp(plays))
+        assert sent == [f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 2-3 Florida Panthers (SO)"]
+        assert record["text"] == "CAR 2-3 FLA (SO)"
+        assert "level at 2-2 at FINAL, the plays say 2-3 SO; using the plays'" in capsys.readouterr().out
+
+    def test_a_shootout_won_by_the_home_side(self, nhl_command):
+        plays = self._regulation((1, 0), (1, 1)) + [self._so(10, 10), self._so(11, 20), self._so(12, 10)]
+        plays[-3:] = [self._so(10, 10), self._so(11, 20), self._so(12, 10)]
+        for play in plays[-3:]:
+            play["details"]["homeScore"] = play["details"]["awayScore"] = 1
+        _, sent = self._final(nhl_command, self._pbp(plays, home=1, away=1))
+        assert sent[0].endswith("Carolina Hurricanes 2-1 Florida Panthers (SO)")
+
+    def test_a_stale_overtime_game_reads_the_overtime_goals_running_score(self, nhl_command):
+        plays = self._regulation((1, 0), (1, 1)) + [
+            goal_play(event_id=9, event_owner_team_id=20, period_number=4, period_type="OT", time_in_period="02:11",
+                      scoring_player_id=100, home_score=1, away_score=2)]
+        _, sent = self._final(nhl_command, self._pbp(plays, home=1, away=1))
+        assert sent[0].endswith("Carolina Hurricanes 1-2 Florida Panthers (OT)")
+
+    def test_a_level_result_the_plays_cannot_decide_is_held_back_when_allowed(self, nhl_command, capsys):
+        plays = self._regulation((1, 0), (1, 1)) + [self._so(10, 10), self._so(11, 20)]  # shootout level so far
+        record, sent = self._final(nhl_command, self._pbp(plays, home=1, away=1), hold_allowed=True)
+        assert record is None and sent == []
+        assert "FINAL held back, level at 1-1 and the plays do not decide it" in capsys.readouterr().out
+
+    def test_without_goals_in_the_feed_a_level_result_is_held_back_too(self, nhl_command):
+        record, sent = self._final(nhl_command, make_pbp(home_score=2, away_score=2), hold_allowed=True)
+        assert record is None and sent == []
+
+    def test_when_waiting_is_over_the_line_goes_out_as_it_is(self, nhl_command):
+        record, sent = self._final(nhl_command, make_pbp(home_score=2, away_score=2), hold_allowed=False)
+        assert sent == [f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 2-2 Florida Panthers"]
+        assert record["text"] == "CAR 2-2 FLA"
+
+    def test_a_decided_header_is_never_second_guessed(self, nhl_command, capsys):
+        plays = self._regulation((1, 0), (2, 0), (2, 1))
+        _, sent = self._final(nhl_command, self._pbp(plays, home=2, away=1))
+        assert sent[0].endswith("Carolina Hurricanes 2-1 Florida Panthers")
+        assert "the plays say" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("plays, expected", [
+        ([], None),
+        ([goal_play(event_id=1, home_score=1, away_score=0)], (1, 0, "REG")),
+        ([goal_play(event_id=1, home_score=1, away_score=1)], None),
+        ([goal_play(event_id=1, home_score=None, away_score=None)], None),
+        ([goal_play(event_id=1, period_number=4, period_type="OT", time_in_period="01:00", home_score=0, away_score=1)], (0, 1, "OT")),
+    ])
+    def test_result_from_plays(self, nhl_command, plays, expected):
+        assert nhl_command._result_from_plays(self._pbp(plays)) == expected
+
+    def test_a_shootout_with_no_regulation_goals_starts_from_nil_nil(self, nhl_command):
+        plays = [self._so(10, 10), self._so(11, 20), self._so(12, 10)]
+        for play in plays:
+            play["details"]["homeScore"] = play["details"]["awayScore"] = 0
+        assert nhl_command._result_from_plays(self._pbp(plays, home=0, away=0)) == (1, 0, "SO")
+
+    def test_a_shootout_goal_without_a_running_score_before_it_is_not_decided(self, nhl_command):
+        plays = [goal_play(event_id=1, home_score=None, away_score=None), self._so(10, 10)]
+        assert nhl_command._result_from_plays(self._pbp(plays)) is None
+
+
+class TestFinalHeldAcrossPolls:
+    """The tracker side of the hold: no FINAL: line while the result is level, the game not ended, and a line
+    after FINAL_HOLD_POLLS polls at the latest."""
+
+    def _poll(self, nhl_command, bot, pbp):
+        game = make_schedule_game(gid=1, game_state="FINAL", home_score=2, away_score=2)
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+                patch.object(nhl_command, "_fetch_scores", return_value={}), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=18000):
+            return nhl_command._poll_once(bot, "#nhl.fi")
+
+    def _finals(self, bot):
+        return [c[0][1] for c in bot.send_message.call_args_list if "FINAL:" in c[0][1]]
+
+    def _tracker(self, nhl_command):
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+        }}
+
+    def test_a_level_result_is_held_then_posted_once_the_plays_decide_it(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        level = make_pbp(game_id=1, home_score=2, away_score=2, game_state="FINAL")
+        assert self._poll(nhl_command, bot, level) is False  # the tracker keeps running
+        assert self._poll(nhl_command, bot, level) is False
+        assert self._finals(bot) == []
+        decided = make_pbp(game_id=1, home_score=2, away_score=3, game_state="FINAL", last_period_type="SO")
+        assert self._poll(nhl_command, bot, decided) is True
+        assert self._finals(bot) == [f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 2-3 Florida Panthers (SO) | Yleisöä: 18000"]
+        self._poll(nhl_command, bot, decided)
+        assert len(self._finals(bot)) == 1
+
+    def test_after_the_hold_limit_the_level_line_goes_out(self, nhl_command):
+        bot = MagicMock()
+        self._tracker(nhl_command)
+        level = make_pbp(game_id=1, home_score=2, away_score=2, game_state="FINAL")
+        for _ in range(nhl_command.FINAL_HOLD_POLLS):
+            assert self._poll(nhl_command, bot, level) is False
+        assert self._finals(bot) == []
+        assert self._poll(nhl_command, bot, level) is True
+        assert self._finals(bot) == [f"{nhl_command.FINAL_PREFIX} Carolina Hurricanes 2-2 Florida Panthers | Yleisöä: 18000"]
+
+
 class TestFailedFinalFetch:
     """Issue #26: a game that turns FINAL in a poll whose play-by-play request
     fails is not marked as ended, so the next poll still sends its FINAL: line."""

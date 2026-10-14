@@ -67,6 +67,9 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     # longer than 240 s); a missing figure is retried every poll for this long.
     ATTENDANCE_RETRY_SECONDS = 420
     FINAL_SCORE_MAX_AGE_SECONDS = 3
+    # A FINAL line is never posted for a level score (see _announce_end): it waits up to this many polls
+    # for a result, then goes out as it is.
+    FINAL_HOLD_POLLS = 6
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
     FINAL_PREFIX = irc_prefix("FINAL:", ORANGE)
@@ -173,11 +176,16 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
 
                 ended = self._is_ended(game)
                 final = prev.get("final")
+                final_held = prev.get("final_held", 0)
                 if ended and not prev["ended"]:
                     if pbp is None:
                         ended = False  # no FINAL: without the play-by-play; try again next poll
                     else:
-                        final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"))
+                        final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"),
+                                                   hold_allowed=final_held < self.FINAL_HOLD_POLLS)
+                        if final is None:
+                            ended = False  # a level score at FINAL is not a result yet; try again next poll
+                            final_held += 1
 
                 # Play-by-play fetch failed this cycle: `announced` is still
                 # the previous record, carried forward unchanged, so the next
@@ -187,6 +195,8 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                 new_state[gid]["announced"] = announced
                 if final:
                     new_state[gid]["final"] = final
+                if final_held and not final:
+                    new_state[gid]["final_held"] = final_held
                 if not ended:
                     all_ended = False
             except Exception as e:
@@ -613,7 +623,9 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     def _is_ended(self, game) -> bool:
         return game.get("gameState") in ("FINAL", "OFF")
 
-    def _announce_end(self, irc_bot, channel, pbp, slate=None):
+    def _announce_end(self, irc_bot, channel, pbp, slate=None, hold_allowed=False):
+        """Posts the FINAL: line and returns its record, or None when `hold_allowed` and the result is
+        still level (no line is posted then; the caller tries again next poll)."""
         home = self._team_name(pbp.get("homeTeam") or {})
         away = self._team_name(pbp.get("awayTeam") or {})
         home_score = (pbp.get("homeTeam") or {}).get("score", "?")
@@ -641,6 +653,22 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             print(f"NHL: game {pbp.get('id')}: no result from the score endpoint for the FINAL line, "
                   f"using the play-by-play header")
 
+        # An NHL game never ends level, so a level score at FINAL is a stale result - in the shootout game
+        # of 2026-10-13 the header and the score endpoint both still said 2-2 for about 20 s after the
+        # state turned FINAL, and the line went out as "2-2" with no (SO). The plays already hold the
+        # decision (the overtime goal's running score, the shootout goals), so the result is read from
+        # them; if they do not decide it either, the line waits a few polls (issue #12).
+        if isinstance(home_score, int) and isinstance(away_score, int) and home_score == away_score:
+            from_plays = self._result_from_plays(pbp)
+            if from_plays:
+                print(f"NHL: game {pbp.get('id')}: level at {home_score}-{away_score} at FINAL, "
+                      f"the plays say {from_plays[0]}-{from_plays[1]} {from_plays[2]}; using the plays'")
+                home_score, away_score, last_period_type = from_plays
+            elif hold_allowed:
+                print(f"NHL: game {pbp.get('id')}: FINAL held back, level at {home_score}-{away_score} "
+                      f"and the plays do not decide it")
+                return None
+
         suffix = f" ({last_period_type})" if last_period_type in ("OT", "SO") else ""
 
         # Same "Yleisöä" wording as !liiga's FINAL line; left out whenever
@@ -663,6 +691,35 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             "start": pbp.get("startTimeUTC"),
             "at": time.monotonic(),
         }
+
+    def _result_from_plays(self, pbp):
+        """(home, away, "REG"|"OT"|"SO") as the plays decide it, or None when they do not: the running
+        score of the last goal, or - when the last goal is a shootout goal - the score before the shootout
+        plus one for the side that scored more shootout goals (None while that is level)."""
+        goals = self._all_real_goals(pbp)
+        if not goals:
+            return None
+
+        def period_type(goal):
+            return (goal.get("periodDescriptor") or {}).get("periodType")
+
+        def running(goal):
+            details = goal.get("details") or {}
+            home, away = details.get("homeScore"), details.get("awayScore")
+            return (home, away) if isinstance(home, int) and isinstance(away, int) else None
+
+        last = goals[-1]
+        if period_type(last) == "SO":
+            before = [g for g in goals if period_type(g) != "SO"]
+            score = running(before[-1]) if before else (0, 0)
+            home_so, away_so = self._shootout_tally(pbp, last)
+            if score is None or home_so == away_so:
+                return None
+            return (score[0] + 1, score[1], "SO") if home_so > away_so else (score[0], score[1] + 1, "SO")
+        score = running(last)
+        if score is None or score[0] == score[1]:
+            return None
+        return score[0], score[1], "OT" if period_type(last) == "OT" else "REG"
 
     def _retry_missing_attendance(self, state, poll_started):
         """Looks again for the attendance of every finished game whose FINAL:
