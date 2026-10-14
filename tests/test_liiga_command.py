@@ -1,3 +1,4 @@
+import zlib
 import itertools
 import datetime
 import threading
@@ -53,7 +54,7 @@ def goal_event(period=1, game_time=125, home_score=1, away_score=0,
         "gameTime": game_time,
         "homeTeamScore": home_score,
         "awayTeamScore": away_score,
-        "scorerPlayer": {"firstName": first, "lastName": last},
+        "scorerPlayer": {"playerId": zlib.crc32(f"{first} {last}".encode()), "firstName": first, "lastName": last},
         "assistantPlayers": assists or [],
         "goalTypes": tags or [],
     }
@@ -520,9 +521,74 @@ class TestAnnounceByIdentity:
         before, with_goal = make_game(home_goals=[]), make_game(home_goals=[goal])
         assert len(self._run(liiga_command, [before, with_goal, before, make_game(home_goals=[dict(goal)])])) == 1
 
+    # ---- issue #48: the same goal under a different identity ------------------------------------------------
+
+    def _shootout_winner(self, event_id, **extra):
+        return dict(goal_event(period=5, game_time=3900, home_score=3, away_score=3, first="Kasper", last="Pikkarainen",
+                               tags=["VL"], event_id=event_id), **extra)
+
+    def test_a_goal_whose_event_id_changed_is_announced_once_and_the_change_is_journaled(self, liiga_command, capsys):
+        # 2026-10-14: the shootout's winning shot was announced twice, a minute apart, while the feed's goal
+        # count never changed.
+        first, rekeyed = self._shootout_winner(218), self._shootout_winner(219)
+        lines = self._run(liiga_command, [make_game(away_goals=[]), make_game(away_goals=[first]),
+                                          make_game(away_goals=[first]), make_game(away_goals=[rekeyed]),
+                                          make_game(away_goals=[rekeyed])])
+        assert len(lines) == 1 and " SO | " in lines[0]
+        out = capsys.readouterr().out
+        assert "a goal's eventId changed, still the same goal: eventId 218 -> eventId 219" in out
+        assert "announced goals missing" not in out  # the goal never counts as missing: it is still recognised
+
+    def test_an_event_id_that_appears_on_a_goal_without_one_is_announced_once_and_journaled(self, liiga_command, capsys):
+        bare = self._shootout_winner(None)
+        del bare["eventId"]
+        lines = self._run(liiga_command, [make_game(away_goals=[]), make_game(away_goals=[bare]),
+                                          make_game(away_goals=[self._shootout_winner(219)])])
+        assert len(lines) == 1
+        assert "a goal's eventId appeared, still the same goal: none -> eventId 219" in capsys.readouterr().out
+
+    def test_a_goal_whose_clock_shifts_by_a_second_keeps_its_event_id_and_says_nothing(self, liiga_command, capsys):
+        goal = goal_event(home_score=1, away_score=0, game_time=533, event_id=77)
+        shifted = dict(goal, gameTime=534)
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[goal]), make_game(home_goals=[shifted])])
+        assert len(lines) == 1
+        out = capsys.readouterr().out
+        assert "eventId" not in out and "missing" not in out
+
+    def test_a_goal_that_differs_in_every_identity_is_a_new_goal(self, liiga_command):
+        first = goal_event(home_score=1, away_score=0, game_time=100, first="Eka", event_id=1)
+        second = goal_event(home_score=2, away_score=0, game_time=400, first="Toka", event_id=2)
+        assert len(self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[first]),
+                                             make_game(home_goals=[first, second])])) == 2
+
+    def test_two_shootout_goals_by_different_scorers_are_both_announced(self, liiga_command):
+        a = self._shootout_winner(10, scorerPlayer={"playerId": 1, "firstName": "A", "lastName": "A"}, goalTypes=[])
+        b = self._shootout_winner(11, scorerPlayer={"playerId": 2, "firstName": "B", "lastName": "B"})
+        assert len(self._run(liiga_command, [make_game(away_goals=[]), make_game(away_goals=[a, b])])) == 2
+
+    def test_the_same_scorer_at_the_same_period_and_time_is_one_goal_even_with_two_event_ids(self, liiga_command):
+        """The known limit of recognising a goal by any identity (a very long shootout could do this)."""
+        a, b = self._shootout_winner(10), self._shootout_winner(11)
+        assert len(self._run(liiga_command, [make_game(away_goals=[]), make_game(away_goals=[a, b])])) == 1
+
+    def test_the_missing_count_counts_goals_not_identities(self, liiga_command):
+        goal = goal_event(home_score=1, away_score=0, event_id=5)  # two identities: its event id and its time + scorer
+        state = liiga_command._snapshot(make_game(home_goals=[goal]))
+        dipped = liiga_command._snapshot(make_game(home_goals=[]), state)
+        assert dipped["missing"]["homeTeam"] == 1
+
+    def test_a_recognised_goal_keeps_every_identity_it_has_had(self, liiga_command):
+        first, rekeyed = self._shootout_winner(218), self._shootout_winner(219)
+        state = liiga_command._snapshot(make_game(away_goals=[first]))
+        merged = liiga_command._snapshot(make_game(away_goals=[rekeyed]), state)
+        (record,) = merged["announced"]["awayTeam"]
+        assert {key for key in record if key[1] == "id"} == {("awayTeam", "id", 218), ("awayTeam", "id", 219)}
+        # and the goal is still recognised by the old one if the feed ever went back to it
+        assert liiga_command._reconcile(make_game(away_goals=[first]), "awayTeam", merged["announced"]["awayTeam"])[1] == []
+
     def test_a_disallowed_entry_without_a_scorer_is_never_tracked(self, liiga_command):
         game = make_game(home_goals=[disallowed_goal_event()])
-        assert liiga_command._snapshot(game)["announced"]["homeTeam"] == set()
+        assert liiga_command._snapshot(game)["announced"]["homeTeam"] == []
 
     def test_the_announced_set_only_grows(self, liiga_command):
         goal = goal_event(home_score=1, away_score=0)
@@ -598,7 +664,7 @@ class TestPollOnce:
             liiga_command._poll_once(bot, "#chan")
 
         bot.send_message.assert_not_called()
-        assert liiga_command._channels["#chan"]["games"][2]["announced"]["homeTeam"] == set()
+        assert liiga_command._channels["#chan"]["games"][2]["announced"]["homeTeam"] == []
 
     def test_new_game_that_already_ended_counts_toward_all_ended(self, liiga_command):
         bot = MagicMock()

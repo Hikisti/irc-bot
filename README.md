@@ -104,10 +104,12 @@ date with games) and lists its matchups grouped by start time, e.g. `Next Liiga 
 when the game was decided in overtime or a shootout, plus the attendance figure when the API
 reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. The feed's score on a shootout's winning shot is
 the tie from before the shootout, so that line gives the result after the shot (`Ässät 2-3 HPK 00:00 SO`), like the
-`FINAL:` line. Each goal is remembered by its
-event id and announced once: the feed was seen to leave a goal out of one poll and bring it back in the
-next, which a plain count of goals would have announced a second time (a goal missing from the feed is
-noted in the journal, not in the channel). Uses the unofficial liiga.fi
+`FINAL:` line. Each goal is remembered by every
+identity it has - its event id, and its period, game time and scorer - and announced once: the feed was seen to
+leave a goal out of one poll and bring it back in the next, which a plain count of goals would have announced a
+second time, and to change a shootout goal's event id between two polls, which an event id alone would have
+announced twice (a goal missing from the feed, or a goal whose event id changed, is noted in the journal, not in
+the channel). Uses the unofficial liiga.fi
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
 `#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
 (see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
