@@ -86,6 +86,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
     # goal to 2 s after it).
     CHALLENGE_WINDOW_BEFORE_SECONDS = 60
     CHALLENGE_WINDOW_AFTER_SECONDS = 10
+    VIDEO_REVIEW = "video-review"  # the secondary reason of a referee stoppage for a review
     CHALLENGE_REASONS = (
         ("off-side", "offside challenge"),
         ("goal-interference", "goaltender interference challenge"),
@@ -490,33 +491,38 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             return None
 
     def _challenge_reason(self, pbp, period, seconds):
-        """Why a goal was taken off, from the coach's-challenge stoppage the
-        feed records near it (its clock is where play was stopped, which can
-        be up to half a minute before the goal), or None. A challenge that
-        failed is followed by a bench penalty and the goal stands, so such a
-        stoppage is not an explanation."""
+        """Why a goal was taken off, from the stoppage the feed records near it - a coach's challenge, or a
+        video review (a referee stoppage whose secondary reason is "video-review"; 2026-10-14: the feed held
+        that and no challenge entry for a goal that was taken off) - (its clock is where play was stopped,
+        which can be up to half a minute before the goal), or None. A challenge that failed is followed by a
+        bench penalty and the goal stands, so such a stoppage is not an explanation. The nearest stoppage
+        wins."""
         if seconds is None:
             return None
         plays = pbp.get("plays") or []
         best = None
         for index, play in enumerate(plays):
-            reason = (play.get("details") or {}).get("reason") or ""
-            if play.get("typeDescKey") != "stoppage" or not reason.startswith("chlg"):
+            if play.get("typeDescKey") != "stoppage":
+                continue
+            details = play.get("details") or {}
+            reason = details.get("reason") or ""
+            challenge = reason.startswith("chlg")
+            if not challenge and details.get("secondaryReason") != self.VIDEO_REVIEW:
                 continue
             if (play.get("periodDescriptor") or {}).get("number") != period:
                 continue
             at = self._clock_seconds(play.get("timeInPeriod"))
             if at is None or not (seconds - self.CHALLENGE_WINDOW_BEFORE_SECONDS <= at <= seconds + self.CHALLENGE_WINDOW_AFTER_SECONDS):
                 continue
-            if any(p.get("typeDescKey") == "penalty"
-                   and (p.get("details") or {}).get("descKey") == "delaying-game-unsuccessful-challenge"
-                   for p in plays[index + 1:index + 5]):
+            if challenge and any(p.get("typeDescKey") == "penalty"
+                                 and (p.get("details") or {}).get("descKey") == "delaying-game-unsuccessful-challenge"
+                                 for p in plays[index + 1:index + 5]):
                 continue
             if best is None or abs(at - seconds) < best[0]:
-                best = (abs(at - seconds), reason)
-        if best is None:
-            return None
-        return next((text for fragment, text in self.CHALLENGE_REASONS if fragment in best[1]), "challenge")
+                text = (next((t for fragment, t in self.CHALLENGE_REASONS if fragment in reason), "challenge")
+                        if challenge else "video review")
+                best = (abs(at - seconds), text)
+        return best[1] if best else None
 
     def _format_goal(self, pbp, goal) -> str:
         home = self._team_name(pbp.get("homeTeam") or {})

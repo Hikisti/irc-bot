@@ -175,8 +175,10 @@ minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving t
 goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 3rd | Egor Chinakhov (Pittsburgh
 Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the
 `GOAL:` line). The reason comes from the
-coach's-challenge stoppage the feed records near the goal (offside, goaltender interference, or just
-"challenge"); a challenge that failed, which is followed by a bench penalty, is not taken as a reason.
+stoppage the feed records near the goal: a coach's challenge (offside, goaltender interference, or just
+"challenge") or a video review (`... was disallowed (video review)`); the nearest one wins, and a challenge that
+failed, which is followed by a bench penalty, is not taken as a reason. A goal with no such stoppage in the feed
+is retracted without a reason.
 If a new goal takes the running score of a goal that has only just left the feed (seen when the feed corrects a wrong
 first scorer: the first entry disappears and a new one appears seconds later), nothing is retracted: the new goal is
 announced and the first line stays, since the goal was not disallowed. Goals that were already in the feed when

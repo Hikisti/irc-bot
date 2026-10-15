@@ -1474,6 +1474,13 @@ def stoppage_play(reason, time_in_period, period_number=1):
             "timeInPeriod": time_in_period, "details": {"reason": reason, "secondaryReason": reason}}
 
 
+def review_play(time_in_period, period_number=1, reason="referee-or-linesman"):
+    """A referee stoppage for a video review: the real shape of 2026-10-14 (reason referee-or-linesman, secondary
+    reason video-review)."""
+    return {"typeDescKey": "stoppage", "periodDescriptor": {"number": period_number, "periodType": "REG"},
+            "timeInPeriod": time_in_period, "details": {"reason": reason, "secondaryReason": "video-review"}}
+
+
 def penalty_play(desc_key, time_in_period, period_number=1):
     return {"typeDescKey": "penalty", "periodDescriptor": {"number": period_number, "periodType": "REG"},
             "timeInPeriod": time_in_period, "details": {"descKey": desc_key, "duration": 2}}
@@ -1687,6 +1694,42 @@ class TestRetraction:
         text = self._reason_text(nhl_command, stoppage_play("chlg-hm-goal-interference", "04:40", 3),
                                  stoppage_play("chlg-hm-off-side", "05:20", 3))
         assert text.endswith("(offside challenge)")
+
+    def test_a_video_review_just_after_the_goals_clock_is_the_reason(self, nhl_command):
+        # real case (2026-10-14): the goal at 09:27, a referee stoppage with the secondary reason video-review at
+        # 09:29, other stoppages around it, and no challenge entry
+        text = self._reason_text(nhl_command, stoppage_play("goalie-stopped-after-sog", "04:10", 3), review_play("05:27", 3),
+                                 stoppage_play("icing", "06:20", 3))
+        assert text.endswith("was disallowed (video review)")
+
+    def test_a_video_review_before_the_goals_clock_counts_too(self, nhl_command):
+        assert self._reason_text(nhl_command, review_play("05:00", 3)).endswith("(video review)")
+
+    def test_a_video_review_too_far_from_the_goal_or_in_another_period_explains_nothing(self, nhl_command):
+        assert not self._reason_text(nhl_command, review_play("03:00", 3)).endswith(")")
+        assert not self._reason_text(nhl_command, review_play("05:00", 2)).endswith(")")
+        assert not self._reason_text(nhl_command, review_play("05:40", 3)).endswith(")")
+
+    def test_a_plain_referee_stoppage_explains_nothing(self, nhl_command):
+        # the 2026-10-13 case: the same stoppage reason, but no video-review secondary reason
+        assert not self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:27", 3)).endswith(")")
+
+    def test_the_nearest_of_a_challenge_and_a_video_review_wins(self, nhl_command):
+        assert self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "05:00", 3),
+                                 review_play("05:24", 3)).endswith("(video review)")
+        assert self._reason_text(nhl_command, review_play("05:00", 3),
+                                 stoppage_play("chlg-hm-off-side", "05:24", 3)).endswith("(offside challenge)")
+
+    def test_a_failed_challenges_penalty_does_not_hide_a_video_review(self, nhl_command):
+        before = self._reason_text(nhl_command, stoppage_play("chlg-vis-off-side", "05:10", 3),
+                                   penalty_play("delaying-game-unsuccessful-challenge", "05:10", 3), review_play("05:26", 3))
+        after = self._reason_text(nhl_command, review_play("05:26", 3),
+                                  penalty_play("delaying-game-unsuccessful-challenge", "05:27", 3))
+        assert before.endswith("(video review)") and after.endswith("(video review)")
+
+    def test_the_failed_challenge_alone_still_explains_nothing(self, nhl_command):
+        assert not self._reason_text(nhl_command, stoppage_play("chlg-vis-off-side", "05:25", 3),
+                                     penalty_play("delaying-game-unsuccessful-challenge", "05:25", 3)).endswith(")")
 
     def test_a_goal_with_an_unreadable_clock_gets_no_explanation(self, nhl_command):
         goal = self._goal(time_in_period="")
