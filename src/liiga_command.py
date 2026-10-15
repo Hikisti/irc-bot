@@ -178,9 +178,12 @@ class LiigaCommand(LiveTrackerCommand):
         the seeded baseline count and the announced slice built from the
         same list, so a disallowed goal is never seeded, counted, or
         announced.
+
+        A missed penalty shot (tag RL0) is in the list too, with its shooter as the scorer and the
+        score unchanged: it is not a goal either (issue #58).
         """
         events = (game.get(side) or {}).get("goalEvents") or []
-        return [e for e in events if e.get("scorerPlayer")]
+        return [e for e in events if e.get("scorerPlayer") and not self.NO_GOAL_TAGS.intersection(e.get("goalTypes") or [])]
 
     def _event_keys(self, side, event) -> frozenset:
         """Every identity a goal event can be recognised by: its eventId and its period, game time and
@@ -253,6 +256,11 @@ class LiigaCommand(LiveTrackerCommand):
             f"{self.GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}"
             f"{time_str} | {scoring_team} — {scorer_name}{tag_str}{assist_str}"
         )
+
+    # Tags of an event in goalEvents that is not a goal although it has a scorer: "RL0" is a penalty shot that did
+    # not score (a scored one is "RL"); it carries the unchanged running score and the team's own goals count
+    # leaves it out. Seen in 5 games this season; announced as a goal on 2026-10-15 (#58).
+    NO_GOAL_TAGS = frozenset({"RL0"})
 
     SHOOTOUT_WINNER_TAG = "VL"  # voittolaukaus, the winning shot of a shootout
 

@@ -586,6 +586,51 @@ class TestAnnounceByIdentity:
         # and the goal is still recognised by the old one if the feed ever went back to it
         assert liiga_command._reconcile(make_game(away_goals=[first]), "awayTeam", merged["announced"]["awayTeam"])[1] == []
 
+    # ---- issue #58: a missed penalty shot is in goalEvents too -----------------------------------------------
+
+    def _missed_penalty_shot(self, **extra):
+        # the real shape (2026-10-15): the shooter as the scorer, the tag RL0, the running score unchanged
+        return dict(goal_event(period=3, game_time=2842, home_score=2, away_score=0, tags=["RL0"], event_id=137,
+                               first="Shooter", last="One"), **extra)
+
+    def _real_goal_of_the_same_player(self):
+        return goal_event(period=2, game_time=1423, home_score=2, away_score=0, tags=["YV"], event_id=84,
+                          first="Shooter", last="One")
+
+    def test_a_missed_penalty_shot_is_not_announced_as_a_goal(self, liiga_command):
+        real, missed = self._real_goal_of_the_same_player(), self._missed_penalty_shot()
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[real]),
+                                          make_game(home_goals=[real, missed])])
+        assert len(lines) == 1 and "(YV)" in lines[0] and "RL0" not in lines[0]
+
+    def test_a_scored_penalty_shot_is_a_goal(self, liiga_command):
+        scored = dict(self._missed_penalty_shot(), goalTypes=["RL"], homeTeamScore=3)
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[scored])])
+        assert len(lines) == 1 and "(RL)" in lines[0]
+
+    def test_a_tag_list_with_rl0_among_others_is_no_goal_either(self, liiga_command):
+        missed = self._missed_penalty_shot(goalTypes=["YV", "RL0"])
+        assert self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[missed])]) == []
+
+    def test_the_missed_shot_is_never_seeded_counted_or_remembered(self, liiga_command):
+        game = make_game(home_goals=[self._real_goal_of_the_same_player(), self._missed_penalty_shot()])
+        state = liiga_command._snapshot(game)
+        assert len(state["announced"]["homeTeam"]) == 1 and state["missing"]["homeTeam"] == 0
+        # and a game that already has one when tracking starts announces nothing later either
+        assert self._run(liiga_command, [game, game, game]) == []
+
+    def test_an_event_retagged_from_no_goal_to_goal_is_announced_once(self, liiga_command):
+        missed = self._missed_penalty_shot()
+        scored = dict(missed, goalTypes=["RL"], homeTeamScore=3)
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[missed]),
+                                          make_game(home_goals=[scored]), make_game(home_goals=[scored])])
+        assert len(lines) == 1 and "(RL)" in lines[0]
+
+    def test_events_without_tags_are_unchanged(self, liiga_command):
+        for tags in ([], None):
+            goal = dict(goal_event(home_score=1, away_score=0), goalTypes=tags)
+            assert len(self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[goal])])) == 1
+
     def test_a_disallowed_entry_without_a_scorer_is_never_tracked(self, liiga_command):
         game = make_game(home_goals=[disallowed_goal_event()])
         assert liiga_command._snapshot(game)["announced"]["homeTeam"] == []

@@ -109,7 +109,9 @@ identity it has - its event id, and its period, game time and scorer - and annou
 leave a goal out of one poll and bring it back in the next, which a plain count of goals would have announced a
 second time, and to change a shootout goal's event id between two polls, which an event id alone would have
 announced twice (a goal missing from the feed, or a goal whose event id changed, is noted in the journal, not in
-the channel). Uses the unofficial liiga.fi
+the channel). The feed's goal list also holds entries that are not goals - a goal taken off by video review (no scorer) and a
+missed penalty shot (tagged `RL0`, with its shooter as the scorer and the score unchanged) - and the tracker skips both;
+a scored penalty shot (`RL`) is a goal. Uses the unofficial liiga.fi
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
 `#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
 (see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
