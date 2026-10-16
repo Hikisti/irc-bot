@@ -1469,9 +1469,10 @@ class TestAnnouncedGoalRecord:
         assert nhl_command._resolve_goals(self._pbp(goal), record)[0] == []
 
 
-def stoppage_play(reason, time_in_period, period_number=1):
+def stoppage_play(reason, time_in_period, period_number=1, secondary=None):
     return {"typeDescKey": "stoppage", "periodDescriptor": {"number": period_number, "periodType": "REG"},
-            "timeInPeriod": time_in_period, "details": {"reason": reason, "secondaryReason": reason}}
+            "timeInPeriod": time_in_period,
+            "details": {"reason": reason, "secondaryReason": reason if secondary is None else secondary}}
 
 
 def review_play(time_in_period, period_number=1, reason="referee-or-linesman"):
@@ -1694,6 +1695,41 @@ class TestRetraction:
         text = self._reason_text(nhl_command, stoppage_play("chlg-hm-goal-interference", "04:40", 3),
                                  stoppage_play("chlg-hm-off-side", "05:20", 3))
         assert text.endswith("(offside challenge)")
+
+    def test_a_challenge_recorded_only_in_the_secondary_reason_is_the_reason(self, nhl_command):
+        # real case (2026-10-15): the stoppage 3 s before the goal's clock, the generic referee reason in "reason"
+        # and the challenge code only in "secondaryReason"
+        text = self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:22", 3, secondary="chlg-vis-off-side"))
+        assert text.endswith("was disallowed (offside challenge)")
+
+    def test_the_secondary_field_gives_the_kind_of_challenge_too(self, nhl_command):
+        assert self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:25", 3,
+                                                            secondary="chlg-hm-goal-interference")).endswith("(goaltender interference challenge)")
+        assert self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:25", 3,
+                                                            secondary="chlg-hm-something-new")).endswith("(challenge)")
+
+    def test_a_challenge_code_in_the_main_field_wins_over_another_secondary_reason(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "05:25", 3, secondary="tv-timeout"))
+        assert text.endswith("(offside challenge)")
+
+    def test_with_a_challenge_code_in_both_fields_the_main_one_decides(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("chlg-hm-off-side", "05:25", 3, secondary="chlg-hm-goal-interference"))
+        assert text.endswith("(offside challenge)")
+
+    def test_a_failed_challenge_in_the_secondary_field_is_not_the_reason(self, nhl_command):
+        text = self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:25", 3, secondary="chlg-vis-off-side"),
+                                 penalty_play("delaying-game-unsuccessful-challenge", "05:25", 3))
+        assert not text.endswith(")")
+
+    def test_the_nearest_of_a_secondary_field_challenge_and_a_video_review_wins(self, nhl_command):
+        assert self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:24", 3, secondary="chlg-vis-off-side"),
+                                 review_play("05:00", 3)).endswith("(offside challenge)")
+        assert self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:00", 3, secondary="chlg-vis-off-side"),
+                                 review_play("05:24", 3)).endswith("(video review)")
+
+    @pytest.mark.parametrize("secondary", ["tv-timeout", "", None, "puck-in-benches"])
+    def test_other_secondary_reasons_explain_nothing(self, nhl_command, secondary):
+        assert not self._reason_text(nhl_command, stoppage_play("referee-or-linesman", "05:25", 3, secondary=secondary)).endswith(")")
 
     def test_a_video_review_just_after_the_goals_clock_is_the_reason(self, nhl_command):
         # real case (2026-10-14): the goal at 09:27, a referee stoppage with the secondary reason video-review at

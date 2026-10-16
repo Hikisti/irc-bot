@@ -178,7 +178,7 @@ goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 
 Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the
 `GOAL:` line). The reason comes from the
 stoppage the feed records near the goal: a coach's challenge (offside, goaltender interference, or just
-"challenge") or a video review (`... was disallowed (video review)`); the nearest one wins, and a challenge that
+"challenge"; the code can sit in either of the stoppage's two reason fields) or a video review (`... was disallowed (video review)`); the nearest one wins, and a challenge that
 failed, which is followed by a bench penalty, is not taken as a reason. A goal with no such stoppage in the feed
 is retracted without a reason.
 If a new goal takes the running score of a goal that has only just left the feed (seen when the feed corrects a wrong

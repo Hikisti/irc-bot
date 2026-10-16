@@ -491,9 +491,10 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             return None
 
     def _challenge_reason(self, pbp, period, seconds):
-        """Why a goal was taken off, from the stoppage the feed records near it - a coach's challenge, or a
-        video review (a referee stoppage whose secondary reason is "video-review"; 2026-10-14: the feed held
-        that and no challenge entry for a goal that was taken off) - (its clock is where play was stopped,
+        """Why a goal was taken off, from the stoppage the feed records near it - a coach's challenge (the code
+        "chlg-..." in its reason or in its secondary reason), or a video review (a referee stoppage whose
+        secondary reason is "video-review"; 2026-10-14: the feed held that and no challenge entry for a goal
+        that was taken off) - (its clock is where play was stopped,
         which can be up to half a minute before the goal), or None. A challenge that failed is followed by a
         bench penalty and the goal stands, so such a stoppage is not an explanation. The nearest stoppage
         wins."""
@@ -505,8 +506,11 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
             if play.get("typeDescKey") != "stoppage":
                 continue
             details = play.get("details") or {}
-            reason = details.get("reason") or ""
-            challenge = reason.startswith("chlg")
+            # The challenge code is usually in "reason", but on 2026-10-15 a stoppage had the generic
+            # "referee-or-linesman" there and "chlg-vis-off-side" only in "secondaryReason" (#59).
+            code = next((r for r in (details.get("reason"), details.get("secondaryReason"))
+                         if (r or "").startswith("chlg")), None)
+            challenge = code is not None
             if not challenge and details.get("secondaryReason") != self.VIDEO_REVIEW:
                 continue
             if (play.get("periodDescriptor") or {}).get("number") != period:
@@ -519,7 +523,7 @@ class NHLCommand(NHLScoreboardMixin, LiveTrackerCommand):
                                  for p in plays[index + 1:index + 5]):
                 continue
             if best is None or abs(at - seconds) < best[0]:
-                text = (next((t for fragment, t in self.CHALLENGE_REASONS if fragment in reason), "challenge")
+                text = (next((t for fragment, t in self.CHALLENGE_REASONS if fragment in code), "challenge")
                         if challenge else "video review")
                 best = (abs(at - seconds), text)
         return best[1] if best else None
