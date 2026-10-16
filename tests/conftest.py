@@ -3,6 +3,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
 import requests
 
 # command_handler.py imports its sibling modules with bare names
@@ -24,6 +25,9 @@ if SRC_DIR not in sys.path:
 # a test pass locally that fails in CI - which is exactly how a CI-only
 # failure slipped through once. A test that needs a key sets it itself.
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
+
+from nhl_command import NHLCommand  # noqa: E402 - needs src/ on the path, set above
+from tests.nhl_test_helpers import html_response  # noqa: E402
 
 
 def make_json_response(json_data, status_code=200, reason="Not Found"):
@@ -53,3 +57,14 @@ def join_channel_thread(command, channel, timeout=2):
     entry = command._channels.get(channel)
     if entry and entry.get("thread"):
         entry["thread"].join(timeout=timeout)
+
+
+@pytest.fixture
+def nhl_command():
+    command = NHLCommand()
+    # A FINAL: announcement fetches nhl.com's game report for attendance, so
+    # by default every GET here answers 404 (no attendance) - a test that
+    # cares patches session.get itself. Nothing in the NHL test files may
+    # reach the real network.
+    command.session.get = MagicMock(return_value=html_response("", status_code=404))
+    return command

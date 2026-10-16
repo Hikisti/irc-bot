@@ -415,7 +415,7 @@ class TestLevelFinal:
 
     def test_the_bots_own_lines_round_trip(self, capsys):
         from nhl_command import NHLCommand
-        from tests.test_nhl_command import goal_play, make_pbp, roster_spot
+        from tests.nhl_test_helpers import goal_play, make_pbp, roster_spot
         nhl = NHLCommand()
         nhl.session.get = MagicMock()
         so = [goal_play(event_id=n, event_owner_team_id=team, scoring_player_id=100, period_number=5, period_type="SO",
@@ -462,7 +462,7 @@ class TestRoundTrip:
 
     def test_nhl_goal_no_goal_and_final(self):
         from nhl_command import NHLCommand
-        from tests.test_nhl_command import goal_play, make_pbp, roster_spot
+        from tests.nhl_test_helpers import goal_play, make_pbp, roster_spot
         nhl = NHLCommand()
         nhl.session.get = MagicMock()
         goal = goal_play(event_id=7, event_owner_team_id=10, scoring_player_id=100, period_number=3, time_in_period="11:47",
@@ -483,7 +483,7 @@ class TestRoundTrip:
 
     def test_nhl_shootout_goal_round_trip(self):
         from nhl_command import NHLCommand
-        from tests.test_nhl_command import goal_play, make_pbp, roster_spot
+        from tests.nhl_test_helpers import goal_play, make_pbp, roster_spot
         nhl = NHLCommand()
         nhl.session.get = MagicMock()
         goal = goal_play(event_id=7, event_owner_team_id=10, scoring_player_id=100, period_number=5, period_type="SO",
