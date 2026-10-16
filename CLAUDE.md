@@ -28,6 +28,15 @@ not what it is.
   tracker polls doesn't) and never touch tracker state. A subcommand that
   isn't start/stop/next goes in `SUBCOMMANDS` (what `!help` and the usage
   reply list) and the subclass's own `execute()`.
+- `NHLCommand` is also built from two more mixins, split out of `nhl_command.py`
+  (it was 973 lines) as move-only commits (#10): `NHLGoalLedgerMixin`
+  (`src/nhl_goal_ledger.py`: what has been announced per game, how a feed's goal
+  list is compared with it, and the `NO GOAL:` retraction with the reason found
+  near it) and `NHLFinalMixin` (`src/nhl_final.py`: the FINAL line and the result
+  it states, the attendance lookups and retries, the end-of-slate list). Tests
+  follow the modules (`tests/test_nhl_goal_ledger.py`, `tests/test_nhl_final.py`);
+  the shared builders are in `tests/nhl_test_helpers.py` and the `nhl_command`
+  fixture is in `tests/conftest.py`. #22 and #47 change the ledger.
 - `PesisCommand` is built from three mixins: `PesisEventParsingMixin`
   (turns the raw event feed into RUN:/JAKSO:/FINAL: text),
   `PesisPlayerNamesMixin` (scorer/batter name resolution), and
