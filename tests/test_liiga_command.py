@@ -994,6 +994,37 @@ class TestAnnounceEnd:
         message = bot.send_message.call_args[0][1]
         assert message == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (OT)"
 
+    OT_PERIODS = [
+        {"index": 1, "category": "NORMAL", "homeTeamGoals": 2, "awayTeamGoals": 2},
+        {"index": 2, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 2},
+        {"index": 3, "category": "NORMAL", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        {"index": 4, "category": "OVERTIME", "homeTeamGoals": 1, "awayTeamGoals": 0},
+    ]
+
+    def test_the_real_overtime_finished_type_gives_ot_and_no_mismatch_line(self, liiga_command, capsys):
+        # 2026-10-16, JYP-Karpat: the feed's name for an overtime ending is ENDED_DURING_EXTENDED_GAME_TIME, which the
+        # code did not know (the periods list carried the result and a mismatch line was journaled each time)
+        bot = MagicMock()
+        liiga_command._announce_end(bot, "#chan", self._game_with_periods("ENDED_DURING_EXTENDED_GAME_TIME", self.OT_PERIODS))
+        assert bot.send_message.call_args[0][1] == f"{liiga_command.FINAL_PREFIX} Sport 5-4 Jokerit (OT)"
+        assert "end-suffix mismatch" not in capsys.readouterr().out
+
+    def test_the_real_overtime_finished_type_alone_is_enough_when_the_periods_lag(self, liiga_command, capsys):
+        bot = MagicMock()
+        stale_periods = self.OT_PERIODS[:3]  # the overtime entry not in the list yet
+        liiga_command._announce_end(bot, "#chan", self._game_with_periods("ENDED_DURING_EXTENDED_GAME_TIME", stale_periods))
+        assert bot.send_message.call_args[0][1].endswith("Jokerit (OT)")
+        assert "end-suffix mismatch" in capsys.readouterr().out  # the disagreement is still on record
+
+    def test_a_shootout_in_the_periods_still_beats_the_extended_game_time_type(self, liiga_command):
+        bot = MagicMock()
+        periods = self.OT_PERIODS[:3] + [
+            {"index": 4, "category": "OVERTIME", "homeTeamGoals": 0, "awayTeamGoals": 0},
+            {"index": 5, "category": "WINNING_SHOT_COMPETITION", "homeTeamGoals": 1, "awayTeamGoals": 0},
+        ]
+        liiga_command._announce_end(bot, "#chan", self._game_with_periods("ENDED_DURING_EXTENDED_GAME_TIME", periods))
+        assert bot.send_message.call_args[0][1].endswith("Jokerit (SO)")
+
     def test_shootout_final_gets_so_suffix(self, liiga_command):
         # Regression test built from the real payload for Liiga game
         # 2701280 (Sport-Jokerit, 2026-09-01, finishedType

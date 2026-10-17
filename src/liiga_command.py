@@ -297,7 +297,9 @@ class LiigaCommand(LiveTrackerCommand):
         finished = game.get("finishedType") or ""
         if "SHOOTOUT" in finished or "WINNING_SHOT" in finished:
             suffix_from_type = " (SO)"
-        elif "OVERTIME" in finished:
+        elif "OVERTIME" in finished or "EXTENDED" in finished:
+            # "ENDED_DURING_EXTENDED_GAME_TIME" is what the feed says for a game decided in overtime (seen on
+            # 2026-10-10 and 2026-10-16); it has neither "OVERTIME" nor "SHOOTOUT" in it.
             suffix_from_type = " (OT)"
         else:
             suffix_from_type = ""
