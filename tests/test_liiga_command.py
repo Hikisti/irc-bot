@@ -555,6 +555,20 @@ class TestAnnounceByIdentity:
         out = capsys.readouterr().out
         assert "eventId" not in out and "missing" not in out
 
+    def test_a_goal_re_listed_with_a_new_id_and_a_later_clock_is_announced_once(self, liiga_command):
+        # real case (#62): removed for minutes, back under a new eventId with the game time 70 s later
+        first = goal_event(home_score=4, away_score=1, game_time=1571, event_id=159)
+        back = goal_event(home_score=4, away_score=1, game_time=1641, event_id=175)
+        lines = self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[first]),
+                                          make_game(home_goals=[]), make_game(home_goals=[back])])
+        assert len(lines) == 1
+
+    def test_the_same_scorer_at_another_running_score_is_a_new_goal(self, liiga_command):
+        first = goal_event(home_score=1, away_score=0, game_time=100, event_id=1)
+        second = goal_event(home_score=2, away_score=0, game_time=400, event_id=2)
+        assert len(self._run(liiga_command, [make_game(home_goals=[]), make_game(home_goals=[first]),
+                                             make_game(home_goals=[first, second])])) == 2
+
     def test_a_goal_that_differs_in_every_identity_is_a_new_goal(self, liiga_command):
         first = goal_event(home_score=1, away_score=0, game_time=100, first="Eka", event_id=1)
         second = goal_event(home_score=2, away_score=0, game_time=400, first="Toka", event_id=2)

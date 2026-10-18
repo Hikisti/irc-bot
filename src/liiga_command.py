@@ -197,6 +197,9 @@ class LiigaCommand(LiveTrackerCommand):
             keys.add((side, "id", event.get("eventId")))
         scorer = (event.get("scorerPlayer") or {}).get("playerId") or event.get("scorerPlayerId")
         keys.add((side, "at", event.get("period"), event.get("gameTime"), scorer))
+        # Confirmed live (#62): one goal came back after a few minutes with a new eventId and its game
+        # time 70 s later, so neither identity above matched. The scorer's running score is a third.
+        keys.add((side, "score", event.get("period"), scorer, event.get("homeTeamScore"), event.get("awayTeamScore")))
         return frozenset(keys)
 
     def _reconcile(self, game, side, records):
