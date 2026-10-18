@@ -150,6 +150,13 @@ class NHLGoalLedgerMixin:
                     # is retracted after the usual wait.
                     record[("displaced", *displaced["ids"])] = displaced
                 continue
+            posted = rec["posted"] if rec is not None else None
+            if posted is not None and ids and self._same_goal_rekeyed(plays[0], posted):
+                print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} is now event {ids}, "
+                      f"same scorer and period, not announced again")
+                rec["ids"] += [i for i in ids if i not in rec["ids"]]
+                rec["missing"] = 0
+                continue
             new.append(plays[0])
             record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
 
@@ -171,6 +178,15 @@ class NHLGoalLedgerMixin:
 
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
         return sorted(new, key=lambda goal: position[id(goal)]), gone, record
+
+    @staticmethod
+    def _same_goal_rekeyed(goal, posted) -> bool:
+        """The feed re-listed a posted goal under a new event id (confirmed live:
+        the clock a second earlier, the assists filled in): same scorer, same
+        period. A different scorer is a correction and is announced."""
+        scorer = (goal.get("details") or {}).get("scoringPlayerId")
+        period = (goal.get("periodDescriptor") or {}).get("number")
+        return scorer is not None and scorer == posted["scorer"] and period == posted["period"]
 
     def _key_text(self, key) -> str:
         if key[0] == "score":

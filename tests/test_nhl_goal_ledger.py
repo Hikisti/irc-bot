@@ -335,6 +335,19 @@ class TestRetraction:
         assert len(lines) == 2 and "P1 X" in lines[0] and "P2 X" in lines[1]
         assert self._retractions(lines) == []
 
+    def test_the_same_goal_re_keyed_with_a_new_id_and_clock_is_not_announced_again(self, nhl_command, capsys):
+        # real case (#60): removed and re-listed in the same poll, a new id, the clock a second earlier
+        old = self._goal(1, scorer=1, time_in_period="13:21")
+        new = self._goal(2, scorer=1, time_in_period="13:20", assist1=7)
+        lines = self._run(nhl_command, [self._pbp(old), self._pbp(new), self._pbp(new)])
+        assert len(self._goals(lines)) == 1 and self._retractions(lines) == []
+        assert "same scorer and period, not announced again" in capsys.readouterr().out
+
+    def test_the_same_scorer_in_another_period_at_the_same_score_is_announced(self, nhl_command):
+        old = self._goal(1, scorer=1, period_number=1)
+        new = self._goal(2, scorer=1, period_number=2)
+        assert len(self._goals(self._run(nhl_command, [self._pbp(old), self._pbp(new)]))) == 2
+
     def test_a_replacement_after_a_miss_or_two_is_still_not_a_retraction(self, nhl_command):
         old, new = self._goal(1, scorer=1), self._goal(2, scorer=2)
         lines = self._run(nhl_command, [self._pbp(old), self._quiet(), self._quiet(), self._pbp(new)])
