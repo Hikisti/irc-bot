@@ -9,9 +9,10 @@ from live_tracker_command import LiveTrackerCommand
 from nhl_final import NHLFinalMixin
 from nhl_goal_ledger import NHLGoalLedgerMixin
 from nhl_scoreboard import NHLScoreboardMixin
+from team_next import TeamNextMixin
 
 
-class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, LiveTrackerCommand):
+class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNextMixin, LiveTrackerCommand):
     """
     Live-tracks today's NHL games in a channel, announcing goals and final
     scores as they happen. Uses api-web.nhle.com, the NHL's own public web
@@ -54,7 +55,11 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, LiveTrac
     STATE_KEY = "games"
     START_TIME_KEY = "startTimeUTC"
     ENDED_STATE_KEY = "ended"
-    SUBCOMMANDS = ("start", "stop", "next", "now", "results")
+    SUBCOMMANDS = ("start", "stop", "next [team [count]]", "now", "results")
+    TEAM_NEXT_EXAMPLE = "tor"
+    # What people call a team that is in none of its official names.
+    TEAM_NICKNAMES = {"MTL": "habs", "WSH": "caps", "OTT": "sens", "NYI": "isles",
+                      "DET": "wings", "PIT": "pens", "TBL": "bolts"}
 
     EASTERN_TZ = ZoneInfo("America/New_York")
     BASE_URL = "https://api-web.nhle.com/v1"
@@ -97,6 +102,65 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, LiveTrac
         for gid, pbp in self._fetch_concurrently(list(state.keys()), self._fetch_play_by_play).items():
             if pbp is not None:
                 state[gid]["announced"] = self._resolve_goals(pbp, {}, seed=True)[2]
+
+    # ---- "next <team> [count]" (see TeamNextMixin) ------------------------
+
+    def _team_directory(self):
+        """{abbreviation: the names the team answers to} from the standings
+        (not hard-coded: the league's teams change)."""
+        def fetch():
+            try:
+                resp = self.session.get(f"{self.BASE_URL}/standings/now", timeout=self.REQUEST_TIMEOUT_SECONDS)
+                resp.raise_for_status()
+                rows = resp.json().get("standings")
+            except (ValueError, AttributeError, requests.exceptions.RequestException) as e:
+                print(f"NHL standings request failed: {e}")
+                return None
+            return rows if isinstance(rows, list) else None
+
+        rows = self._cached("standings", fetch)
+        if rows is None:
+            return None
+        teams = {}
+        for row in rows:
+            abbrev = (row.get("teamAbbrev") or {}).get("default")
+            if abbrev:
+                names = [abbrev, self.TEAM_NICKNAMES.get(abbrev)]
+                names += [(row.get(key) or {}).get("default") for key in ("teamCommonName", "placeName", "teamName")]
+                teams[abbrev] = [n for n in names if n]
+        return teams
+
+    def _upcoming_games(self, abbrev):
+        """The club's regular-season and playoff games still to come, in
+        start order, or None on failure. Preseason is left out; a postponed
+        game (its schedule state is not OK) is skipped, as Liiga's is."""
+        def fetch():
+            try:
+                resp = self.session.get(f"{self.BASE_URL}/club-schedule-season/{abbrev}/now",
+                                        timeout=self.REQUEST_TIMEOUT_SECONDS)
+                resp.raise_for_status()
+                games = resp.json().get("games")
+            except (ValueError, AttributeError, requests.exceptions.RequestException) as e:
+                print(f"NHL club schedule request failed for {abbrev}: {e}")
+                return None
+            return games if isinstance(games, list) else None
+
+        games = self._cached(("club", abbrev), fetch)
+        if games is None:
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc)
+        upcoming = []
+        for game in games:
+            start = self._parse_start_dt(game.get("startTimeUTC"))
+            if (game.get("gameType") in (2, 3) and game.get("gameState") in ("FUT", "PRE")
+                    and game.get("gameScheduleState", "OK") == "OK" and start is not None and start > now):
+                upcoming.append((start, game))
+        return [game for _, game in sorted(upcoming, key=lambda pair: pair[0])]
+
+    def _format_team_game(self, game) -> str:
+        start = self._parse_start_dt(game.get("startTimeUTC"))
+        when = start.strftime("%a %d.%m. %H:%M") if start else "??"
+        return f"{when} {self._team_abbrev(game, 'homeTeam')}-{self._team_abbrev(game, 'awayTeam')}"
 
     # ---- polling ---------------------------------------------------------
 

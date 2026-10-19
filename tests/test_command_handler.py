@@ -271,8 +271,8 @@ class TestHelp:
         for restricted in ("!liiga", "!nhl", "!superpesis", "!ykkospesis"):
             assert restricted not in general
 
-        assert "!nhl start|stop|next|now|results" in handler.help_text("#nhl.fi")
-        assert "!liiga start|stop|next" in handler.help_text("#smliiga")
+        assert "!nhl start|stop|next [team [count]]|now|results" in handler.help_text("#nhl.fi")
+        assert "!liiga start|stop|next [team [count]]" in handler.help_text("#smliiga")
         pesis = handler.help_text("#pesis.fi")
         assert "!superpesis start|stop|next" in pesis
         assert "!ykkospesis start|stop|next" in pesis
@@ -294,7 +294,7 @@ class TestHelp:
         bot.send_message.assert_called_once()
         channel, message = bot.send_message.call_args[0]
         assert channel == "#nhl.fi"
-        assert message.startswith("Commands: ") and "!nhl start|stop|next|now|results" in message
+        assert message.startswith("Commands: ") and "!nhl start|stop|next [team [count]]|now|results" in message
 
     def test_extra_text_after_help_still_gets_the_list(self, handler):
         bot = MagicMock()
@@ -398,15 +398,15 @@ class TestExclusiveChannel:
         bot = self._run(handler, "#veikkaus", "!help")
         assert bot.send_message.call_args[0] == (
             "#veikkaus",
-            "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next | !nhl start|stop|next|now|results")
+            "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next [team [count]] | !nhl start|stop|next [team [count]]|now|results")
 
     def test_channel_name_matching_is_case_insensitive(self, handler):
-        assert handler.help_text("#Veikkaus") == "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next | !nhl start|stop|next|now|results"
+        assert handler.help_text("#Veikkaus") == "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next [team [count]] | !nhl start|stop|next [team [count]]|now|results"
         bot = self._run(handler, "#VEIKKAUS", "!weather helsinki")
         bot.send_message.assert_not_called()
 
     def test_liiga_still_works_in_smliiga_and_general_commands_stay_out_of_it_only_via_veikkaus(self, handler):
-        assert "!liiga start|stop|next" in handler.help_text("#smliiga")
+        assert "!liiga start|stop|next [team [count]]" in handler.help_text("#smliiga")
         assert "!weather" in handler.help_text("#smliiga")
         assert "!liiga" not in handler.help_text("#nakkimuusi")
 

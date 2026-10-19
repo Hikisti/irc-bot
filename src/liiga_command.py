@@ -5,9 +5,10 @@ import requests
 
 from irc_format import BOLD, RESET, GREEN, ORANGE, prefix as irc_prefix
 from live_tracker_command import LiveTrackerCommand
+from team_next import TeamNextMixin
 
 
-class LiigaCommand(LiveTrackerCommand):
+class LiigaCommand(TeamNextMixin, LiveTrackerCommand):
     """
     Live-tracks today's Finnish Liiga (ice hockey) games in a channel,
     announcing goals and final scores as they happen. Uses the unofficial
@@ -42,6 +43,9 @@ class LiigaCommand(LiveTrackerCommand):
     # postponed (see _not_played), not at "ended" alone.
     ENDED_STATE_KEY = "over"
 
+    SUBCOMMANDS = ("start", "stop", "next [team [count]]")
+    TEAM_NEXT_EXAMPLE = "jyp"
+
     BASE_URL = "https://www.liiga.fi/api/v2/games"
     TOURNAMENTS = ["runkosarja", "playoffs", "playout", "qualifications", "valmistavat_ottelut"]
 
@@ -65,6 +69,64 @@ class LiigaCommand(LiveTrackerCommand):
 
     def _build_initial_state(self, items) -> dict:
         return {gid: self._snapshot(g) for gid, g in items.items()}
+
+    # ---- "next <team> [count]" (see TeamNextMixin) ------------------------
+
+    def _season_games(self):
+        """Every regular-season game of the current season in one request
+        (no date asks for the whole list), or None on failure. Playoffs and
+        the other tournaments are separate and not included."""
+        def fetch():
+            season = self._current_season(datetime.datetime.now(self.HELSINKI_TZ))
+            try:
+                resp = self.session.get(
+                    self.BASE_URL,
+                    params={"tournament": "runkosarja", "season": season},
+                    timeout=self.REQUEST_TIMEOUT_SECONDS,
+                )
+                resp.raise_for_status()
+                games = resp.json()
+            except (ValueError, requests.exceptions.RequestException) as e:
+                print(f"Liiga season schedule request failed: {e}")
+                return None
+            return games if isinstance(games, list) else None
+
+        return self._cached("season", fetch)
+
+    def _team_directory(self):
+        """{team name: the names it answers to}, read from the schedule
+        itself (teams change between seasons). The teamId's slug
+        ('...:k-espoo') is a second spelling."""
+        games = self._season_games()
+        if games is None:
+            return None
+        teams = {}
+        for game in games:
+            for side in ("homeTeam", "awayTeam"):
+                team = game.get(side) or {}
+                name = team.get("teamName")
+                if name:
+                    teams[name] = [name, str(team.get("teamId") or "").partition(":")[2]]
+        return teams
+
+    def _upcoming_games(self, team_name):
+        games = self._season_games()
+        if games is None:
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc)
+        upcoming = []
+        for game in games:
+            if team_name not in (self._team_name(game, "homeTeam"), self._team_name(game, "awayTeam")):
+                continue
+            start = self._parse_start_dt(game.get("start"))
+            if start is not None and start > now and not game.get("started") and not game.get("ended"):
+                upcoming.append((start, game))
+        return [game for _, game in sorted(upcoming, key=lambda pair: pair[0])]
+
+    def _format_team_game(self, game) -> str:
+        start = self._parse_start_dt(game.get("start"))
+        when = start.strftime("%a %d.%m. %H:%M") if start else "??"
+        return f"{when} {self._team_name(game, 'homeTeam')}-{self._team_name(game, 'awayTeam')}"
 
     # ---- polling ---------------------------------------------------------
 

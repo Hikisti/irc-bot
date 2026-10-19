@@ -507,5 +507,5 @@ class TestExecute:
 
     def test_usage_and_help_list_the_new_subcommands(self, nhl):
         assert nhl.execute("bogus", irc_bot=MagicMock(), channel="#nhl.fi") == (
-            "Usage: !nhl start | !nhl stop | !nhl next | !nhl now | !nhl results")
-        assert nhl.HELP == "!nhl start|stop|next|now|results"
+            "Usage: !nhl start | !nhl stop | !nhl next [team [count]] | !nhl now | !nhl results")
+        assert nhl.HELP == "!nhl start|stop|next [team [count]]|now|results"

@@ -62,10 +62,10 @@ in `src/irc_bot.py`.
 | Electricity price | `!sähkö`, `!sahko` | none | `!sähkö` |
 | Time | `!time` | city, or timezone abbreviation | `!time austin`, `!time cdt` |
 | F1 schedule | `!f1` | none | `!f1` |
-| Liiga live tracker | `!liiga` | `start`, `stop`, or `next` | `!liiga start` |
+| Liiga live tracker | `!liiga` | `start`, `stop`, `next`, or `next <team> [count]` | `!liiga next jyp` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
 | IMDb | `!imdb` | movie/show title, optionally with `series`/`movie` first and/or a year last; or an IMDb ID/link | `!imdb terminator 2`, `!imdb series flipper 1995` |
-| NHL live tracker | `!nhl` | `start`, `stop`, `next`, `now`, or `results` | `!nhl now` |
+| NHL live tracker | `!nhl` | `start`, `stop`, `next`, `next <team> [count]`, `now`, or `results` | `!nhl now` |
 | Superpesis live tracker | `!superpesis` | `start`, `stop`, or `next` | `!superpesis start` |
 | Ykköspesis live tracker | `!ykkospesis` | `start`, `stop`, or `next` | `!ykkospesis start` |
 | Björck | `!bjorck` | none | `!bjorck` |
@@ -118,6 +118,14 @@ JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. 
 is an *exclusive* channel: only `!liiga`, `!nhl`, `!stock`, `!crypto` and `!help` work there (`!help` lists just the first four), and posted links get no title reply either.
 Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
 default of all commands.
+
+`!liiga next <team> [count]` lists that team's next games from the whole regular-season schedule (one request, kept
+for five minutes): `Next JYP games: Thu 22.10. 18:30 JYP-HPK | Sat 24.10. 17:00 Ässät-JYP | ...`, home team first,
+Helsinki time. The team is matched without case or diacritics and by any unique start or part of its name
+(`karpat`, `kespoo`, `pel`); an ambiguous name answers `Which team? KalPa, Kärpät, KooKoo`, an unknown one lists
+the teams. The count defaults to 3 and the maximum is 10 (a larger number is cut to 10 and the reply says so),
+which is what fits one IRC line; fewer games left than asked shows what remains. Playoffs and the preseason are
+not included, and a game that is on or was postponed is skipped. `!liiga next` alone works as before.
 
 `!stock <ticker>` answers from Yahoo Finance with the company name, price, today's change (green or red),
 volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (+1.18%). Volume 17111.01k. 52W: 243.42 - 348.15.`
@@ -211,6 +219,11 @@ Empty groups are left out, and with no games at all it points at the next gameda
 0-7 PIT, TOR 2-1 NYI (OT)`, dated as Helsinki sees it) and adds `(N game(s) still on: !nhl now)` when
 games of that slate are still being played. Both read `api-web.nhle.com`'s `/score/{date}` (Eastern
 dates, briefly cached) and split long output into several lines.
+
+`!nhl next <team> [count]` is the same for a club (`!nhl next tor 5`, `leafs`, `toronto`, `habs`), from the club's
+whole season: regular-season and playoff games still to come (preseason and postponed games are left out), as
+`Next TOR games: Tue 20.10. 02:30 TOR-SJS | ...`. The clubs and their names come from the standings, so a new team
+needs no change; `new york` and `ny` answer with both New York clubs.
 
 **Only works in `#nhl.fi` and `#veikkaus`** - like `!superpesis`, it's restricted to those channels; typing it
 elsewhere is silently ignored.

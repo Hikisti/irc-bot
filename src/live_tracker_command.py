@@ -72,6 +72,8 @@ class LiveTrackerCommand(BaseCommand):
     # The subcommands !help and the usage reply list; a subclass that
     # handles more in its own execute() (NHL's now/results) extends it.
     SUBCOMMANDS = ("start", "stop", "next")
+    # True for a command that mixes in TeamNextMixin: "next <team> [count]".
+    SUPPORTS_TEAM_NEXT = False
 
     def __init__(self):
         self.session = make_session(f"KukistiBot-{self.CACHE_SLUG}/1.0")
@@ -91,6 +93,9 @@ class LiveTrackerCommand(BaseCommand):
             return self._stop(channel)
         elif arg == "next":
             return self._next(irc_bot, channel)
+        command, _, rest = arg.partition(" ")
+        if command == "next" and self.SUPPORTS_TEAM_NEXT:
+            return self._next_team(irc_bot, channel, rest.strip())
         return "Usage: " + " | ".join(f"{self.COMMAND_NAME} {sub}" for sub in self.SUBCOMMANDS)
 
     # ---- start / stop -----------------------------------------------
