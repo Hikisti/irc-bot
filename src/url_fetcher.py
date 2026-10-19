@@ -20,6 +20,9 @@ class URLFetcher:
     """Detects URLs in IRC messages and fetches their titles with service-specific handling."""
 
     MAX_TITLE_LENGTH = 300        # Max allowed title length to avoid excess flood kicks
+    # An IRC line is at most 512 bytes with the command and channel; a title of four-byte characters
+    # (emoji) can pass that at 300 characters. The same figure as the scoreboard replies' line limit.
+    MAX_TITLE_BYTES = 380
 
     URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
 
@@ -278,6 +281,9 @@ class URLFetcher:
         Trims message length to avoid flooding the IRC server.
         Adds ellipsis if trimmed.
         """
-        if len(text) <= self.MAX_TITLE_LENGTH:
+        if len(text) <= self.MAX_TITLE_LENGTH and len(text.encode("utf-8")) <= self.MAX_TITLE_BYTES:
             return text
-        return text[:self.MAX_TITLE_LENGTH - 3].rstrip() + "..."
+        text = text[:self.MAX_TITLE_LENGTH - 3]
+        # Cut on a character boundary: whatever half-character the byte cut leaves is dropped.
+        text = text.encode("utf-8")[:self.MAX_TITLE_BYTES - 3].decode("utf-8", errors="ignore")
+        return text.rstrip() + "..."

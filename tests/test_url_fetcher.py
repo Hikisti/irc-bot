@@ -472,3 +472,20 @@ class TestTrimMessage:
         result = fetcher.trim_message(text)
         assert len(result) == fetcher.MAX_TITLE_LENGTH
         assert result.endswith("...")
+
+    def test_a_title_of_four_byte_characters_is_cut_to_the_byte_limit_on_a_whole_character(self, fetcher):
+        result = fetcher.trim_message("\U0001F600" * 300)
+        assert len(result.encode("utf-8")) <= fetcher.MAX_TITLE_BYTES
+        assert result.endswith("...") and set(result[:-3]) == {"\U0001F600"}  # nothing half-cut
+
+    def test_an_ordinary_finnish_title_is_unchanged(self, fetcher):
+        text = "Ääniä ja öitä " * 10  # 140 characters, 170 bytes: within both limits
+        assert fetcher.trim_message(text) == text
+
+    def test_the_byte_limit_is_exact(self, fetcher):
+        at_limit = "ä" * 100 + "a" * 180  # 280 characters, exactly MAX_TITLE_BYTES bytes
+        assert len(at_limit.encode("utf-8")) == fetcher.MAX_TITLE_BYTES
+        assert fetcher.trim_message(at_limit) == at_limit
+        over = "ä" * 100 + "a" * 181  # one byte more
+        result = fetcher.trim_message(over)
+        assert result != over and result.endswith("...") and len(result.encode("utf-8")) <= fetcher.MAX_TITLE_BYTES

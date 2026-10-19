@@ -105,10 +105,12 @@ when the game was decided in overtime or a shootout, plus the attendance figure 
 reports one, e.g. `FINAL: Sport 5-4 Jokerit (SO) | Yleisöä: 3532`. The feed's score on a shootout's winning shot is
 the tie from before the shootout, so that line gives the result after the shot (`Ässät 2-3 HPK 00:00 SO`), like the
 `FINAL:` line. Each goal is remembered by every
-identity it has - its event id, and its period, game time and scorer - and announced once: the feed was seen to
+identity it has - its event id; its period, game time and scorer; and its scorer with the running score after it -
+and announced once: the feed was seen to
 leave a goal out of one poll and bring it back in the next, which a plain count of goals would have announced a
-second time, and to change a shootout goal's event id between two polls, which an event id alone would have
-announced twice (a goal missing from the feed, or a goal whose event id changed, is noted in the journal, not in
+second time, to change a shootout goal's event id between two polls, which an event id alone would have
+announced twice, and to list a goal again after a few minutes under a new event id and a game time 70 seconds
+later (a goal missing from the feed, or a goal whose event id changed, is noted in the journal, not in
 the channel). The feed's goal list also holds entries that are not goals - a goal taken off by video review (no scorer) and a
 missed penalty shot (tagged `RL0`, with its shooter as the scorer and the score unchanged) - and the tracker skips both;
 a scored penalty shot (`RL`) is a goal. Uses the unofficial liiga.fi
@@ -179,8 +181,9 @@ with every figure follows - but only if some figure arrived after its `FINAL:` l
 finished" message, which waits up to those seven minutes. Each goal is remembered by its team
 and running score (with its event id as a second check), not by a count per team, because the feed
 was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
-back: neither is announced a second time, and the next goal after a disallowed one (same running score)
-still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
+back: neither is announced a second time, nor is a goal the feed re-lists under a new id with the same
+scorer and period (a different scorer is a correction and is announced), and the next goal after a
+disallowed one (same running score) still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
 minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving the score as the remaining
 goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 3rd | Egor Chinakhov (Pittsburgh
 Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the
