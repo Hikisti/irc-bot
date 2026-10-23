@@ -120,6 +120,66 @@ class TestLevelScoreAtFinal:
         assert nhl_command._result_from_plays(self._pbp(plays)) is None
 
 
+class TestOvertimeMarkFromPlays:
+    """Issue #12, third live case (2026-10-22): a 3-2 overtime win went out without "(OT)" in one channel
+    (the header and the score endpoint named no overtime yet) and with it 13 s later in the other. A decided
+    score is not stale, so the level-score guard did not apply; the last goal's own period carries the mark."""
+
+    HOME, AWAY = 10, 20
+
+    def _goal(self, event_id, team, home, away, period=1, period_type="REG", time_in_period="05:00"):
+        return goal_play(event_id=event_id, event_owner_team_id=team, scoring_player_id=100, period_number=period,
+                         period_type=period_type, time_in_period=time_in_period, home_score=home, away_score=away)
+
+    def _overtime_win(self):  # 1-0, 1-1, 2-1, 2-2 in regulation, 3-2 for the home side in overtime
+        return [self._goal(1, self.HOME, 1, 0), self._goal(2, self.AWAY, 1, 1, 2), self._goal(3, self.HOME, 2, 1, 2),
+                self._goal(4, self.AWAY, 2, 2, 3), self._goal(5, self.HOME, 3, 2, 4, "OT", "03:47")]
+
+    def _final(self, nhl_command, pbp, scores=None, slate=None):
+        bot = MagicMock()
+        with patch.object(nhl_command, "_fetch_scores", return_value=scores or {}), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=None):
+            nhl_command._announce_end(bot, "#nhl.fi", pbp, slate)
+        return bot.send_message.call_args[0][1]
+
+    def _pbp(self, plays, home, away, last_period_type=None):
+        return make_pbp(home_id=self.HOME, away_id=self.AWAY, plays=plays, roster=[roster_spot(100)],
+                        home_score=home, away_score=away, last_period_type=last_period_type)
+
+    def test_an_overtime_win_with_no_mark_in_the_header_gets_one_from_the_plays(self, nhl_command, capsys):
+        message = self._final(nhl_command, self._pbp(self._overtime_win(), 3, 2))
+        assert message.endswith("Carolina Hurricanes 3-2 Florida Panthers (OT)")
+        assert "FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark" in capsys.readouterr().out
+
+    def test_the_same_when_the_score_endpoint_names_no_period_type_either(self, nhl_command):
+        official = {"id": 2026010026, "gameDate": "2026-10-22", "gameState": "OVER",
+                    "homeTeam": {"abbrev": "CAR", "score": 3}, "awayTeam": {"abbrev": "FLA", "score": 2}}
+        message = self._final(nhl_command, self._pbp(self._overtime_win(), 3, 2), {2026010026: official}, "2026-10-22")
+        assert message.endswith("3-2 Florida Panthers (OT)")
+
+    def test_a_shootout_win_with_no_mark_gets_it_from_the_plays(self, nhl_command):
+        so = [self._goal(10 + n, team, 2, 2, 5, "SO", "00:00") for n, team in enumerate((self.AWAY, self.HOME, self.HOME))]
+        plays = [self._goal(1, self.HOME, 1, 0), self._goal(2, self.AWAY, 1, 1, 2), self._goal(3, self.HOME, 2, 1, 2),
+                 self._goal(4, self.AWAY, 2, 2, 3)] + so
+        message = self._final(nhl_command, self._pbp(plays, 3, 2))
+        assert message.endswith("Carolina Hurricanes 3-2 Florida Panthers (SO)")
+
+    def test_a_regulation_win_gets_no_mark(self, nhl_command, capsys):
+        plays = [self._goal(1, self.HOME, 1, 0), self._goal(2, self.HOME, 2, 0, 2)]
+        message = self._final(nhl_command, self._pbp(plays, 2, 0))
+        assert message.endswith("Carolina Hurricanes 2-0 Florida Panthers")
+        assert "overtime mark" not in capsys.readouterr().out
+
+    def test_a_mark_the_header_already_has_is_left_alone(self, nhl_command, capsys):
+        message = self._final(nhl_command, self._pbp(self._overtime_win(), 3, 2, "OT"))
+        assert message.endswith("3-2 Florida Panthers (OT)") and "overtime mark" not in capsys.readouterr().out
+
+    def test_plays_that_disagree_with_the_score_do_not_add_a_mark(self, nhl_command):
+        # the header says 4-2; the plays end 3-2: not the same game state, so neither is trusted over the other
+        message = self._final(nhl_command, self._pbp(self._overtime_win(), 4, 2))
+        assert message.endswith("4-2 Florida Panthers")
+
+
 class TestFinalHeldAcrossPolls:
     """The tracker side of the hold: no FINAL: line while the result is level, the game not ended, and a line
     after FINAL_HOLD_POLLS polls at the latest."""

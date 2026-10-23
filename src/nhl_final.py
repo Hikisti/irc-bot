@@ -83,6 +83,16 @@ class NHLFinalMixin:
                       f"and the plays do not decide it")
                 return None
 
+        # The same lag can leave a decided score with no overtime mark: 2026-10-22, a 3-2 overtime win went
+        # out without "(OT)" in one channel and with it 13 s later in the other, and neither the header nor
+        # the score endpoint named the overtime at the first look. The last goal's own period says it.
+        if last_period_type not in ("OT", "SO"):
+            from_plays = self._result_from_plays(pbp)
+            if from_plays and from_plays[2] in ("OT", "SO") and from_plays[:2] == (home_score, away_score):
+                print(f"NHL: game {pbp.get('id')}: FINAL without an overtime mark, "
+                      f"the plays say {home_score}-{away_score} {from_plays[2]}; using the plays' mark")
+                last_period_type = from_plays[2]
+
         suffix = f" ({last_period_type})" if last_period_type in ("OT", "SO") else ""
 
         # Same "Yleisöä" wording as !liiga's FINAL line; left out whenever

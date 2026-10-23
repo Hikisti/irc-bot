@@ -63,6 +63,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                                r"using the play-by-play header$")),
     ("from_plays", re.compile(r"^NHL: game (?P<gid>\d+): level at (?P<level>\d+-\d+) at FINAL, "
                               r"the plays say (?P<plays>\d+-\d+ \w+); using the plays'$")),
+    ("mark_from_plays", re.compile(r"^NHL: game (?P<gid>\d+): FINAL without an overtime mark, "
+                                   r"the plays say (?P<plays>\d+-\d+ \w+); using the plays' mark$")),
     ("held", re.compile(r"^NHL: game (?P<gid>\d+): FINAL held back, level at (?P<level>\d+-\d+) "
                         r"and the plays do not decide it$")),
     ("liiga_missing", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): announced goals missing from the feed "
@@ -341,6 +343,11 @@ def render(report):
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: level {e['level']} -> plays {e['plays']}")
     for e in ev["held"]:
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: held back, level {e['level']}")
+    if ev["mark_from_plays"]:
+        out.append(f"  FINAL given its overtime mark from the plays (header and endpoint had none): "
+                   f"{len(ev['mark_from_plays'])}")
+        for e in ev["mark_from_plays"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: plays {e['plays']}")
     for e in ev["summary"]:
         out.append(f"  end-of-slate results list {e['ts']:%H:%M:%S} in {e['channel']}: {e['games']} games, "
                    f"{e['with_figure']} with a figure")

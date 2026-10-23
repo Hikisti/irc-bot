@@ -405,6 +405,13 @@ class TestLevelFinal:
         e = jr.parse_line(line("02:03:37", "NHL: game 2026020094: FINAL held back, level at 2-2 and the plays do not decide it"), YEAR)
         assert (e["kind"], e["gid"], e["level"]) == ("held", "2026020094", "2-2")
 
+    def test_the_overtime_mark_line_is_parsed_counted_and_listed(self):
+        e = jr.parse_line(line("02:48:34", "NHL: game 2026020161: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark"), YEAR)
+        assert (e["kind"], e["gid"], e["plays"]) == ("mark_from_plays", "2026020161", "3-2 OT")
+        text = jr.render(report(line("02:48:34", "NHL: game 7: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark")))
+        assert "FINAL given its overtime mark from the plays (header and endpoint had none): 1" in text
+        assert "game 7: plays 3-2 OT" in text
+
     def test_they_are_counted_and_listed_in_the_report(self):
         text = jr.render(report(
             line("02:03:37", "NHL: game 7: level at 2-2 at FINAL, the plays say 2-3 SO; using the plays'"),
