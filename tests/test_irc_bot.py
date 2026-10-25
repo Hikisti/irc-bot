@@ -203,6 +203,64 @@ class TestListen:
         assert "Traceback" in captured.err  # not just str(e) - see class docstring
         assert "OSError" in captured.err
 
+    def test_a_silent_connection_is_logged_as_disconnected_and_ends_the_loop(self, bot, capsys):
+        """Issue #52: nothing from the server for READ_TIMEOUT_SECONDS (three missed pings) means the connection
+        is dead; the loop ends like it does on EOF so the process exits and the service manager restarts it."""
+        bot.running = True
+        # A second recv() would mean the loop went on after the timeout; it fails loudly instead of spinning.
+        bot.sock.recv.side_effect = [socket.timeout("timed out"), AssertionError("recv() called again after a timeout")]
+
+        bot.listen()
+
+        assert bot.running is False
+        captured = capsys.readouterr()
+        assert bot.sock.recv.call_count == 1
+        assert f"DISCONNECTED: nothing from the server for {bot.READ_TIMEOUT_SECONDS} s" in captured.out
+        assert "Traceback" not in captured.err  # a timeout is an expected way to end, not a crash
+
+    def test_the_timeout_comes_after_data_not_before(self, bot, capsys):
+        """A server that keeps sending (its PINGs) never trips the timeout: it is per recv(), counted from the
+        last byte received."""
+        calls = []
+
+        def recv(bufsize):
+            calls.append(1)
+            if len(calls) < 5:
+                return b"PING :irc.example.net\r\n"
+            if len(calls) > 5:
+                raise AssertionError("recv() called again after a timeout")
+            raise socket.timeout("timed out")
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv
+        with patch.object(bot, "send_raw"):
+            bot.listen()
+
+        assert len(calls) == 5 and bot.running is False
+        assert capsys.readouterr().out.count("DISCONNECTED: nothing from the server") == 1
+
+    def test_a_real_silent_socket_ends_the_loop(self, capsys):
+        """The same on a real socket: the far end stays open and says nothing (a silent network drop), so only
+        the timeout can end the loop - not EOF, not a reset."""
+        near, far = socket.socketpair()
+        try:
+            b = IrcBot()
+            b.READ_TIMEOUT_SECONDS = 0.2
+            b.sock = near
+            near.settimeout(b.READ_TIMEOUT_SECONDS)
+            b.running = True
+            # On a thread with a deadline: a regression that keeps the loop going must fail this test, not hang the suite.
+            listener = threading.Thread(target=b.listen, daemon=True)
+            listener.start()
+            listener.join(timeout=5)
+            alive = listener.is_alive()
+            b.running = False  # lets a still-running loop end
+            assert not alive, "listen() did not end after the read timeout"
+            assert "DISCONNECTED: nothing from the server for 0.2 s" in capsys.readouterr().out
+        finally:
+            near.close()
+            far.close()
+
     def test_healthy_recv_does_not_log_disconnected(self, bot, capsys):
         # A single healthy cycle must not print anything implying a
         # disconnect - "DISCONNECTED" is reserved for the two real ways
@@ -427,6 +485,19 @@ class TestConnect:
 
         captured = capsys.readouterr()
         assert f"CONNECTED: {bot.server}:{bot.port} as {bot.nickname}" in captured.out
+
+    def test_the_socket_gets_a_connect_timeout_and_then_the_read_timeout(self, bot):
+        """Issue #52: a hung connect must not block for ever either; once connected, every recv() is bounded."""
+        with patch("irc_bot.socket.socket", return_value=bot.sock), \
+             patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
+             patch("irc_bot.threading.Thread"), \
+             patch.object(bot, "send_raw"):
+            bot.connect()
+
+        timeouts = [c.args[0] for c in bot.sock.settimeout.call_args_list]
+        assert timeouts == [bot.CONNECT_TIMEOUT_SECONDS, bot.READ_TIMEOUT_SECONDS]
+        order = [c[0] for c in bot.sock.method_calls if c[0] in ("settimeout", "connect")]
+        assert order == ["settimeout", "connect", "settimeout"]
 
     def test_connect_registers_but_does_not_join_the_channels_itself(self, bot):
         """Issue #32: a JOIN sent on a timer, before registration is complete, is refused with 451; the

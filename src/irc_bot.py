@@ -13,6 +13,12 @@ class IrcBot:
     # mIRC bold/colour/reset/reverse/italic/underline - what a +c channel refuses.
     FORMATTING_CODES = re.compile("[\x02\x03\x0f\x16\x1d\x1f]")
 
+    # The server pings every 180 s (seen in the journals), so a healthy connection is never silent for much more
+    # than that. Three missed pings and the connection is taken as dead: the bot exits and the service manager
+    # starts it again (Restart=always). Without a timeout a silent network drop left the bot deaf for good (#52).
+    READ_TIMEOUT_SECONDS = 600
+    CONNECT_TIMEOUT_SECONDS = 30
+
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="KukistiBot", channels=None):
         self.server = server
         self.port = port
@@ -35,7 +41,9 @@ class IrcBot:
         print(f"Connecting to {self.server}:{self.port} as {self.nickname}...")
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(self.CONNECT_TIMEOUT_SECONDS)
             self.sock.connect((self.server, self.port))
+            self.sock.settimeout(self.READ_TIMEOUT_SECONDS)
             print(f"CONNECTED: {self.server}:{self.port} as {self.nickname}")
             self.send_raw(f"NICK {self.nickname}")
             self.send_raw(f"USER {self.nickname} 0 * :{self.nickname}")
@@ -103,6 +111,9 @@ class IrcBot:
                         self.process_message(line)
                     elif command == "404":  # ERR_CANNOTSENDTOCHAN
                         self._report_refused_send(line)
+            except socket.timeout:
+                print(f"DISCONNECTED: nothing from the server for {self.READ_TIMEOUT_SECONDS} s")
+                self.running = False
             except Exception as e:
                 # The catch-all here is the last line of defense against
                 # anything not anticipated by more specific handling - a

@@ -320,3 +320,8 @@ deploy user, pulls the latest `main`, updates dependencies, and restarts
 the bot's service — that user's `sudo` access is scoped to just restarting
 and checking the one service, nothing more. Server-specific setup details
 aren't kept in this repo.
+
+The bot reads the IRC connection with a timeout of 600 s (three of the server's 180 s pings). If nothing at all
+arrives in that time the connection is taken as dead: the bot journals `DISCONNECTED: nothing from the server for
+600 s` and exits, and the service manager (set to always restart) starts it again, which rejoins the channels. A
+restart drops any running live tracker, so it is a last resort for a connection that went silent.
