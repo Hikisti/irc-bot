@@ -670,6 +670,135 @@ class TestAnnounceByIdentity:
         assert "missing from the feed" not in capsys.readouterr().out
 
 
+class TestRetractGoneGoals:
+    """Issue #22: a goal that was announced and then stays out of the feed (taken away by a video review, seen
+    2026-10-20 and 2026-10-23) is retracted with a `NO GOAL:` line after RETRACT_AFTER_MISSING_POLLS polls in a
+    row; a goal that flickers out and back, or was already in the feed when tracking started, never is."""
+
+    def _run(self, liiga_command, games, channel="#chan"):
+        """Polls once per game state in `games` (the first one is the baseline); returns every line sent."""
+        bot = MagicMock()
+        liiga_command._channels[channel] = {"stop_event": MagicMock(), "thread": None,
+                                            "games": {1: liiga_command._snapshot(games[0])}}
+        for game in games[1:]:
+            with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+                liiga_command._poll_once(bot, channel)
+        return [c.args[1] for c in bot.send_message.call_args_list]
+
+    @staticmethod
+    def _retractions(lines):
+        return [line for line in lines if "NO GOAL:" in line]
+
+    @staticmethod
+    def _goal(**kw):
+        return goal_event(period=3, game_time=2645, home_score=1, away_score=0, event_id=161, **kw)
+
+    def _states(self, goal, gone_polls, back=False):
+        """baseline without the goal, the goal appears, then `gone_polls` polls without it (and optionally it returns)."""
+        states = [make_game(home_goals=[]), make_game(home_goals=[goal])] + [make_game(home_goals=[])] * gone_polls
+        return states + ([make_game(home_goals=[goal])] if back else [])
+
+    def test_a_goal_gone_for_four_polls_is_retracted_once(self, liiga_command, capsys):
+        lines = self._run(liiga_command, self._states(self._goal(), 6))
+        (retraction,) = self._retractions(lines)
+        assert retraction == (f"{liiga_command.NO_GOAL_PREFIX} {BOLD}HIFK 0-0 Ilves{RESET} 04:05 3rd"
+                              " | Kristian Vesalainen (HIFK) was disallowed")
+        assert "Liiga: retracting goal 04:05 3rd by Kristian Vesalainen in #chan" in capsys.readouterr().out
+
+    def test_three_polls_without_it_are_not_enough(self, liiga_command):
+        assert self._retractions(self._run(liiga_command, self._states(self._goal(), 3))) == []
+
+    def test_the_retraction_comes_on_the_fourth_poll_without_the_goal(self, liiga_command):
+        lines = self._run(liiga_command, self._states(self._goal(), 4))
+        assert len(self._retractions(lines)) == 1 and "NO GOAL:" in lines[-1]
+
+    def test_a_goal_that_flickers_out_and_back_is_not_retracted(self, liiga_command):
+        for gone in (1, 2, 3):
+            lines = self._run(liiga_command, self._states(self._goal(), gone, back=True))
+            assert self._retractions(lines) == [] and len([x for x in lines if "GOAL:" in x]) == 1
+
+    def test_misses_must_be_in_a_row(self, liiga_command):
+        goal = self._goal()
+        absent, present = make_game(home_goals=[]), make_game(home_goals=[goal])
+        states = [absent, present, absent, absent, absent, present, absent, absent, absent, present]
+        assert self._retractions(self._run(liiga_command, states)) == []
+
+    def test_a_goal_already_in_the_feed_when_tracking_started_is_never_retracted(self, liiga_command, capsys):
+        goal = self._goal()
+        states = [make_game(home_goals=[goal])] + [make_game(home_goals=[])] * 8
+        assert self._retractions(self._run(liiga_command, states)) == []
+        assert "failed to process game" not in capsys.readouterr().out  # not an error swallowed by the poll loop
+
+    def test_a_retracted_goal_that_returns_is_announced_again(self, liiga_command):
+        lines = self._run(liiga_command, self._states(self._goal(), 5, back=True))
+        assert len(self._retractions(lines)) == 1 and len([x for x in lines if "GOAL:" in x and "NO GOAL" not in x]) == 2
+
+    def test_it_is_said_once_not_every_poll(self, liiga_command):
+        lines = self._run(liiga_command, self._states(self._goal(), 12))
+        assert len(self._retractions(lines)) == 1
+
+    def test_a_goal_the_feed_re_lists_under_a_new_id_is_not_missing(self, liiga_command):
+        first = self._goal()
+        back = dict(first, eventId=175, gameTime=2715)  # the 2026-10-17 shape: new id, time 70 s later
+        states = [make_game(home_goals=[]), make_game(home_goals=[first])] + [make_game(home_goals=[back])] * 8
+        assert self._retractions(self._run(liiga_command, states)) == []
+
+    def test_only_the_goal_that_is_gone_is_retracted(self, liiga_command):
+        keep = goal_event(period=1, game_time=300, home_score=1, away_score=0, event_id=10, first="Eka", last="Pelaaja")
+        gone = goal_event(period=3, game_time=2645, home_score=2, away_score=0, event_id=11, first="Toka", last="Pelaaja")
+        states = [make_game(home_goals=[]), make_game(home_goals=[keep, gone])] + [make_game(home_goals=[keep])] * 5
+        (retraction,) = self._retractions(self._run(liiga_command, states))
+        assert "Toka Pelaaja" in retraction and "Eka" not in retraction
+        # and the goal that stayed is still recognised afterwards, not announced again
+        again = self._run(liiga_command, states + [make_game(home_goals=[keep])])
+        assert len([x for x in again if "GOAL:" in x and "NO GOAL" not in x]) == 2
+
+    def test_a_goal_by_the_away_side_is_retracted_under_its_team(self, liiga_command):
+        goal = goal_event(period=2, game_time=1500, home_score=0, away_score=1, event_id=5)
+        states = [make_game(away_goals=[]), make_game(away_goals=[goal])] + [make_game(away_goals=[])] * 5
+        (retraction,) = self._retractions(self._run(liiga_command, states))
+        assert "(Ilves) was disallowed" in retraction
+
+    def test_a_feed_with_no_goals_at_all_while_two_are_announced_is_not_a_run_of_disallowed_goals(self, liiga_command, capsys):
+        a = goal_event(period=1, game_time=300, home_score=1, away_score=0, event_id=1)
+        b = goal_event(period=2, game_time=1500, home_score=1, away_score=1, event_id=2)
+        states = [make_game(home_goals=[], away_goals=[]), make_game(home_goals=[a], away_goals=[b])] \
+            + [make_game(home_goals=[], away_goals=[])] * 8
+        assert self._retractions(self._run(liiga_command, states)) == []
+        assert "not counting this poll as a miss" in capsys.readouterr().out
+
+    def test_one_goal_alone_going_missing_with_nothing_else_in_the_feed_is_still_retracted(self, liiga_command):
+        # the real shape of 2026-10-23: the only announced goal of the game leaves; the feed is otherwise fine
+        assert len(self._retractions(self._run(liiga_command, self._states(self._goal(), 5)))) == 1
+
+    def test_each_channel_retracts_on_its_own_state(self, liiga_command):
+        goal = self._goal()
+        games = self._states(goal, 5)
+        bot = MagicMock()
+        for channel in ("#a", "#b"):
+            liiga_command._channels[channel] = {"stop_event": MagicMock(), "thread": None,
+                                                "games": {1: liiga_command._snapshot(games[0])}}
+        for game in games[1:]:
+            for channel in ("#a", "#b"):
+                with patch.object(liiga_command, "_fetch_today_games", return_value={1: game}):
+                    liiga_command._poll_once(bot, channel)
+        sent = [(c.args[0], c.args[1]) for c in bot.send_message.call_args_list if "NO GOAL:" in c.args[1]]
+        assert sorted(channel for channel, _ in sent) == ["#a", "#b"]
+
+    def test_the_missing_count_drops_when_the_goal_is_retracted(self, liiga_command):
+        games = self._states(self._goal(), 4)  # the last poll is the one that retracts
+        self._run(liiga_command, games)
+        state = liiga_command._channels["#chan"]["games"][1]
+        assert state["missing"]["homeTeam"] == 0 and state["announced"]["homeTeam"] == []
+
+    def test_a_game_state_from_before_the_ledger_existed_still_works(self, liiga_command):
+        goal = self._goal()
+        old = liiga_command._snapshot(make_game(home_goals=[goal]))
+        del old["ledger"]  # a state kept across a restart cannot happen, but the code must not rely on it
+        new = liiga_command._snapshot(make_game(home_goals=[]), old)
+        assert new["ledger"]["homeTeam"][0]["posted"] is None
+
+
 class TestPollOnce:
     def _seed(self, liiga_command, channel, games):
         liiga_command._channels[channel] = {

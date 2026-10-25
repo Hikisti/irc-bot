@@ -47,7 +47,7 @@ BOARD_STATUS = re.compile(r"(?:\d?(?:1st|2nd|3rd|OT)|SO)(?: (?:\d+:\d\d left|int
 SUMMARY_FOLLOWS_SECONDS = 5  # the end-of-slate results list is followed at once by "all ... games have finished"
 
 PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
-    ("retract", re.compile(r"^NHL: retracting goal (?P<label>.+?) by (?P<name>.+?) in (?P<channel>#\S+)$")),
+    ("retract", re.compile(r"^(?P<sport>NHL|Liiga): retracting goal (?P<label>.+?) by (?P<name>.+?) in (?P<channel>#\S+)$")),
     ("back", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) is back after (?P<n>\d+) missed poll\(s\), "
                         r"not announced again$")),
     ("listed_again", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) listed again as event .*, "
@@ -172,11 +172,14 @@ def build_report(entries):
     games = {}  # (channel, home, away) -> {"goals": [...], "nogoals": [...], "final": entry | None}
     anomalies = []
     events = defaultdict(list)
+    # Liiga's feed gives no reason for a goal taken away, so its NO GOAL lines are not flagged for having none.
+    liiga_retracts = {(e["channel"], e["label"], e["name"]) for e in entries
+                      if e.get("kind") == "retract" and e.get("sport") == "Liiga"}
     for e in entries:
         if "home" in e:
             g = games.setdefault((e["channel"], e["home"], e["away"]),
                                  {"goals": [], "nogoals": [], "final": None, "first": e["ts"], "live": {}})
-            _apply(g, e, anomalies)
+            _apply(g, e, anomalies, liiga_retracts)
         else:
             events[e["kind"]].append(e)
     _split_results(events)
@@ -214,7 +217,7 @@ def _split_results(events):
         events["summary" if follows else "results_reply"].append(e)
 
 
-def _apply(g, e, anomalies):
+def _apply(g, e, anomalies, liiga_retracts=frozenset()):
     name = f"{e['home']} - {e['away']}"
     if e["kind"] == "goal":
         identity = (e["h"], e["a"], e["clock"], e["period"], e["scorer"])
@@ -233,7 +236,7 @@ def _apply(g, e, anomalies):
             del g["live"][identity]
         g.setdefault("removed", {})[(e["clock"], e["period"], e["scorer"])] = e["ts"]
         g["nogoals"].append(e)
-        if not e["reason"]:
+        if not e["reason"] and (e["channel"], f"{e['clock']} {e['period']}", e["scorer"]) not in liiga_retracts:
             anomalies.append(f"{name} [{e['channel']}]: NO GOAL for the {e['clock']} {e['period']} goal by "
                              f"{e['scorer']} without a reason")
     else:

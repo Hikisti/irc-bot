@@ -405,6 +405,20 @@ class TestLevelFinal:
         e = jr.parse_line(line("02:03:37", "NHL: game 2026020094: FINAL held back, level at 2-2 and the plays do not decide it"), YEAR)
         assert (e["kind"], e["gid"], e["level"]) == ("held", "2026020094", "2-2")
 
+    def test_a_liiga_retraction_is_parsed_and_its_no_goal_line_is_not_flagged_for_having_no_reason(self):
+        e = jr.parse_line(line("18:30:00", "Liiga: retracting goal 04:05 3rd by Jani Lajunen in #smliiga"), YEAR)
+        assert (e["kind"], e["sport"], e["label"], e["name"], e["channel"]) == (
+            "retract", "Liiga", "04:05 3rd", "Jani Lajunen", "#smliiga")
+        no_goal = "NO GOAL: K-Espoo 0-2 HIFK 04:05 3rd | Jani Lajunen (K-Espoo) was disallowed"
+        r = report(sent("18:30:00", "#smliiga", no_goal), line("18:30:00", "Liiga: retracting goal 04:05 3rd by Jani Lajunen in #smliiga"))
+        assert not any("without a reason" in a for a in r["anomalies"])
+        assert "goals retracted: 1" in jr.render(r)
+
+    def test_an_nhl_no_goal_line_without_a_reason_is_still_flagged(self):
+        no_goal = "NO GOAL: Reds 1-1 Blues 20:00 1st | Kent Johnson (Reds) was disallowed"
+        r = report(sent("02:00:00", CH, no_goal), line("02:00:00", "NHL: retracting goal 20:00 1st by Kent Johnson in " + CH))
+        assert any("without a reason" in a for a in r["anomalies"])
+
     def test_the_overtime_mark_line_is_parsed_counted_and_listed(self):
         e = jr.parse_line(line("02:48:34", "NHL: game 2026020161: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark"), YEAR)
         assert (e["kind"], e["gid"], e["plays"]) == ("mark_from_plays", "2026020161", "3-2 OT")
@@ -452,6 +466,21 @@ class TestLiigaIdentityLine:
         events = [e for e in lines if e and e["kind"] == "liiga_identity"]
         assert len(events) == 1
         assert (events[0]["gid"], events[0]["what"], events[0]["change"]) == ("7", "changed", "eventId 218 -> eventId 219")
+
+    def test_the_bots_own_retraction_line_round_trips_into_the_report(self, capsys):
+        from liiga_command import LiigaCommand
+        from tests.test_liiga_command import goal_event, make_game
+        liiga = LiigaCommand()
+        goal = goal_event(period=3, game_time=2645, home_score=1, away_score=0, event_id=161)
+        state = liiga._snapshot(make_game(home_goals=[]))
+        state = liiga._snapshot(make_game(home_goals=[goal]), state)
+        for _ in range(liiga.RETRACT_AFTER_MISSING_POLLS):
+            state = liiga._snapshot(make_game(home_goals=[]), state)
+        liiga._retract_gone_goals(MagicMock(), "#smliiga", make_game(home_goals=[]), state)
+        lines = [jr.parse_line(line("18:30:00", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        (event,) = [e for e in lines if e and e["kind"] == "retract"]
+        assert (event["sport"], event["label"], event["name"], event["channel"]) == (
+            "Liiga", "04:05 3rd", "Kristian Vesalainen", "#smliiga")
 
     def test_it_is_counted_and_listed_in_the_report(self):
         text = jr.render(report(line(

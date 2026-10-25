@@ -111,7 +111,11 @@ leave a goal out of one poll and bring it back in the next, which a plain count 
 second time, to change a shootout goal's event id between two polls, which an event id alone would have
 announced twice, and to list a goal again after a few minutes under a new event id and a game time 70 seconds
 later (a goal missing from the feed, or a goal whose event id changed, is noted in the journal, not in
-the channel). The feed's goal list also holds entries that are not goals - a goal taken off by video review (no scorer) and a
+the channel). A goal that was announced and then stays out of the feed for four polls in a row (about two
+minutes; a flicker of a poll or two is shorter) was taken away, and is retracted with a `NO GOAL:` line giving
+the score as the feed now shows it, e.g. `NO GOAL: K-Espoo 0-2 HIFK 04:05 3rd | Jani Lajunen (K-Espoo) was
+disallowed` (no reason is given: the Liiga feed has none). A goal that was already in the feed when tracking
+started is never retracted, and one that returns after being retracted is announced again. The feed's goal list also holds entries that are not goals - a goal taken off by video review (no scorer) and a
 missed penalty shot (tagged `RL0`, with its shooter as the scorer and the score unchanged) - and the tracker skips both;
 a scored penalty shot (`RL`) is a goal. Uses the unofficial liiga.fi
 JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in

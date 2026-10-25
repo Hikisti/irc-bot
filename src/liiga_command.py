@@ -174,6 +174,7 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
                 new_state[gid] = self._snapshot(game, prev)
                 new_state[gid]["ended"] = ended
                 self._log_missing_goals(gid, game, prev, new_state[gid])
+                self._retract_gone_goals(irc_bot, channel, game, new_state[gid])
                 new_state[gid]["over"] = ended or self._not_played(game)
                 if not new_state[gid]["over"]:
                     all_ended = False
@@ -517,11 +518,16 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
         those goals the feed does not show right now, and `ended`. Seeded from the current events when there
         is no `prev`, so goals already scored when tracking starts are never
         announced."""
-        announced, missing = {}, {}
+        announced, missing, ledger = {}, {}, {}
+        broken = self._feed_looks_broken(game, prev)
+        if broken:
+            print(f"Liiga: game {game.get('id')}: the feed shows no goal for the announced ones, "
+                  f"not counting this poll as a miss")
         for side in self.SIDES:
             known = prev["announced"][side] if prev else []
             announced[side], _ = self._reconcile(game, side, known)
             current = [self._event_keys(side, e) for e in self._real_goal_events(game, side)]
             missing[side] = sum(1 for record in known if not any(record & keys for keys in current))
-        return {"announced": announced, "missing": missing, "ended": bool(game.get("ended")),
+            ledger[side] = self._ledger(game, side, prev, announced[side], not broken)
+        return {"announced": announced, "missing": missing, "ledger": ledger, "ended": bool(game.get("ended")),
                 "over": self._is_over(game), "day": self._game_day(game)}
