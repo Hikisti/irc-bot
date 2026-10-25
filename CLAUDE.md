@@ -37,6 +37,17 @@ not what it is.
   follow the modules (`tests/test_nhl_goal_ledger.py`, `tests/test_nhl_final.py`);
   the shared builders are in `tests/nhl_test_helpers.py` and the `nhl_command`
   fixture is in `tests/conftest.py`. #22 and #47 change the ledger.
+- `LiigaCommand` is built from two mixins besides the engine. `LiigaGoalLedgerMixin`
+  (`src/liiga_goal_ledger.py`, split out of `liiga_command.py` as a move-only
+  commit, then extended in its own commit for #22): every announced goal is kept
+  by all the identities it has had (event id; period, game time and scorer; scorer
+  and running score), how a feed's goal events are compared with them, the journal
+  lines about a goal that changed or left, and the `NO GOAL:` retraction of a goal
+  that stays out of the feed for four polls (no reason: the Liiga feed has none).
+  Its tests are still in `tests/test_liiga_command.py`. `TeamNextMixin`
+  (`src/team_next.py`, shared with `NHLCommand`) is `next <team> [count]`: the
+  argument parsing, the team matching and the reply packing; each sport supplies
+  where its season schedule comes from.
 - `PesisCommand` is built from three mixins: `PesisEventParsingMixin`
   (turns the raw event feed into RUN:/JAKSO:/FINAL: text),
   `PesisPlayerNamesMixin` (scorer/batter name resolution), and
