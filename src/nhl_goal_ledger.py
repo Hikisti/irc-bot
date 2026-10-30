@@ -116,6 +116,7 @@ class NHLGoalLedgerMixin:
         for goal in self._all_real_goals(pbp):
             by_key.setdefault(self._goal_key(goal), []).append(goal)
 
+        listed_ids = {play.get("eventId") for plays in by_key.values() for play in plays} - {None}
         new, gone = [], []
         for key, plays in by_key.items():
             ids = [i for i in (play.get("eventId") for play in plays) if i is not None]
@@ -149,6 +150,17 @@ class NHLGoalLedgerMixin:
                     # keep it under a key no play can have, so it counts as missing and
                     # is retracted after the usual wait.
                     record[("displaced", *displaced["ids"])] = displaced
+                continue
+            before = announced.get(key)  # as it was when the poll began, whatever the order the plays are met in
+            if before is not None and not before["retracted"] and ids and any(i in listed_ids for i in before["ids"]):
+                # A different goal at the score of an announced one, while the announced one is still in the feed
+                # (listed under another score): not the replacement of a wrongly named first entry (that one would
+                # be gone) but a second listing of the same goal, or a goal the feed inserted before it (2026-10-29:
+                # one overtime goal went out as three lines, one of them with a score that never existed, #68).
+                # Held for now: if the announced goal moves on, this one is announced at the next poll that finds
+                # it alone at its score; if the two are listed at one score it is the same goal.
+                print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} also listed as event {ids} while "
+                      f"event {before['ids']} is listed under another score, not announcing it yet")
                 continue
             posted = rec["posted"] if rec is not None else None
             if posted is not None and ids and self._same_goal_rekeyed(plays[0], posted):

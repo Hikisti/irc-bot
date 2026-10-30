@@ -419,6 +419,14 @@ class TestLevelFinal:
         r = report(sent("02:00:00", CH, no_goal), line("02:00:00", "NHL: retracting goal 20:00 1st by Kent Johnson in " + CH))
         assert any("without a reason" in a for a in r["anomalies"])
 
+    def test_the_held_conflict_line_is_parsed_counted_and_listed(self):
+        text_line = "NHL: game 2026020205: goal (team 68, 3-4) also listed as event [1141] while event [1142] is listed under another score, not announcing it yet"
+        e = jr.parse_line(line("01:50:51", text_line), YEAR)
+        assert (e["kind"], e["gid"], e["key"]) == ("held_conflict", "2026020205", "team 68, 3-4")
+        text = jr.render(report(line("01:50:51", text_line)))
+        assert "held back while the announced one was still listed (#68): 1 time(s)" in text
+        assert "game 2026020205: goal (team 68, 3-4)" in text
+
     def test_the_overtime_mark_line_is_parsed_counted_and_listed(self):
         e = jr.parse_line(line("02:48:34", "NHL: game 2026020161: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark"), YEAR)
         assert (e["kind"], e["gid"], e["plays"]) == ("mark_from_plays", "2026020161", "3-2 OT")

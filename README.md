@@ -187,7 +187,9 @@ and running score (with its event id as a second check), not by a count per team
 was seen listing one goal twice under different ids and dropping a goal for a poll and bringing it
 back: neither is announced a second time, nor is a goal the feed re-lists under a new id with the same
 scorer and period (a different scorer is a correction and is announced), and the next goal after a
-disallowed one (same running score) still is. A goal that was announced and then stays out of the feed for four polls in a row (about two
+disallowed one (same running score) still is. A different goal that shows up at the score of an announced one while the announced one is still in
+the feed (listed under another score) is held for a poll, not announced at once: it is either the same goal listed
+twice or a goal the feed inserted earlier, and one overtime goal once went out as three lines that way. A goal that was announced and then stays out of the feed for four polls in a row (about two
 minutes; a feed flicker is shorter) is retracted with a `NO GOAL:` line giving the score as the remaining
 goals show it, e.g. `NO GOAL: Pittsburgh Penguins 5-3 Montréal Canadiens 05:25 3rd | Egor Chinakhov (Pittsburgh
 Penguins) was disallowed (offside challenge)` (clock and period right after the score, as in the

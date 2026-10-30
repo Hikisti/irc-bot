@@ -137,6 +137,50 @@ class TestAnnouncedGoalRecord:
         lines = self._poll_sequence(nhl_command, [self._pbp(first), self._pbp(), self._pbp(back)])
         assert len(lines) == 1
 
+    # -- the same goal listed twice with two scorers, one of them renumbered (#68) -------
+
+    def _overtime_pair(self):
+        """The real sequence of 2026-10-29: the decisive overtime goal (home side, 3-4) is announced; then the
+        feed lists a second overtime goal by another player 3 s earlier (3-4) and renumbers the first to 3-5;
+        a poll later both are listed at 3-4; then the second is gone."""
+        winner = self._goal(1142, self.HOME, 4, 3, scorer=1, period_number=4, period_type="OT", time_in_period="03:27")
+        winner_renumbered = self._goal(1142, self.HOME, 5, 3, scorer=1, period_number=4, period_type="OT",
+                                       time_in_period="03:27")
+        other = self._goal(1141, self.HOME, 4, 3, scorer=2, period_number=4, period_type="OT", time_in_period="03:24")
+        return winner, winner_renumbered, other
+
+    def test_an_overtime_goal_listed_twice_with_two_scorers_is_announced_once(self, nhl_command, capsys):
+        winner, renumbered, other = self._overtime_pair()
+        feeds = [self._pbp(winner), self._pbp(other, renumbered), self._pbp(other, winner), self._pbp(winner)]
+        lines = self._poll_sequence(nhl_command, feeds)
+        assert len(lines) == 1 and "P1" in lines[0] and "4-3" in lines[0]  # no 3-4 by the other player, no 3-5
+        assert "not announcing it yet" in capsys.readouterr().out
+
+    def test_the_same_when_the_feed_only_ever_shows_the_renumbered_pair_once(self, nhl_command):
+        winner, renumbered, other = self._overtime_pair()
+        lines = self._poll_sequence(nhl_command, [self._pbp(winner), self._pbp(other, renumbered), self._pbp(winner)])
+        assert len(lines) == 1
+
+    def test_the_order_of_the_plays_in_the_feed_does_not_matter(self, nhl_command):
+        winner, renumbered, other = self._overtime_pair()
+        lines = self._poll_sequence(nhl_command, [self._pbp(winner), self._pbp(renumbered, other), self._pbp(winner, other)])
+        assert len(lines) == 1
+
+    def test_a_goal_inserted_before_an_announced_one_is_announced_one_poll_late_not_lost(self, nhl_command):
+        """The same feed shape for a goal that really exists (the feed missed it and adds it earlier in the game, so
+        the announced goal moves to the next running score): held for one poll, then announced."""
+        winner, renumbered, other = self._overtime_pair()
+        lines = self._poll_sequence(nhl_command, [self._pbp(winner), self._pbp(other, renumbered),
+                                                  self._pbp(other, renumbered)])
+        assert len(lines) == 2 and "P1" in lines[0] and "P2" in lines[1]
+
+    def test_a_replacement_when_the_old_entry_is_gone_is_still_announced_at_once(self, nhl_command):
+        # the first scorer named was wrong: the old entry is removed and the new one (other scorer) takes its place
+        old = self._goal(1142, self.HOME, 4, 3, scorer=1, period_number=4, period_type="OT", time_in_period="03:27")
+        new = self._goal(1141, self.HOME, 4, 3, scorer=2, period_number=4, period_type="OT", time_in_period="03:24")
+        lines = self._poll_sequence(nhl_command, [self._pbp(old), self._pbp(new)])
+        assert len(lines) == 2 and "P2" in lines[1]
+
     # -- the same goal listed under two ids ----------------------------------
 
     def test_two_plays_for_one_goal_in_the_same_poll_are_announced_once_the_first_listed(self, nhl_command):

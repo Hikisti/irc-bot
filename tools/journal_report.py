@@ -54,6 +54,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                                 r"not announced again$")),
     ("renumbered", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<old>.*?)\) is now \((?P<new>.*?)\), "
                               r"not announced again$")),
+    ("held_conflict", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) also listed as event .*, "
+                                 r"not announcing it yet$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
                          r"not counting this poll as a miss$")),
     ("found", re.compile(r"^NHL: game (?P<gid>\d+): attendance (?P<att>\d+) found (?P<s>\d+) s after the FINAL line$")),
@@ -346,6 +348,11 @@ def render(report):
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: level {e['level']} -> plays {e['plays']}")
     for e in ev["held"]:
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: held back, level {e['level']}")
+    if ev["held_conflict"]:
+        out.append(f"  a second goal at the score of an announced one held back while the announced one was still "
+                   f"listed (#68): {len(ev['held_conflict'])} time(s)")
+        for e in ev["held_conflict"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']})")
     if ev["mark_from_plays"]:
         out.append(f"  FINAL given its overtime mark from the plays (header and endpoint had none): "
                    f"{len(ev['mark_from_plays'])}")
