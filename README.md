@@ -134,8 +134,12 @@ which is what fits one IRC line; fewer games left than asked shows what remains.
 not included, and a game that is on or was postponed is skipped. `!liiga next` alone works as before.
 
 `!stock <ticker>` answers from Yahoo Finance with the company name, price, today's change (green or red),
-volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (+1.18%). Volume 17111.01k. 52W: 243.42 - 348.15.`
-The range comes in the same response, so it costs no extra request, and is left out when Yahoo has no
+volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (+1.18%). Volume 17.11M. 52W: 243.42 - 348.15.`
+The change is Yahoo's own figure (for anything with a market session the same as the price against the previous
+close); for a crypto pair, which trades round the clock, it is the rolling 24 hours and says `24h` instead of
+`today` (`Bitcoin USD (BTC-USD): 77258.37 USD, 24h -2689.23 (-3.36%). Volume 58.328B.`). The price and the change
+get more decimals as the price gets smaller (four under 1, six under a cent), and the volume a K, M or B suffix
+by size. The range comes in the same response, so it costs no extra request, and is left out when Yahoo has no
 usable low and high for the symbol. It works for stocks, ETFs, indexes and crypto pairs (`!stock btc-usd`).
 
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,

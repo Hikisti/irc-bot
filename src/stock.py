@@ -15,6 +15,34 @@ class StockCommand(BaseCommand):
     ALIASES = ("!stock",)
     HELP = "!stock <ticker>"
 
+    @staticmethod
+    def _is_number(value) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    def _change(self, info, price, prev_close):
+        """(change, percent): Yahoo's own figures when it gives both, else price against the previous close."""
+        change, percent = info.get("regularMarketChange"), info.get("regularMarketChangePercent")
+        if self._is_number(change) and self._is_number(percent):
+            return change, percent
+        change = price - prev_close
+        return change, (change / prev_close) * 100 if prev_close else 0
+
+    @staticmethod
+    def _decimals(price) -> int:
+        """Decimals that keep a small price readable: two from 1 up, four from a cent, six below."""
+        price = abs(price)
+        return 2 if price >= 1 else 4 if price >= 0.01 else 6
+
+    @staticmethod
+    def _format_volume(volume) -> str:
+        if not volume:
+            return "0.00k"
+        if volume >= 1_000_000_000:
+            return f"{volume / 1_000_000_000:.3f}B"
+        if volume >= 1_000_000:
+            return f"{volume / 1_000_000:.2f}M"
+        return f"{volume / 1_000:.2f}k"
+
     def execute(self, args):
         """Handles stock queries with improved error handling and currency support."""
         if not args:
@@ -40,10 +68,13 @@ class StockCommand(BaseCommand):
             if price is None or prev_close is None:
                 return f"Error: Market data incomplete for '{symbol}'."
 
-            # Calculate price changes
-            change_currency = price - prev_close
-            change_percent = (change_currency / prev_close) * 100 if prev_close else 0
-            volume_k = volume / 1_000 if volume else 0
+            change_currency, change_percent = self._change(info, price, prev_close)
+            # Yahoo's own change is since the previous close for anything with a market session (the same figure as
+            # price - previous close, checked on stocks, ETFs, indexes, a currency pair and futures), but for a
+            # coin, which trades round the clock, the "previous close" is the start of the UTC day and the change
+            # Yahoo reports is the rolling 24 hours, which is what people compare it with (#69).
+            period = "24h" if info.get("quoteType") == "CRYPTOCURRENCY" else "today"
+            decimals = self._decimals(price)
 
             # IRC color: green or red
             color = signed_change_color(change_currency)
@@ -51,15 +82,15 @@ class StockCommand(BaseCommand):
             # The 52-week range comes in the same response (no extra request); left out when either end is missing.
             low, high = info.get("fiftyTwoWeekLow"), info.get("fiftyTwoWeekHigh")
             week_range = (
-                f" 52W: {low:.2f} - {high:.2f}."
+                f" 52W: {low:.{decimals}f} - {high:.{decimals}f}."
                 if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (low, high))
                 else ""
             )
 
             return (
-                f"{BOLD}{short_name} ({symbol}):{BOLD} {price:.2f} {currency}, "
-                f"today {color}{change_currency:+.2f} ({change_percent:+.2f}%){RESET}. "
-                f"Volume {volume_k:.2f}k.{week_range}"
+                f"{BOLD}{short_name} ({symbol}):{BOLD} {price:.{decimals}f} {currency}, "
+                f"{period} {color}{change_currency:+.{decimals}f} ({change_percent:+.2f}%){RESET}. "
+                f"Volume {self._format_volume(volume)}.{week_range}"
             )
 
         except (ValueError, TypeError):

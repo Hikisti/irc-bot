@@ -38,7 +38,7 @@ class TestStockCommand:
         assert "110.00 USD" in result
         assert "\x0309" in result  # green for positive change
         assert "+10.00 (+10.00%)" in result
-        assert "Volume 5000.00k." in result
+        assert "Volume 5.00M." in result
 
     BASE = {"regularMarketPrice": 345.18, "regularMarketPreviousClose": 341.14, "regularMarketVolume": 17_111_010,
             "currency": "USD", "shortName": "Apple Inc."}
@@ -47,9 +47,72 @@ class TestStockCommand:
         with patch("stock.yf.Ticker", return_value=make_ticker({**self.BASE, **extra})):
             return stock_command.execute("aapl")
 
+    # ---- issue #69: the change of a coin, the decimals of a small price, the size of the volume -------------
+
+    def _crypto(self, **extra):
+        # the shape of BTC-USD on 2026-10-30: since the start of the UTC day it is down 0.58%, over 24 hours 3.25%
+        info = {"regularMarketPrice": 77342.34, "regularMarketPreviousClose": 77791.38, "regularMarketChange": -2598.6,
+                "regularMarketChangePercent": -3.25, "regularMarketVolume": 58_679_742_464, "currency": "USD",
+                "shortName": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"}
+        return {**info, **extra}
+
+    def _line(self, stock_command, info, symbol="x"):
+        with patch("stock.yf.Ticker", return_value=make_ticker(info)):
+            return stock_command.execute(symbol)
+
+    def test_a_coins_change_is_yahoos_rolling_24_hours_labelled_24h(self, stock_command):
+        result = self._line(stock_command, self._crypto(), "btc-usd")
+        assert "77342.34 USD, 24h " in result and "-2598.60 (-3.25%)" in result
+        assert "today" not in result and "\x0304" in result  # red
+
+    def test_the_two_definitions_can_have_opposite_signs_and_the_24h_one_wins(self, stock_command):
+        # AAVE-USD on 2026-10-30: +5.3% since the start of the UTC day, -5.2% over 24 hours
+        info = self._crypto(regularMarketPrice=126.06, regularMarketPreviousClose=119.5322, regularMarketChange=-6.9,
+                            regularMarketChangePercent=-5.19, shortName="Aave USD")
+        result = self._line(stock_command, info)
+        assert "-6.90 (-5.19%)" in result and "+6.5" not in result
+
+    def test_a_stocks_change_is_unchanged_and_still_labelled_today(self, stock_command):
+        info = {"regularMarketPrice": 9.26, "regularMarketPreviousClose": 9.12, "regularMarketChange": 0.14,
+                "regularMarketChangePercent": 1.5350877, "regularMarketVolume": 573_210, "currency": "USD",
+                "shortName": "Loma Negra", "quoteType": "EQUITY"}
+        result = self._line(stock_command, info, "loma")
+        assert "9.26 USD, today " in result and "+0.14 (+1.54%)" in result and "Volume 573.21k." in result
+
+    def test_without_yahoos_change_the_old_calculation_is_used(self, stock_command):
+        result = self._line(stock_command, self._crypto(regularMarketChange=None, regularMarketChangePercent=None))
+        assert "-449.04 (-0.58%)" in result  # price against the previous close, as before
+        info = self._crypto(regularMarketChange=-1.0)  # only one of the two present
+        info.pop("regularMarketChangePercent")
+        assert "-449.04 (-0.58%)" in self._line(stock_command, info)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "n/a", True])
+    def test_an_unusable_yahoo_change_falls_back(self, stock_command, bad):
+        assert "-449.04 (-0.58%)" in self._line(stock_command, self._crypto(regularMarketChange=bad))
+
+    def test_a_coin_under_a_dollar_keeps_its_decimals(self, stock_command):
+        # DOGE-USD on 2026-10-30: 0.08 USD and a change of +0.00 before
+        info = self._crypto(regularMarketPrice=0.07581, regularMarketPreviousClose=0.07518, regularMarketChange=-0.00309,
+                            regularMarketChangePercent=-3.92, regularMarketVolume=1_377_726_976, shortName="Dogecoin USD",
+                            fiftyTwoWeekLow=0.0701, fiftyTwoWeekHigh=0.1923)
+        result = self._line(stock_command, info)
+        assert "0.0758 USD, 24h " in result and "-0.0031 (-3.92%)" in result
+        assert "52W: 0.0701 - 0.1923." in result
+
+    @pytest.mark.parametrize("price, decimals", [(345.18, 2), (1.0, 2), (0.99, 4), (0.01, 4), (0.009, 6), (0.0000123, 6)])
+    def test_the_decimals_follow_the_size_of_the_price(self, price, decimals):
+        assert StockCommand._decimals(price) == decimals
+
+    @pytest.mark.parametrize("volume, text", [
+        (0, "0.00k"), (None, "0.00k"), (573_210, "573.21k"), (999_999, "1000.00k"), (1_000_000, "1.00M"),
+        (17_111_010, "17.11M"), (999_999_999, "1000.00M"), (1_377_726_976, "1.378B"), (58_679_742_464, "58.680B"),
+    ])
+    def test_the_volume_gets_a_suffix_by_size(self, volume, text):
+        assert StockCommand._format_volume(volume) == text
+
     def test_the_52_week_range_ends_the_line(self, stock_command):
         result = self._run(stock_command, fiftyTwoWeekLow=243.42, fiftyTwoWeekHigh=348.1499)
-        assert result.endswith("Volume 17111.01k. 52W: 243.42 - 348.15.")
+        assert result.endswith("Volume 17.11M. 52W: 243.42 - 348.15.")
         assert result.startswith("\x02Apple Inc. (AAPL):\x02 345.18 USD, today ")  # the rest of the line is as before
 
     @pytest.mark.parametrize("extra", [
@@ -64,7 +127,7 @@ class TestStockCommand:
     ])
     def test_a_missing_or_unusable_end_leaves_the_range_out(self, stock_command, extra):
         result = self._run(stock_command, **extra)
-        assert result.endswith("Volume 17111.01k.") and "52W" not in result
+        assert result.endswith("Volume 17.11M.") and "52W" not in result
 
     def test_whole_number_ends_and_a_crypto_pair_format_like_the_price(self, stock_command):
         assert self._run(stock_command, fiftyTwoWeekLow=57747.766, fiftyTwoWeekHigh=116273).endswith("52W: 57747.77 - 116273.00.")
