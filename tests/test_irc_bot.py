@@ -203,61 +203,178 @@ class TestListen:
         assert "Traceback" in captured.err  # not just str(e) - see class docstring
         assert "OSError" in captured.err
 
-    def test_a_silent_connection_is_logged_as_disconnected_and_ends_the_loop(self, bot, capsys):
-        """Issue #52: nothing from the server for READ_TIMEOUT_SECONDS (three missed pings) means the connection
-        is dead; the loop ends like it does on EOF so the process exits and the service manager restarts it."""
-        bot.running = True
-        # A second recv() would mean the loop went on after the timeout; it fails loudly instead of spinning.
-        bot.sock.recv.side_effect = [socket.timeout("timed out"), AssertionError("recv() called again after a timeout")]
+    class _Clock:
+        """A clock the fake recv() advances: each recv() that times out takes `step` seconds."""
 
-        bot.listen()
+        def __init__(self):
+            self.now = 1000.0
 
-        assert bot.running is False
-        captured = capsys.readouterr()
-        assert bot.sock.recv.call_count == 1
-        assert f"DISCONNECTED: nothing from the server for {bot.READ_TIMEOUT_SECONDS} s" in captured.out
-        assert "Traceback" not in captured.err  # a timeout is an expected way to end, not a crash
+        def __call__(self):
+            return self.now
 
-    def test_the_timeout_comes_after_data_not_before(self, bot, capsys):
-        """A server that keeps sending (its PINGs) never trips the timeout: it is per recv(), counted from the
-        last byte received."""
+    def _silent_server(self, bot, clock, answers=None, step=30, max_calls=200):
+        """recv() that times out after `step` s of fake time, unless `answers(now)` has data to return;
+        fails loudly if the loop runs on for too long."""
         calls = []
 
         def recv(bufsize):
-            calls.append(1)
-            if len(calls) < 5:
-                return b"PING :irc.example.net\r\n"
-            if len(calls) > 5:
-                raise AssertionError("recv() called again after a timeout")
+            calls.append(clock.now)
+            if len(calls) > max_calls:
+                raise AssertionError("recv() called again and again: the loop did not end")
+            clock.now += step
+            data = answers(clock.now) if answers else None
+            if data is not None:
+                return data
             raise socket.timeout("timed out")
 
-        bot.running = True
         bot.sock.recv.side_effect = recv
-        with patch.object(bot, "send_raw"):
+        return calls
+
+    def test_a_server_that_says_nothing_even_to_our_ping_ends_the_loop_after_the_read_timeout(self, bot, capsys):
+        """Issue #52: nothing at all for READ_TIMEOUT_SECONDS means the connection is dead; the loop ends like it
+        does on EOF so the process exits and the service manager restarts it."""
+        clock = self._Clock()
+        self._silent_server(bot, clock)
+        bot.running = True
+        with patch("irc_bot.time.monotonic", clock), patch.object(bot, "send_raw"):
             bot.listen()
 
-        assert len(calls) == 5 and bot.running is False
-        assert capsys.readouterr().out.count("DISCONNECTED: nothing from the server") == 1
+        assert bot.running is False
+        captured = capsys.readouterr()
+        assert f"DISCONNECTED: nothing from the server for {bot.READ_TIMEOUT_SECONDS} s" in captured.out
+        assert "Traceback" not in captured.err  # a timeout is an expected way to end, not a crash
+        assert clock.now - 1000.0 >= bot.READ_TIMEOUT_SECONDS and clock.now - 1000.0 < bot.READ_TIMEOUT_SECONDS + 60
+
+    def test_the_bot_pings_the_server_itself_after_a_silence_and_only_then(self, bot):
+        """Issue #67: the server pings only a connection that is idle both ways, so a bot that keeps sending goal
+        lines is never pinged. After KEEPALIVE_PING_SECONDS of silence it sends its own PING."""
+        clock = self._Clock()
+        self._silent_server(bot, clock)
+        bot.running = True
+        with patch("irc_bot.time.monotonic", clock), patch.object(bot, "send_raw") as send:
+            bot.listen()
+
+        pings = [c.args[0] for c in send.call_args_list]
+        assert pings and all(p == f"PING :{bot.nickname}" for p in pings)
+        assert len(pings) == 3  # at ~180, ~360 and ~540 s of silence, then the 600 s timeout
+        assert bot.running is False
+
+    def test_a_server_that_answers_our_ping_is_never_timed_out_however_quiet_the_channels(self, bot, capsys):
+        """The 2026-10-29 case: no PING from the server and no chat for 10 minutes while the bot itself was busy
+        announcing. A live server answers the bot's PING, so the connection is heard from every few minutes."""
+        clock = self._Clock()
+        last_ping_at = []
+
+        def answers(now):
+            return b":irc.example.net PONG irc.example.net :KukistiBot\r\n" if last_ping_at and now - last_ping_at[-1] < 31 else None
+
+        self._silent_server(bot, clock, answers=answers, max_calls=400)
+        bot.running = True
+
+        def send(message):
+            if message.startswith("PING"):
+                last_ping_at.append(clock.now)
+
+        def stop_after_two_hours(*a):
+            if clock.now - 1000.0 > 7200:
+                bot.running = False
+
+        original = bot.sock.recv.side_effect
+
+        def recv(bufsize):
+            stop_after_two_hours()
+            return original(bufsize)
+
+        bot.sock.recv.side_effect = recv
+        with patch("irc_bot.time.monotonic", clock), patch.object(bot, "send_raw", side_effect=send):
+            bot.listen()
+
+        assert clock.now - 1000.0 > 7200  # ran for the two hours of fake time
+        assert "DISCONNECTED" not in capsys.readouterr().out
+        assert len(last_ping_at) >= 30  # about one PING every 3 minutes
+
+    def test_any_data_resets_the_silence(self, bot, capsys):
+        clock = self._Clock()
+        chatter = {"until": 5}
+
+        def answers(now):
+            chatter["until"] -= 1
+            return b":someone!u@h PRIVMSG #other :hello\r\n" if chatter["until"] > 0 else None
+
+        self._silent_server(bot, clock, answers=answers)
+        bot.running = True
+        with patch("irc_bot.time.monotonic", clock), patch.object(bot, "send_raw"):
+            bot.listen()
+
+        assert bot.running is False
+        # the 600 s are counted from the last line heard (4 recv() calls in), not from the start of the loop
+        assert clock.now - 1000.0 >= 4 * 30 + bot.READ_TIMEOUT_SECONDS
+
+    @staticmethod
+    def _run_listener(b):
+        listener = threading.Thread(target=b.listen, daemon=True)
+        listener.start()
+        return listener
+
+    def _fast_bot(self, near):
+        b = IrcBot()
+        b.sock = near
+        b.READ_TIMEOUT_SECONDS, b.KEEPALIVE_PING_SECONDS, b.SOCKET_POLL_SECONDS = 0.6, 0.2, 0.05
+        near.settimeout(b.SOCKET_POLL_SECONDS)
+        b.running = True
+        return b
 
     def test_a_real_silent_socket_ends_the_loop(self, capsys):
-        """The same on a real socket: the far end stays open and says nothing (a silent network drop), so only
-        the timeout can end the loop - not EOF, not a reset."""
+        """On a real socket: the far end stays open and says nothing, not even to the bot's PING (a silent network
+        drop), so only the timeout can end the loop - not EOF, not a reset. The far end sees the bot's PINGs."""
         near, far = socket.socketpair()
         try:
-            b = IrcBot()
-            b.READ_TIMEOUT_SECONDS = 0.2
-            b.sock = near
-            near.settimeout(b.READ_TIMEOUT_SECONDS)
-            b.running = True
+            b = self._fast_bot(near)
+            listener = self._run_listener(b)
             # On a thread with a deadline: a regression that keeps the loop going must fail this test, not hang the suite.
-            listener = threading.Thread(target=b.listen, daemon=True)
-            listener.start()
             listener.join(timeout=5)
             alive = listener.is_alive()
             b.running = False  # lets a still-running loop end
             assert not alive, "listen() did not end after the read timeout"
-            assert "DISCONNECTED: nothing from the server for 0.2 s" in capsys.readouterr().out
+            assert "DISCONNECTED: nothing from the server for 0.6 s" in capsys.readouterr().out
+            far.settimeout(1)
+            assert b"PING :KukistiBot" in far.recv(4096)
         finally:
+            near.close()
+            far.close()
+
+    def test_a_real_server_that_answers_our_pings_keeps_the_connection(self, capsys):
+        """The far end says nothing on its own (quiet channels, no server PING) but answers the bot's PING with a
+        PONG, the way a live server does: the connection must outlast the read timeout several times over."""
+        near, far = socket.socketpair()
+        stop = threading.Event()
+
+        def server():
+            far.settimeout(0.05)
+            while not stop.is_set():
+                try:
+                    data = far.recv(4096)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                if not data:
+                    return
+                if b"PING" in data:
+                    far.sendall(b":irc.example.net PONG irc.example.net :KukistiBot\r\n")
+
+        threading.Thread(target=server, daemon=True).start()
+        try:
+            b = self._fast_bot(near)
+            listener = self._run_listener(b)
+            time.sleep(2.0)  # more than three read timeouts
+            still_running = b.running and listener.is_alive()
+            b.running = False
+            stop.set()
+            assert still_running, "a live server that answers PING was taken as dead"
+            assert "DISCONNECTED" not in capsys.readouterr().out
+        finally:
+            stop.set()
             near.close()
             far.close()
 
@@ -487,7 +604,7 @@ class TestConnect:
         assert f"CONNECTED: {bot.server}:{bot.port} as {bot.nickname}" in captured.out
 
     def test_the_socket_gets_a_connect_timeout_and_then_the_read_timeout(self, bot):
-        """Issue #52: a hung connect must not block for ever either; once connected, every recv() is bounded."""
+        """Issue #52: a hung connect must not block for ever either; once connected, recv() wakes up regularly."""
         with patch("irc_bot.socket.socket", return_value=bot.sock), \
              patch("irc_bot.time.sleep", side_effect=lambda _: setattr(bot, "running", False)), \
              patch("irc_bot.threading.Thread"), \
@@ -495,7 +612,7 @@ class TestConnect:
             bot.connect()
 
         timeouts = [c.args[0] for c in bot.sock.settimeout.call_args_list]
-        assert timeouts == [bot.CONNECT_TIMEOUT_SECONDS, bot.READ_TIMEOUT_SECONDS]
+        assert timeouts == [bot.CONNECT_TIMEOUT_SECONDS, bot.SOCKET_POLL_SECONDS]
         order = [c[0] for c in bot.sock.method_calls if c[0] in ("settimeout", "connect")]
         assert order == ["settimeout", "connect", "settimeout"]
 

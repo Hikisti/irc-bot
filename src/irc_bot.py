@@ -13,10 +13,17 @@ class IrcBot:
     # mIRC bold/colour/reset/reverse/italic/underline - what a +c channel refuses.
     FORMATTING_CODES = re.compile("[\x02\x03\x0f\x16\x1d\x1f]")
 
-    # The server pings every 180 s (seen in the journals), so a healthy connection is never silent for much more
-    # than that. Three missed pings and the connection is taken as dead: the bot exits and the service manager
-    # starts it again (Restart=always). Without a timeout a silent network drop left the bot deaf for good (#52).
+    # A connection that has gone silent is detected by what the bot hears, but the server only pings a connection
+    # that is idle in *both* directions: a bot that keeps announcing goals sends often enough that no PING comes
+    # for 10 minutes and more, and quiet channels send nothing either (2026-10-29: 11 games, a 10-minute silence
+    # with no PING, and the first version of this timeout restarted a healthy bot in the middle of a slate, #67).
+    # So the bot asks for a sign of life itself: after KEEPALIVE_PING_SECONDS without hearing anything it sends
+    # a PING, which a live server answers at once. READ_TIMEOUT_SECONDS without hearing anything at all (not
+    # even that answer) means the connection is dead: the bot exits and the service manager starts it again
+    # (Restart=always). Without any of this a silent network drop left the bot deaf for good (#52).
     READ_TIMEOUT_SECONDS = 600
+    KEEPALIVE_PING_SECONDS = 180
+    SOCKET_POLL_SECONDS = 30  # how often listen() wakes up to check
     CONNECT_TIMEOUT_SECONDS = 30
 
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="KukistiBot", channels=None):
@@ -43,7 +50,7 @@ class IrcBot:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(self.CONNECT_TIMEOUT_SECONDS)
             self.sock.connect((self.server, self.port))
-            self.sock.settimeout(self.READ_TIMEOUT_SECONDS)
+            self.sock.settimeout(self.SOCKET_POLL_SECONDS)
             print(f"CONNECTED: {self.server}:{self.port} as {self.nickname}")
             self.send_raw(f"NICK {self.nickname}")
             self.send_raw(f"USER {self.nickname} 0 * :{self.nickname}")
@@ -66,9 +73,11 @@ class IrcBot:
     def listen(self):
         """Listen for messages from the server."""
         buffer = ""
+        last_heard = last_pinged = time.monotonic()
         while self.running:
             try:
                 data = self.sock.recv(2048).decode("utf-8", errors="ignore")
+                last_heard = time.monotonic()
                 if not data:
                     # "DISCONNECTED: ..." wording matches the exception
                     # branch below - a single, consistent, greppable
@@ -112,8 +121,13 @@ class IrcBot:
                     elif command == "404":  # ERR_CANNOTSENDTOCHAN
                         self._report_refused_send(line)
             except socket.timeout:
-                print(f"DISCONNECTED: nothing from the server for {self.READ_TIMEOUT_SECONDS} s")
-                self.running = False
+                silent = time.monotonic() - last_heard
+                if silent >= self.READ_TIMEOUT_SECONDS:
+                    print(f"DISCONNECTED: nothing from the server for {self.READ_TIMEOUT_SECONDS} s")
+                    self.running = False
+                elif silent >= self.KEEPALIVE_PING_SECONDS and time.monotonic() - last_pinged >= self.KEEPALIVE_PING_SECONDS:
+                    self.send_raw(f"PING :{self.nickname}")
+                    last_pinged = time.monotonic()
             except Exception as e:
                 # The catch-all here is the last line of defense against
                 # anything not anticipated by more specific handling - a
