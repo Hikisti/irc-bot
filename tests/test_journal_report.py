@@ -419,6 +419,30 @@ class TestLevelFinal:
         r = report(sent("02:00:00", CH, no_goal), line("02:00:00", "NHL: retracting goal 20:00 1st by Kent Johnson in " + CH))
         assert any("without a reason" in a for a in r["anomalies"])
 
+    def test_the_final_changed_line_is_parsed_counted_and_listed(self):
+        text_line = "NHL: game 2026020227: the score changed between the first FINAL poll and the confirming one: 2-1 -> 3-1"
+        e = jr.parse_line(line("02:38:47", text_line), YEAR)
+        assert (e["kind"], e["gid"], e["before"], e["after"]) == ("final_changed", "2026020227", "2-1", "3-1")
+        text = jr.render(report(line("02:38:47", text_line)))
+        assert "the score changed between the first FINAL poll and the confirming one (#70): 1 game(s)" in text
+        assert "game 2026020227: 2-1 -> 3-1" in text
+
+    def test_the_bots_own_final_changed_line_round_trips(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.nhl_test_helpers import make_pbp, make_schedule_game
+        nhl = NHLCommand()
+        nhl.session.get = MagicMock()
+        state = {1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "final_seen": (2, 1)}}
+        nhl._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": state}
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL", home_score=3, away_score=1)
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=3, away_score=1, game_state="FINAL")
+        with patch.object(nhl, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl, "_fetch_play_by_play", return_value=pbp), \
+                patch.object(nhl, "_fetch_attendance", return_value=1000):
+            nhl._poll_once(MagicMock(), "#nhl.fi")
+        events = [jr.parse_line(line("02:38:47", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        assert [(e["kind"], e["before"], e["after"]) for e in events if e and e["kind"] == "final_changed"] == [("final_changed", "2-1", "3-1")]
+
     def test_the_held_conflict_line_is_parsed_counted_and_listed(self):
         text_line = "NHL: game 2026020205: goal (team 68, 3-4) also listed as event [1141] while event [1142] is listed under another score, not announcing it yet"
         e = jr.parse_line(line("01:50:51", text_line), YEAR)

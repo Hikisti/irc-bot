@@ -54,6 +54,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                                 r"not announced again$")),
     ("renumbered", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<old>.*?)\) is now \((?P<new>.*?)\), "
                               r"not announced again$")),
+    ("final_changed", re.compile(r"^NHL: game (?P<gid>\d+): the score changed between the first FINAL poll and the "
+                                 r"confirming one: (?P<before>\S+) -> (?P<after>\S+)$")),
     ("held_conflict", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) also listed as event .*, "
                                  r"not announcing it yet$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
@@ -348,6 +350,11 @@ def render(report):
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: level {e['level']} -> plays {e['plays']}")
     for e in ev["held"]:
         out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: held back, level {e['level']}")
+    if ev["final_changed"]:
+        out.append(f"  the score changed between the first FINAL poll and the confirming one (#70): "
+                   f"{len(ev['final_changed'])} game(s)")
+        for e in ev["final_changed"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: {e['before']} -> {e['after']}")
     if ev["held_conflict"]:
         out.append(f"  a second goal at the score of an announced one held back while the announced one was still "
                    f"listed (#68): {len(ev['held_conflict'])} time(s)")

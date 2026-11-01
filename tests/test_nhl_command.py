@@ -427,7 +427,7 @@ class TestPollOnce:
     def test_game_end_is_announced(self, nhl_command):
         bot = MagicMock()
         self._seed(nhl_command, "#nhl.fi", {
-            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "final_seen": ()},  # seen final once already
         })
         schedule_game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
@@ -714,7 +714,7 @@ class TestTrackedSlate:
 
     def _tracked(self, slate, gid=1, announced=None, ended=False):
         return {gid: {"home_id": 10, "away_id": 20, "announced": announced or {},
-                      "ended": ended, "slate": slate}}
+                      "ended": ended, "slate": slate, "final_seen": ()}}
 
     def _seed(self, nhl_command, state):
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": state}
@@ -848,7 +848,7 @@ class TestPlayByPlaySkipping:
         return fetch, bot
 
     def _prev(self, ended=False, announced=None):
-        return {"home_id": 10, "away_id": 20, "announced": announced or {}, "ended": ended}
+        return {"home_id": 10, "away_id": 20, "announced": announced or {}, "ended": ended, "final_seen": ()}
 
     @pytest.mark.parametrize("state", ["FUT", "PRE"])
     def test_not_started_game_is_not_fetched(self, nhl_command, state):

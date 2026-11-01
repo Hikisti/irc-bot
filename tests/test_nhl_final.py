@@ -180,6 +180,119 @@ class TestOvertimeMarkFromPlays:
         assert message.endswith("4-2 Florida Panthers")
 
 
+class TestFinalWaitsForTheConfirmingPoll:
+    """Issue #70 (2026-10-31): the feed turned a 3-1 game FINAL before it had entered the empty-net goal of the last
+    second; the FINAL went out 2-1 and the goal was never announced. The first poll in which a game is final only
+    announces its goals; the FINAL comes with the next poll's data."""
+
+    HOME, AWAY = 10, 20
+
+    def _goals(self, *scores):
+        """Regulation goals for the home side with the given (home, away) running scores."""
+        return [goal_play(event_id=n, event_owner_team_id=self.HOME if h > (scores[n - 2][0] if n > 1 else 0) else self.AWAY,
+                          scoring_player_id=100, home_score=h, away_score=a, time_in_period=f"{n:02d}:00")
+                for n, (h, a) in enumerate(scores, 1)]
+
+    def _start(self, nhl_command):
+        nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
+            1: {"home_id": self.HOME, "away_id": self.AWAY, "announced": {}, "ended": False}}}
+        self.bot = MagicMock()
+
+    def _poll(self, nhl_command, state, score, plays, pbp_ok=True):
+        game = make_schedule_game(gid=1, home_id=self.HOME, away_id=self.AWAY, game_state=state,
+                                  home_score=score[0], away_score=score[1])
+        pbp = (make_pbp(game_id=1, home_id=self.HOME, away_id=self.AWAY, home_score=score[0], away_score=score[1],
+                        game_state=state, plays=plays, roster=[roster_spot(100)]) if pbp_ok else None)
+        before = len(self.bot.send_message.call_args_list)
+        with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+                patch.object(nhl_command, "_fetch_attendance", return_value=18000):
+            all_ended = nhl_command._poll_once(self.bot, "#nhl.fi")
+        return all_ended, [c.args[1] for c in self.bot.send_message.call_args_list[before:]]
+
+    def test_the_real_sequence_the_late_goal_is_announced_before_a_correct_final(self, nhl_command, capsys):
+        self._start(nhl_command)
+        two_one = self._goals((1, 0), (1, 1), (2, 1))
+        three_one = two_one + [goal_play(
+            event_id=4, event_owner_team_id=self.HOME, scoring_player_id=100, home_score=3, away_score=1,
+            period_number=3, time_in_period="19:59")]
+        self._poll(nhl_command, "LIVE", (2, 1), two_one)
+        ended, lines = self._poll(nhl_command, "OFF", (2, 1), two_one)  # final, the last goal not entered yet
+        assert ended is False and not any("FINAL:" in line for line in lines)
+        ended, lines = self._poll(nhl_command, "OFF", (3, 1), three_one)  # the confirming poll
+        assert [("GOAL:" in line, "FINAL:" in line) for line in lines] == [(True, False), (False, True)]
+        assert "3-1" in lines[0] and "3-1" in lines[1] and "2-1" not in lines[1]
+        assert ended is True
+        assert "the score changed between the first FINAL poll and the confirming one: 2-1 -> 3-1" in capsys.readouterr().out
+
+    def test_an_ordinary_game_gets_its_final_one_poll_later_with_the_same_text(self, nhl_command, capsys):
+        self._start(nhl_command)
+        plays = self._goals((1, 0), (2, 0))
+        self._poll(nhl_command, "LIVE", (2, 0), plays)
+        ended, lines = self._poll(nhl_command, "FINAL", (2, 0), plays)
+        assert ended is False and not any("FINAL:" in line for line in lines)
+        ended, lines = self._poll(nhl_command, "FINAL", (2, 0), plays)
+        finals = [line for line in lines if "FINAL:" in line]
+        assert len(finals) == 1 and "2-0" in finals[0] and ended is True
+        assert "the score changed" not in capsys.readouterr().out
+
+    def test_the_final_is_said_once_not_every_poll(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        results = [self._poll(nhl_command, "FINAL", (1, 0), plays)[1] for _ in range(5)]
+        assert sum(1 for lines in results for line in lines if "FINAL:" in line) == 1
+
+    def test_a_failed_fetch_on_the_first_final_poll_changes_nothing_else(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        counts = []
+        for ok in (False, True, True):
+            counts.append(sum("FINAL:" in line for line in self._poll(nhl_command, "FINAL", (1, 0), plays, ok)[1]))
+        assert counts == [0, 0, 1]  # nothing without the plays, then the confirming wait, then the FINAL
+
+    def test_a_failed_fetch_on_the_confirming_poll_waits_for_the_next_one(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        self._poll(nhl_command, "FINAL", (1, 0), plays)
+        ended, lines = self._poll(nhl_command, "FINAL", (1, 0), plays, pbp_ok=False)
+        assert ended is False and lines == []
+        ended, lines = self._poll(nhl_command, "FINAL", (1, 0), plays)
+        assert ended is True and sum("FINAL:" in line for line in lines) == 1
+
+    def test_a_game_the_feed_takes_back_from_final_waits_again_when_it_ends_for_real(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        self._poll(nhl_command, "FINAL", (1, 0), plays)  # seen final once
+        self._poll(nhl_command, "LIVE", (1, 0), plays)  # the feed took it back
+        ended, lines = self._poll(nhl_command, "FINAL", (1, 0), plays)
+        assert ended is False and not any("FINAL:" in line for line in lines)  # a fresh first final poll
+
+    def test_a_score_missing_from_the_schedule_does_not_hold_the_final_for_ever(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        game = make_schedule_game(gid=1, home_id=self.HOME, away_id=self.AWAY, game_state="FINAL")
+        game["homeTeam"].pop("score", None)
+        game["awayTeam"].pop("score", None)
+        pbp = make_pbp(game_id=1, home_id=self.HOME, away_id=self.AWAY, home_score=1, away_score=0,
+                       game_state="FINAL", plays=plays, roster=[roster_spot(100)])
+        sent = []
+        for _ in range(3):
+            with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
+                    patch.object(nhl_command, "_fetch_play_by_play", return_value=pbp), \
+                    patch.object(nhl_command, "_fetch_attendance", return_value=18000):
+                nhl_command._poll_once(self.bot, "#nhl.fi")
+        sent = [c.args[1] for c in self.bot.send_message.call_args_list if "FINAL:" in c.args[1]]
+        assert len(sent) == 1
+
+    def test_the_end_of_slate_message_waits_for_the_last_final(self, nhl_command):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        first, _ = self._poll(nhl_command, "FINAL", (1, 0), plays)
+        second, lines = self._poll(nhl_command, "FINAL", (1, 0), plays)
+        assert first is False and second is True
+        assert any("FINAL:" in line for line in lines)
+
+
 class TestFinalHeldAcrossPolls:
     """The tracker side of the hold: no FINAL: line while the result is level, the game not ended, and a line
     after FINAL_HOLD_POLLS polls at the latest."""
@@ -197,7 +310,7 @@ class TestFinalHeldAcrossPolls:
 
     def _tracker(self, nhl_command):
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "final_seen": ()},
         }}
 
     def test_a_level_result_is_held_then_posted_once_the_plays_decide_it(self, nhl_command):
@@ -241,7 +354,7 @@ class TestFailedFinalFetch:
     def test_the_final_line_is_sent_by_the_next_poll_and_only_once(self, nhl_command):
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "final_seen": ()},
         }}
         pbp = make_pbp(game_id=1, home_score=3, away_score=2, game_state="FINAL")
         assert self._poll(nhl_command, bot, None) is False  # the tracker must not stop on the failed poll
@@ -318,7 +431,7 @@ class TestFinalWithAttendance:
     def test_a_game_ending_during_a_poll_announces_it_with_attendance(self, nhl_command):
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "final_seen": ()},
         }}
         game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="FINAL")
         pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=5, away_score=2, game_state="FINAL")
@@ -446,7 +559,7 @@ class TestFinalScoreFromScoreEndpoint:
     def test_the_poll_looks_the_result_up_on_the_games_own_slate(self, nhl_command):
         bot = MagicMock()
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "slate": self.SLATE},
+            1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": False, "slate": self.SLATE, "final_seen": ()},
         }}
         game = make_schedule_game(gid=1, game_state="FINAL", home_score=2, away_score=2)
         with patch.object(nhl_command, "_fetch_tracked_games", return_value={1: game}), \
@@ -468,7 +581,7 @@ class TestAttendanceSummary:
 
     def _tracker(self, nhl_command, ended=(False, False)):
         nhl_command._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": {
-            gid: {"home_id": 10, "away_id": 20, "announced": {}, "ended": was_ended, "slate": self.SLATE}
+            gid: {"home_id": 10, "away_id": 20, "announced": {}, "ended": was_ended, "slate": self.SLATE, "final_seen": ()}
             for gid, was_ended in zip((1, 2), ended)
         }}
 

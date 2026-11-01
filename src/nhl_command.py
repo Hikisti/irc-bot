@@ -211,10 +211,24 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
                 ended = self._is_ended(game)
                 final = prev.get("final")
                 final_held = prev.get("final_held", 0)
+                # The score at the first poll in which the game was final; forgotten if the feed takes it back.
+                final_seen = prev.get("final_seen") if ended else None
                 if ended and not prev["ended"]:
                     if pbp is None:
                         ended = False  # no FINAL: without the play-by-play; try again next poll
+                    elif final_seen is None:
+                        # The feed turns a game FINAL before it has entered the last second's goal (2026-10-31: an
+                        # empty-net goal at 19:59 of the 3rd, entered 9 s after the state changed: the FINAL went
+                        # out 2-1 and the goal was never announced, #70). The first poll in which a game is final
+                        # only announces its goals; the FINAL waits for the next poll and reads the latest data.
+                        ended = False
+                        final_seen = self._score_pair(game) or ()
                     else:
+                        now_score = self._score_pair(game) or ()
+                        if now_score != final_seen:
+                            print(f"NHL: game {gid}: the score changed between the first FINAL poll and the "
+                                  f"confirming one: {'-'.join(map(str, final_seen)) or '?'} -> "
+                                  f"{'-'.join(map(str, now_score)) or '?'}")
                         final = self._announce_end(irc_bot, channel, pbp, prev.get("slate"),
                                                    hold_allowed=final_held < self.FINAL_HOLD_POLLS)
                         if final is None:
@@ -231,6 +245,8 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
                     new_state[gid]["final"] = final
                 if final_held and not final:
                     new_state[gid]["final_held"] = final_held
+                if final_seen is not None and not ended:
+                    new_state[gid]["final_seen"] = final_seen
                 if not ended:
                     all_ended = False
             except Exception as e:
