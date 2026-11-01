@@ -99,9 +99,31 @@ class TestStockCommand:
         assert "0.0758 USD, 24h " in result and "-0.0031 (-3.92%)" in result
         assert "52W: 0.0701 - 0.1923." in result
 
+    def test_a_currency_pair_keeps_four_decimals(self, stock_command):
+        # EURUSD=X on 2026-11-01: 1.12 USD and +0.00 before
+        info = {"regularMarketPrice": 1.1165699, "regularMarketPreviousClose": 1.1180680, "regularMarketChange": -0.0014981,
+                "regularMarketChangePercent": -0.134, "regularMarketVolume": 0, "currency": "USD",
+                "shortName": "EUR/USD", "quoteType": "CURRENCY", "fiftyTwoWeekLow": 1.1058, "fiftyTwoWeekHigh": 1.2024}
+        result = self._line(stock_command, info, "eurusd=x")
+        assert "1.1166 USD, today " in result and "-0.0015 (-0.13%)" in result and "52W: 1.1058 - 1.2024." in result
+
+    def test_a_currency_pair_with_a_large_price_still_gets_four(self, stock_command):
+        info = {"regularMarketPrice": 157.519, "regularMarketPreviousClose": 157.649, "regularMarketChange": -0.13,
+                "regularMarketChangePercent": -0.08, "regularMarketVolume": 0, "currency": "JPY",
+                "shortName": "USD/JPY", "quoteType": "CURRENCY"}
+        assert "157.5190 JPY, today " in self._line(stock_command, info) and "-0.1300 (-0.08%)" in self._line(stock_command, info)
+
+    def test_other_instruments_are_unchanged_by_the_currency_rule(self, stock_command):
+        info = {"regularMarketPrice": 403.3, "regularMarketPreviousClose": 404.22, "regularMarketChange": -0.92,
+                "regularMarketChangePercent": -0.2276, "regularMarketVolume": 22_376_000, "currency": "USD",
+                "shortName": "Tesla", "quoteType": "EQUITY"}
+        assert "403.30 USD, today " in self._line(stock_command, info) and "-0.92 (-0.23%)" in self._line(stock_command, info)
+
     @pytest.mark.parametrize("price, decimals", [(345.18, 2), (1.0, 2), (0.99, 4), (0.01, 4), (0.009, 6), (0.0000123, 6)])
     def test_the_decimals_follow_the_size_of_the_price(self, price, decimals):
         assert StockCommand._decimals(price) == decimals
+        assert StockCommand._decimals(price, "EQUITY") == decimals
+        assert StockCommand._decimals(price, "CURRENCY") == max(decimals, 4)
 
     @pytest.mark.parametrize("volume, text", [
         (0, "0.00k"), (None, "0.00k"), (573_210, "573.21k"), (999_999, "1000.00k"), (1_000_000, "1.00M"),

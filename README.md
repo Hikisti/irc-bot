@@ -138,7 +138,7 @@ volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (
 The change is Yahoo's own figure (for anything with a market session the same as the price against the previous
 close); for a crypto pair, which trades round the clock, it is the rolling 24 hours and says `24h` instead of
 `today` (`Bitcoin USD (BTC-USD): 77258.37 USD, 24h -2689.23 (-3.36%). Volume 58.328B.`). The price and the change
-get more decimals as the price gets smaller (four under 1, six under a cent), and the volume a K, M or B suffix
+get more decimals as the price gets smaller (four under 1, six under a cent) and a currency pair always gets four (`!stock eurusd=x`: `1.1166 USD, today -0.0015`), and the volume a K, M or B suffix
 by size. The range comes in the same response, so it costs no extra request, and is left out when Yahoo has no
 usable low and high for the symbol. It works for stocks, ETFs, indexes and crypto pairs (`!stock btc-usd`).
 

@@ -28,10 +28,12 @@ class StockCommand(BaseCommand):
         return change, (change / prev_close) * 100 if prev_close else 0
 
     @staticmethod
-    def _decimals(price) -> int:
-        """Decimals that keep a small price readable: two from 1 up, four from a cent, six below."""
+    def _decimals(price, quote_type=None) -> int:
+        """Decimals that keep a small price readable: two from 1 up, four from a cent, six below. A currency
+        pair is quoted in four whatever its size (EUR/USD 1.1166, and a move of 0.0015 is not +0.00)."""
         price = abs(price)
-        return 2 if price >= 1 else 4 if price >= 0.01 else 6
+        decimals = 2 if price >= 1 else 4 if price >= 0.01 else 6
+        return max(decimals, 4) if quote_type == "CURRENCY" else decimals
 
     @staticmethod
     def _format_volume(volume) -> str:
@@ -74,7 +76,7 @@ class StockCommand(BaseCommand):
             # coin, which trades round the clock, the "previous close" is the start of the UTC day and the change
             # Yahoo reports is the rolling 24 hours, which is what people compare it with (#69).
             period = "24h" if info.get("quoteType") == "CRYPTOCURRENCY" else "today"
-            decimals = self._decimals(price)
+            decimals = self._decimals(price, info.get("quoteType"))
 
             # IRC color: green or red
             color = signed_change_color(change_currency)
