@@ -249,3 +249,8 @@ wait to be asked to consider it. But never edit this file without explicit
 confirmation first, same as any other commit in this repo. Don't use it as
 a changelog - individual bug fixes and features belong in commit messages
 and `git log`, not here.
+
+Refer to modules and behaviours here, not to issue numbers that will close:
+a number goes stale the day its issue does (a sentence naming two open
+issues once outlived one of them). An issue number is fine only where it
+explains a why that stays true.
