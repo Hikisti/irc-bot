@@ -96,6 +96,23 @@ not what it is.
 4. Add tests, plus a row in the README commands table and a paragraph if
    the behavior isn't obvious.
 
+## How new code should look here
+
+- **Use the existing seams before inventing one.** A command is a
+  `BaseCommand` registered in `COMMAND_CLASSES`; a live tracker overrides the
+  `LiveTrackerCommand` hooks; behaviour shared across sports goes in a mixin
+  (`TeamNextMixin` is the pattern). Flexibility here means a new feature fits
+  an existing seam, not that code carries options nobody asked for.
+- **One module, one responsibility.** When a file passes about 600 lines or a
+  pattern appears a third time, propose the split first (see the refactoring
+  rule below) and do it move-only.
+- **Keep decisions apart from input and output.** The rule that decides
+  (is this the same goal, which decimals, which team matched) is a plain
+  function that tests can call without a network; fetching and sending wrap
+  around it.
+- **The code explains itself.** Clear names and small functions; a comment
+  says why, never what.
+
 ## Concurrent fetching
 
 `LiveTrackerCommand._fetch_concurrently(items, fetch_fn)` runs `fetch_fn`
