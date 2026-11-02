@@ -36,7 +36,10 @@ not what it is.
   it states, the attendance lookups and retries, the end-of-slate list). Tests
   follow the modules (`tests/test_nhl_goal_ledger.py`, `tests/test_nhl_final.py`);
   the shared builders are in `tests/nhl_test_helpers.py` and the `nhl_command`
-  fixture is in `tests/conftest.py`. #22 and #47 change the ledger.
+  fixture is in `tests/conftest.py`. #47 is still open on this ledger. A game's
+  FINAL is posted by the *second* poll in which it is final (#70), so a test
+  that ends a game must poll twice or seed `"final_seen": ()` in the previous
+  state.
 - `LiigaCommand` is built from two mixins besides the engine. `LiigaGoalLedgerMixin`
   (`src/liiga_goal_ledger.py`, split out of `liiga_command.py` as a move-only
   commit, then extended in its own commit for #22): every announced goal is kept
@@ -63,9 +66,10 @@ not what it is.
   verified by running them. `journal_report.py` is the odd one out: it reads
   no feed, it turns the bot's own journal (`journalctl -a` text) into a
   per-game report and an anomalies list. It parses the bot's message
-  wording (GOAL:/NO GOAL:/FINAL: and the `NHL:` prints), so changing one of
-  those means updating it; `tests/test_journal_report.py` round-trips the
-  bot's own message builders to catch that.
+  wording (GOAL:/NO GOAL:/FINAL: and the `NHL:`/`Liiga:` prints), so changing
+  one of those, or adding a new journal print, means updating it;
+  `tests/test_journal_report.py` round-trips the bot's own message builders to
+  catch that.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on
@@ -139,6 +143,9 @@ consistent, deliberate discipline - keep following it:
   edit, to text of the same length, leaves the stale compiled copy in use
   and a correct change makes a test look broken (this hid a correct
   `POLL_INTERVAL_SECONDS = 45` behind a failing test once).
+- A test that runs a loop on a fake clock or socket must have a call limit or
+  a deadline, so a regression fails instead of hanging the suite (two
+  mutation checks of the connection watchdog once did exactly that).
 - Before considering any task done: run the **full** suite, check coverage
   hasn't regressed on touched modules, and - where feasible - verify the
   actual behavior against the real live API/data, not just mocks (e.g. a
@@ -178,8 +185,9 @@ consistent, deliberate discipline - keep following it:
   confirm first.
   Every new issue gets one `priority: high|medium|low` label (high = a
   visible error in a channel that has already happened) and one area label
-  (`nhl`, `liiga`, `pesis`, `imdb`); the pinned tracking issue holds the
-  order of work, so update its checklist when a priority changes.
+  (`nhl`, `liiga`, `pesis`, `imdb`; when none fits, the priority label alone);
+  the pinned tracking issue holds the order of work, so update its checklist
+  when a priority changes.
 - Only commit when explicitly asked. Never push proactively either - see
   below for why that's a bigger deal here than in most repos.
 
@@ -198,6 +206,10 @@ operation:
   being tracked in production. Ask, or wait until today's games are over,
   the same way this was handled for the Liiga fixes in this project's
   history.
+- Merging a pull request to `main` (a Dependabot bump, say) is a push: it
+  deploys and restarts the bot the same way. The server's own automatic
+  security updates can also restart it, around 06:00-07:00 UTC; if a tracker
+  stops there with no other cause, that is the reason - start it again.
 - `DEPLOY.md` is gitignored on purpose - it holds real server access
   details (paths, service names, SSH setup). Never `git add` it, never
   suggest committing it, even if asked to "just add everything."
