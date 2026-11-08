@@ -122,7 +122,13 @@ class URLFetcher:
             # no separate method for it.
             return self.get_generic_title(url)
         except Exception as e:
-            return f"Error fetching title: {e}"
+            return self._no_title(url, f"{type(e).__name__}: {e}")
+
+    def _no_title(self, url, reason):
+        """Nobody asked for a title, so a page that gives none is not answered in the channel: the reason goes
+        to the journal (the domain only) and the caller posts nothing."""
+        print(f"URL title: none for {urlparse(url).netloc.lower()}: {reason.removeprefix('Error: ')}")
+        return None
 
     def get_generic_title(self, url):
         """
@@ -151,7 +157,7 @@ class URLFetcher:
             print(f"URL title: not fetching {e}")
             return None  # like a blacklisted domain: nothing is said in the channel
         except Exception as e:
-            return format_request_error(e, "the webpage")
+            return self._no_title(url, format_request_error(e, "the webpage"))
 
     def _resolve(self, host):
         """The IP addresses `host` resolves to (a literal address resolves to itself)."""
@@ -264,7 +270,7 @@ class URLFetcher:
                 video_id = parsed_url.path.lstrip('/')
 
             if not video_id:
-                return "Error: Invalid YouTube URL."
+                return self._no_title(url, "Invalid YouTube URL.")
 
             api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             response = self.session.get(api_url, timeout=DEFAULT_TIMEOUT_SECONDS)
@@ -274,7 +280,7 @@ class URLFetcher:
             return f"YouTube: {data['title']} (by {data['author_name']})"
 
         except Exception as e:
-            return format_request_error(e, "YouTube")
+            return self._no_title(url, format_request_error(e, "YouTube"))
 
     def trim_message(self, text):
         """

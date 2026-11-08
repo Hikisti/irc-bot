@@ -127,17 +127,24 @@ class TestGetTitle:
             result = fetcher.get_title("https://example.com/page")
         assert result is None
 
-    def test_timeout_returns_friendly_error(self, fetcher):
+    def test_a_failed_lookup_sends_nothing_to_the_channel(self, fetcher):
+        with patch.object(fetcher.session, "get", side_effect=requests.exceptions.ConnectionError):
+            fetcher.detect_and_fetch("nick", "#chan", "see https://example.com/page")
+        fetcher.bot.send_message.assert_not_called()
+
+    def test_a_timeout_posts_nothing_and_is_journaled(self, fetcher, capsys):
         with patch.object(fetcher.session, "get", side_effect=requests.exceptions.Timeout):
             result = fetcher.get_title("https://example.com/page")
-        assert "timed out" in result
+        assert result is None
+        assert "URL title: none for example.com: the webpage request timed out." in capsys.readouterr().out
 
-    def test_connection_error_returns_friendly_error(self, fetcher):
+    def test_a_connection_error_posts_nothing_and_is_journaled(self, fetcher, capsys):
         with patch.object(
             fetcher.session, "get", side_effect=requests.exceptions.ConnectionError
         ):
             result = fetcher.get_title("https://example.com/page")
-        assert "Could not connect" in result
+        assert result is None
+        assert "URL title: none for example.com: Could not connect to the webpage." in capsys.readouterr().out
 
     def test_youtube_url_uses_oembed(self, fetcher):
         oembed_data = {"title": "Cool Video", "author_name": "Some Channel"}
@@ -154,9 +161,9 @@ class TestGetTitle:
         called_url = mock_get.call_args[0][0]
         assert "v=xyz789" in called_url
 
-    def test_youtube_invalid_url_returns_error(self, fetcher):
-        result = fetcher.get_title("https://www.youtube.com/watch")
-        assert "Invalid YouTube URL" in result
+    def test_youtube_invalid_url_posts_nothing_and_is_journaled(self, fetcher, capsys):
+        assert fetcher.get_title("https://www.youtube.com/watch") is None
+        assert "URL title: none for www.youtube.com: Invalid YouTube URL." in capsys.readouterr().out
 
     def test_youtu_be_short_link_uses_oembed(self, fetcher):
         with patch.object(fetcher.session, "get") as mock_get:
@@ -178,12 +185,13 @@ class TestGetTitle:
         assert result == "Not YouTube At All"
         assert "oembed" not in mock_get.call_args[0][0]
 
-    def test_youtube_oembed_request_failure_returns_friendly_error(self, fetcher):
+    def test_a_youtube_oembed_failure_posts_nothing_and_is_journaled(self, fetcher, capsys):
         with patch.object(fetcher.session, "get", side_effect=requests.exceptions.Timeout):
             result = fetcher.get_title("https://www.youtube.com/watch?v=abc123")
-        assert "timed out" in result
+        assert result is None
+        assert "URL title: none for www.youtube.com: YouTube request timed out." in capsys.readouterr().out
 
-    def test_youtube_oembed_invalid_json_is_not_a_contact_failure(self, fetcher):
+    def test_youtube_oembed_invalid_json_is_not_a_contact_failure(self, fetcher, capsys):
         # Regression test: requests.exceptions.JSONDecodeError (raised by
         # response.json() on a non-JSON body) is also a RequestException,
         # so without format_request_error's dedicated branch this used to
@@ -193,15 +201,17 @@ class TestGetTitle:
         resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "not json", 0)
         with patch.object(fetcher.session, "get", return_value=resp):
             result = fetcher.get_title("https://www.youtube.com/watch?v=abc123")
-        assert result == "Error: Invalid response from YouTube."
+        assert result is None
+        assert "Invalid response from YouTube." in capsys.readouterr().out  # not "Failed to contact"
 
-    def test_unexpected_exception_in_dispatch_returns_error_message(self, fetcher):
+    def test_unexpected_exception_in_dispatch_posts_nothing_and_is_journaled(self, fetcher, capsys):
         # get_title()'s own catch-all, distinct from get_generic_title's/
         # get_youtube_info's own (format_request_error-based) handling -
         # this one guards the dispatch/blacklist logic itself.
         with patch.object(fetcher, "get_generic_title", side_effect=RuntimeError("boom")):
             result = fetcher.get_title("https://example.com/page")
-        assert "Error fetching title: boom" in result
+        assert result is None
+        assert "URL title: none for example.com: RuntimeError: boom" in capsys.readouterr().out
 
 
 def real_response(body: bytes, content_type=None):
@@ -270,12 +280,13 @@ class TestOnlyPublicAddressesAreFetched:
             assert fetcher.get_title("https://example.com/") == "Hello"
         assert mock_get.call_args.kwargs["allow_redirects"] is False
 
-    def test_a_name_that_does_not_resolve_fails_with_the_ordinary_error(self, fetcher, monkeypatch):
+    def test_a_name_that_does_not_resolve_posts_nothing(self, fetcher, monkeypatch, capsys):
         def no_such_host(self, host):
             raise OSError("Name or service not known")
         monkeypatch.setattr(URLFetcher, "_resolve", no_such_host)
         with patch.object(fetcher.session, "get", side_effect=requests.exceptions.ConnectionError):
-            assert fetcher.get_title("https://no-such-host.example/") == "Error: Could not connect to the webpage."
+            assert fetcher.get_title("https://no-such-host.example/") is None
+        assert "URL title: none for no-such-host.example: Could not connect to the webpage." in capsys.readouterr().out
 
 
 class TestRedirects:
@@ -305,10 +316,11 @@ class TestRedirects:
             assert fetcher.get_title("https://example.com/") is None
         assert mock_get.call_count == 1
 
-    def test_a_redirect_loop_ends_with_an_ordinary_error(self, fetcher):
+    def test_a_redirect_loop_posts_nothing(self, fetcher, capsys):
         with patch.object(fetcher.session, "get", side_effect=lambda *a, **k: redirect("https://example.com/again")) as mock_get:
             result = fetcher.get_title("https://example.com/")
-        assert result == "Error: Failed to contact the webpage."
+        assert result is None
+        assert "URL title: none for example.com: Failed to contact the webpage." in capsys.readouterr().out
         assert mock_get.call_count == URLFetcher.MAX_REDIRECTS + 1
 
     def test_the_headers_stay_with_every_hop(self, fetcher):
@@ -368,13 +380,14 @@ class TestBoundedRead:
             response = fetcher._fetch_page("https://example.com/", None)
         assert response.content == b"<html><head><title>Slow</title>ab"  # what arrived before the limit
 
-    def test_an_error_status_closes_the_stream_and_reports_it(self, fetcher):
+    def test_an_error_status_closes_the_stream_and_journals_it(self, fetcher, capsys):
         raw = FakeStream([b"<html>nope</html>"])
         resp = streamed_response(raw)
         resp.status_code = 403
         resp.reason = "Forbidden"
         with patch.object(fetcher.session, "get", return_value=resp):
-            assert fetcher.get_title("https://example.com/") == "Error: the webpage returned HTTP 403 Forbidden."
+            assert fetcher.get_title("https://example.com/") is None
+        assert "URL title: none for example.com: the webpage returned HTTP 403 Forbidden." in capsys.readouterr().out
         assert raw.closed
 
 
