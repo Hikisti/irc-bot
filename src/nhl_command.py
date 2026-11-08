@@ -213,7 +213,11 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
                 final_held = prev.get("final_held", 0)
                 # The score at the first poll in which the game was final; forgotten if the feed takes it back.
                 final_seen = prev.get("final_seen") if ended else None
-                if ended and not prev["ended"]:
+                if final and prev["ended"] and not ended:
+                    print(f"NHL: game {gid}: the feed took the game back from final after its FINAL line")
+                # A game the feed took back after its FINAL line goes out and comes back as the same game: its
+                # FINAL is not said again (2026-11-07: one overtime game's FINAL went out twice, #73).
+                if ended and not prev["ended"] and not final:
                     if pbp is None:
                         ended = False  # no FINAL: without the play-by-play; try again next poll
                     elif final_seen is None:

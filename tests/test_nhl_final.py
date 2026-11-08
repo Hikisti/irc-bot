@@ -267,6 +267,18 @@ class TestFinalWaitsForTheConfirmingPoll:
         ended, lines = self._poll(nhl_command, "FINAL", (1, 0), plays)
         assert ended is False and not any("FINAL:" in line for line in lines)  # a fresh first final poll
 
+    def test_a_game_the_feed_takes_back_after_its_final_is_not_given_a_second_final(self, nhl_command, capsys):
+        self._start(nhl_command)
+        plays = self._goals((1, 0))
+        self._poll(nhl_command, "FINAL", (1, 0), plays)
+        self._poll(nhl_command, "FINAL", (1, 0), plays)  # the FINAL goes out
+        ended, lines = self._poll(nhl_command, "LIVE", (1, 0), plays)  # the feed takes it back
+        assert ended is False and not any("FINAL:" in line for line in lines)
+        assert "the feed took the game back from final after its FINAL line" in capsys.readouterr().out
+        later = [self._poll(nhl_command, "FINAL", (1, 0), plays) for _ in range(3)]
+        assert not any("FINAL:" in line for _, lines in later for line in lines)
+        assert later[-1][0] is True  # and the slate can still end
+
     def test_a_score_missing_from_the_schedule_does_not_hold_the_final_for_ever(self, nhl_command):
         self._start(nhl_command)
         plays = self._goals((1, 0))
