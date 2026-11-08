@@ -443,6 +443,38 @@ class TestLevelFinal:
         events = [jr.parse_line(line("02:38:47", text), YEAR) for text in capsys.readouterr().out.splitlines()]
         assert [(e["kind"], e["before"], e["after"]) for e in events if e and e["kind"] == "final_changed"] == [("final_changed", "2-1", "3-1")]
 
+    def test_a_final_line_posted_twice_is_flagged_with_the_gap(self):
+        r = report(sent("02:58:07", CH, final_text("Reds", 5, 4, "Blues", ot="OT")),
+                   sent("03:01:08", CH, final_text("Reds", 5, 4, "Blues", ot="OT", att=1000)))
+        assert any("FINAL line posted twice, 181 s apart" in a for a in r["anomalies"])
+
+    def test_one_final_per_channel_is_not_a_duplicate(self):
+        r = report(sent("02:58:07", "#a", final_text("Reds", 2, 0, "Blues", att=1000)),
+                   sent("02:58:09", "#b", final_text("Reds", 2, 0, "Blues", att=1000)))
+        assert not any("posted twice" in a for a in r["anomalies"])
+
+    def test_the_taken_back_line_is_parsed_counted_and_listed(self):
+        text_line = "NHL: game 2026020270: the feed took the game back from final after its FINAL line"
+        e = jr.parse_line(line("03:00:08", text_line), YEAR)
+        assert (e["kind"], e["gid"]) == ("taken_back", "2026020270")
+        text = jr.render(report(line("03:00:08", text_line)))
+        assert "a game the feed took back from final after its FINAL line (#73): 1 time(s)" in text
+
+    def test_the_bots_own_taken_back_line_round_trips(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.nhl_test_helpers import make_pbp, make_schedule_game
+        nhl = NHLCommand()
+        nhl.session.get = MagicMock()
+        state = {1: {"home_id": 10, "away_id": 20, "announced": {}, "ended": True, "final": {"at": 0, "attendance": 1000}}}
+        nhl._channels["#nhl.fi"] = {"stop_event": MagicMock(), "thread": None, "games": state}
+        game = make_schedule_game(gid=1, home_id=10, away_id=20, game_state="LIVE", home_score=1, away_score=0)
+        pbp = make_pbp(game_id=1, home_id=10, away_id=20, home_score=1, away_score=0, game_state="LIVE")
+        with patch.object(nhl, "_fetch_tracked_games", return_value={1: game}), \
+                patch.object(nhl, "_fetch_play_by_play", return_value=pbp):
+            nhl._poll_once(MagicMock(), "#nhl.fi")
+        events = [jr.parse_line(line("03:00:08", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        assert [e["kind"] for e in events if e and e["kind"] == "taken_back"] == ["taken_back"]
+
     def test_the_held_conflict_line_is_parsed_counted_and_listed(self):
         text_line = "NHL: game 2026020205: goal (team 68, 3-4) also listed as event [1141] while event [1142] is listed under another score, not announcing it yet"
         e = jr.parse_line(line("01:50:51", text_line), YEAR)

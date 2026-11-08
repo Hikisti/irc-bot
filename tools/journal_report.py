@@ -56,6 +56,7 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                               r"not announced again$")),
     ("final_changed", re.compile(r"^NHL: game (?P<gid>\d+): the score changed between the first FINAL poll and the "
                                  r"confirming one: (?P<before>\S+) -> (?P<after>\S+)$")),
+    ("taken_back", re.compile(r"^NHL: game (?P<gid>\d+): the feed took the game back from final after its FINAL line$")),
     ("held_conflict", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) also listed as event .*, "
                                  r"not announcing it yet$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
@@ -244,6 +245,9 @@ def _apply(g, e, anomalies, liiga_retracts=frozenset()):
             anomalies.append(f"{name} [{e['channel']}]: NO GOAL for the {e['clock']} {e['period']} goal by "
                              f"{e['scorer']} without a reason")
     else:
+        if g.get("final"):
+            anomalies.append(f"{name} [{e['channel']}]: FINAL line posted twice, "
+                             f"{int((e['ts'] - g['final']['ts']).total_seconds())} s apart")
         g["final"] = e
 
 
@@ -355,6 +359,10 @@ def render(report):
                    f"{len(ev['final_changed'])} game(s)")
         for e in ev["final_changed"]:
             out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: {e['before']} -> {e['after']}")
+    if ev["taken_back"]:
+        out.append(f"  a game the feed took back from final after its FINAL line (#73): {len(ev['taken_back'])} time(s)")
+        for e in ev["taken_back"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}")
     if ev["held_conflict"]:
         out.append(f"  a second goal at the score of an announced one held back while the announced one was still "
                    f"listed (#68): {len(ev['held_conflict'])} time(s)")
