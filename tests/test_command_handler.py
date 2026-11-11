@@ -255,7 +255,7 @@ class TestChannelRestriction:
 
 
 # The channels the bot actually joins (see src/irc_bot.py).
-PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi", "#veikkaus"]
+PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi"]
 GENERAL_COMMANDS = ["!weather", "!stock", "!crypto", "!sähkö", "!time", "!f1", "!distance", "!imdb", "!bjorck"]
 
 
