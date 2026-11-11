@@ -284,6 +284,24 @@ class TestAmbiguousCityDisambiguation:
         assert error is None
         assert result["label"] == "Miami, FL, USA"
 
+    # Trimmed from the live answer for "leppavaara" (2026-11-11): the Russian namesake ranked first.
+    REAL_LEPPAVAARA_CANDIDATES = {
+        "features": [
+            {"geometry": {"coordinates": [31.50115, 62.71899]},
+             "properties": {"name": "Lopyavara", "label": "Lopyavara, KI, Russia", "layer": "locality"}},
+            {"geometry": {"coordinates": [24.809553, 60.217553]},
+             "properties": {"name": "Leppävaara", "label": "Leppävaara, Finland", "layer": "locality"}},
+        ]
+    }
+
+    @pytest.mark.parametrize("typed", ["leppavaara", "Leppävaara", "LEPPÄVAARA"])
+    def test_name_match_ignores_accents(self, distance_command, typed):
+        with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_LEPPAVAARA_CANDIDATES)):
+            result, error = distance_command._geocode(typed, NO_DEADLINE)
+
+        assert error is None
+        assert result["label"] == "Leppävaara, Finland"
+
     def test_end_to_end_picks_the_famous_miami(self, distance_command):
         responses = [
             make_response(self.REAL_AUSTIN_CANDIDATES),

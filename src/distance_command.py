@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import unicodedata
 
 from dotenv import load_dotenv
 import requests
@@ -199,7 +200,10 @@ class DistanceCommand(BaseCommand):
         and population, keeping Pelias's own relevance order beyond that.
         """
         def normalize(text):
-            return (text or "").strip().casefold()
+            # Accents are left out: "leppavaara" typed without the a-umlaut matched no candidate's name, so the
+            # fallback took Pelias's first one, "Lopyavara" in Russia, over "Leppävaara" (live, 2026-11-11).
+            decomposed = unicodedata.normalize("NFKD", (text or "").strip().casefold())
+            return "".join(c for c in decomposed if not unicodedata.combining(c))
 
         query_norm = normalize(query)
         named_matches = [
