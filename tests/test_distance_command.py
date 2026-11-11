@@ -8,6 +8,9 @@ from distance_command import DistanceCommand
 from tests.conftest import make_json_response as make_response
 
 
+NO_DEADLINE = float("inf")
+
+
 @contextmanager
 def both_methods(distance_command, responses):
     """The geocoder is asked with GET and the router with POST (#44): one reply sequence for both, in call order."""
@@ -229,14 +232,14 @@ class TestAmbiguousCityDisambiguation:
 
     def test_rejects_a_candidate_whose_name_does_not_match_the_query(self, distance_command):
         with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_MIAMI_CANDIDATES)):
-            result, error = distance_command._geocode("miami")
+            result, error = distance_command._geocode("miami", NO_DEADLINE)
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
 
     def test_still_picks_correctly_for_austin(self, distance_command):
         with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_AUSTIN_CANDIDATES)):
-            result, error = distance_command._geocode("austin")
+            result, error = distance_command._geocode("austin", NO_DEADLINE)
 
         assert error is None
         assert result["label"] == "Austin, TX, USA"
@@ -253,7 +256,7 @@ class TestAmbiguousCityDisambiguation:
             ]
         }
         with patch.object(distance_command.session, "get", return_value=make_response(payload)):
-            result, error = distance_command._geocode("miami")
+            result, error = distance_command._geocode("miami", NO_DEADLINE)
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
@@ -269,14 +272,14 @@ class TestAmbiguousCityDisambiguation:
             ]
         }
         with patch.object(distance_command.session, "get", return_value=make_response(payload)):
-            result, error = distance_command._geocode("nyc")
+            result, error = distance_command._geocode("nyc", NO_DEADLINE)
 
         assert error is None
         assert result["label"] == "First match"
 
     def test_name_match_is_case_insensitive(self, distance_command):
         with patch.object(distance_command.session, "get", return_value=make_response(self.REAL_MIAMI_CANDIDATES)):
-            result, error = distance_command._geocode("MIAMI")
+            result, error = distance_command._geocode("MIAMI", NO_DEADLINE)
 
         assert error is None
         assert result["label"] == "Miami, FL, USA"
@@ -447,7 +450,7 @@ class TestDrivingDistance:
             make_response(geocode_payload("A", 1, 2)),
             make_response(geocode_payload("B", 3, 4)),
         ]
-        with both_methods(distance_command, responses + [requests.exceptions.Timeout()]):
+        with both_methods(distance_command, responses + [requests.exceptions.Timeout()] * 2):
             result = distance_command.execute("A,B")
         assert "timed out" in result
 
@@ -509,3 +512,84 @@ class TestFormatDuration:
 
     def test_minutes_only(self, distance_command):
         assert distance_command._format_duration(300) == "5min"
+
+
+class TestRetryAndBudget:
+    """One retry after a stall, a dropped connection or a 502/503/504, inside a 30 s budget for the whole
+    command (#45). The clock is fake: each scripted reply says how many seconds the request took."""
+
+    GEO_A = geocode_payload("A", 1, 2)
+    GEO_B = geocode_payload("B", 3, 4)
+    ROUTE = directions_payload(88400, 4320)
+    ANSWER = "Driving distance from A to B: 88.4 km (54.9 mi), ~1h 12min drive."
+
+    @contextmanager
+    def scripted(self, distance_command, script):
+        """`script` is a list of (seconds taken, response or exception), in call order for GET and POST."""
+        clock = {"now": 1000.0}
+        steps = iter(script)
+        timeouts = []
+
+        def call(url, timeout, **kwargs):
+            timeouts.append(timeout)
+            seconds, outcome = next(steps)
+            clock["now"] += seconds
+            if isinstance(outcome, Exception):
+                raise outcome
+            return make_response(outcome[0], status_code=outcome[1]) if isinstance(outcome, tuple) \
+                else make_response(outcome)
+
+        shared = MagicMock(side_effect=call)
+        with patch("distance_command.time.monotonic", side_effect=lambda: clock["now"]), \
+                patch.object(distance_command.session, "get", shared), \
+                patch.object(distance_command.session, "post", shared):
+            yield shared, timeouts
+
+    @pytest.mark.parametrize("failure", [requests.exceptions.Timeout(), requests.exceptions.ConnectionError()])
+    def test_a_geocode_that_stalls_or_drops_is_asked_again(self, distance_command, capsys, failure):
+        script = [(10, failure), (0.5, self.GEO_A), (0.5, self.GEO_B), (0.5, self.ROUTE)]
+        with self.scripted(distance_command, script) as (calls, _):
+            assert distance_command.execute("A,B") == self.ANSWER
+        assert calls.call_count == 4
+        assert f"Distance API geocoding: {type(failure).__name__}, retrying once" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    def test_a_route_answered_with_a_gateway_error_is_asked_again(self, distance_command, capsys, status):
+        script = [(0.5, self.GEO_A), (0.5, self.GEO_B), (0.1, ({}, status)), (0.5, self.ROUTE)]
+        with self.scripted(distance_command, script) as (calls, _):
+            assert distance_command.execute("A,B") == self.ANSWER
+        assert calls.call_count == 4
+        assert f"Distance API routing: HTTP {status}, retrying once" in capsys.readouterr().out
+
+    def test_only_one_retry_per_request(self, distance_command):
+        script = [(0.5, self.GEO_A), (0.5, self.GEO_B), (0.1, ({}, 502)), (0.1, ({}, 502))]
+        with self.scripted(distance_command, script) as (calls, _):
+            assert distance_command.execute("A,B") == \
+                "Error: Distance service (routing) returned HTTP 502 Not Found."
+        assert calls.call_count == 4
+
+    @pytest.mark.parametrize("status", [400, 401, 404, 429, 500])
+    def test_other_statuses_are_not_retried(self, distance_command, status):
+        with self.scripted(distance_command, [(0.5, ({}, status))]) as (calls, _):
+            distance_command.execute("A,B")
+        assert calls.call_count == 1
+
+    def test_no_retry_when_the_budget_has_under_two_seconds_left(self, distance_command):
+        # 10 + 9.5 + 9.0 = 28.5 s gone when the route times out: 1.5 s left, so no second try.
+        script = [(10, self.GEO_A), (9.5, self.GEO_B), (9.0, requests.exceptions.Timeout())]
+        with self.scripted(distance_command, script) as (calls, _):
+            assert distance_command.execute("A,B") == "Error: Distance service (routing) request timed out."
+        assert calls.call_count == 3
+
+    def test_a_request_never_waits_past_the_budget(self, distance_command):
+        # 10 s, then a retried geocode that takes 10 + 4 s: 24 s gone, so the route may wait 6 s, not 10.
+        script = [(10, self.GEO_A), (10, requests.exceptions.Timeout()), (4, self.GEO_B), (0.5, self.ROUTE)]
+        with self.scripted(distance_command, script) as (_, timeouts):
+            assert distance_command.execute("A,B") == self.ANSWER
+        assert timeouts == [10, 10, 10, 6]
+
+    def test_a_spent_budget_sends_no_request(self, distance_command):
+        script = [(10, self.GEO_A), (10, requests.exceptions.Timeout()), (10, self.GEO_B)]
+        with self.scripted(distance_command, script) as (calls, _):
+            assert distance_command.execute("A,B") == "Error: Distance service (routing) request timed out."
+        assert calls.call_count == 3

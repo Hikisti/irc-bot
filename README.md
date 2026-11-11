@@ -145,7 +145,9 @@ usable low and high for the symbol. It works for stocks, ETFs, indexes and crypt
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
 unless both are a single word, in which case a space works too (`!distance Kokkola Vimpeli`) —
-this avoids silently misreading a multi-word city name as the wrong split.
+this avoids silently misreading a multi-word city name as the wrong split. The routing provider
+sometimes stalls or answers 502, so a request that times out, loses its connection or gets a
+502/503/504 is tried once more, within a 30-second budget for the whole lookup.
 
 `!imdb` looks up a movie or show by title via the OMDb API (a third-party service re-publishing
 IMDb's data - IMDb's own official API is an enterprise-only AWS Data Exchange product, not viable

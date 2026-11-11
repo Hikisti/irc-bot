@@ -1,5 +1,6 @@
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 import requests
@@ -33,6 +34,11 @@ class DistanceCommand(BaseCommand):
     GEOCODE_URL = "https://api.heigit.org/pelias/v1/search"
     DIRECTIONS_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
     REQUEST_TIMEOUT_SECONDS = 10
+    # The provider either answers in under a second or stalls / sends a 502 at once, and a retry usually gets
+    # the fast answer (#45). The budget keeps the worst wait where three 10 s requests already put it.
+    TOTAL_BUDGET_SECONDS = 30
+    MIN_RETRY_SECONDS = 2
+    RETRY_STATUSES = (502, 503, 504)
     SNAP_RADIUS_METERS = 5000  # how far from a city's centre point the nearest road may be
 
     USAGE = (
@@ -63,15 +69,17 @@ class DistanceCommand(BaseCommand):
         if not self.api_key:
             return "Error: ORS_API_KEY is not set in environment."
 
-        origin, error = self._geocode(city1)
+        deadline = time.monotonic() + self.TOTAL_BUDGET_SECONDS
+
+        origin, error = self._geocode(city1, deadline)
         if error:
             return error
 
-        destination, error = self._geocode(city2)
+        destination, error = self._geocode(city2, deadline)
         if error:
             return error
 
-        route, error = self._driving_distance(origin, destination)
+        route, error = self._driving_distance(origin, destination, deadline)
         if error:
             return error
 
@@ -105,20 +113,47 @@ class DistanceCommand(BaseCommand):
             "e.g. !distance New York, Los Angeles"
         )
 
+    # ---- requests -----------------------------------------------------
+
+    def _send(self, method, url, stage, deadline, **kwargs):
+        """One request, tried a second time after a stall, a dropped connection or a 502/503/504 while the
+        command's budget has time for it. Raises what requests raises (an HTTPError for a bad status), so the
+        callers' error handling is unchanged."""
+        for attempt in (1, 2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise requests.exceptions.Timeout(f"{stage} budget spent")
+            timeout = min(self.REQUEST_TIMEOUT_SECONDS, remaining)
+            may_retry = attempt == 1
+            try:
+                resp = method(url, timeout=timeout, **kwargs)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if not (may_retry and deadline - time.monotonic() >= self.MIN_RETRY_SECONDS):
+                    raise
+                print(f"Distance API {stage}: {type(e).__name__}, retrying once")
+                continue
+            if (resp.status_code in self.RETRY_STATUSES and may_retry
+                    and deadline - time.monotonic() >= self.MIN_RETRY_SECONDS):
+                print(f"Distance API {stage}: HTTP {resp.status_code}, retrying once")
+                continue
+            resp.raise_for_status()
+            return resp
+
     # ---- geocoding ----------------------------------------------------
 
-    def _geocode(self, city):
+    def _geocode(self, city, deadline):
         try:
-            resp = self.session.get(
+            resp = self._send(
+                self.session.get,
                 self.GEOCODE_URL,
+                "geocoding",
+                deadline,
                 # Ask for a few candidates, not just the top one - Pelias
                 # ranks by text-match relevance, which can rank a wrongly
                 # matched place above the correct city of that name (see
                 # _best_match() for a real example this was built against).
                 params={"text": city, "size": 5},
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
-            resp.raise_for_status()
         except requests.exceptions.HTTPError as e:
             return None, self._describe_http_error(e, "geocoding")
         except Exception as e:
@@ -203,20 +238,21 @@ class DistanceCommand(BaseCommand):
             return None
         return (origin, destination)[int(found.group(1))]["label"]
 
-    def _driving_distance(self, origin, destination):
+    def _driving_distance(self, origin, destination, deadline):
         try:
             # A city's geocoded point is its centre, which for some cities (Helsinki, San Antonio) is
             # not within the router's default 350 m of a road: "Could not find routable point" (issue
             # #44). The snapping radius can only be set in a POST body (a GET ignores it).
-            resp = self.session.post(
+            resp = self._send(
+                self.session.post,
                 self.DIRECTIONS_URL,
+                "routing",
+                deadline,
                 json={
                     "coordinates": [[origin["lon"], origin["lat"]], [destination["lon"], destination["lat"]]],
                     "radiuses": [self.SNAP_RADIUS_METERS, self.SNAP_RADIUS_METERS],
                 },
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
-            resp.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400:
                 print(f"Distance API routing 400: {e.response.text[:500]}")
