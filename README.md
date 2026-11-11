@@ -49,8 +49,8 @@ python irc_bot.py            # joins the default production channels
 python irc_bot.py --debug    # joins only #bottest123, for local testing
 ```
 
-By default it connects to `irc.quakenet.org`. Server, port, nickname, and channels are set
-in `src/irc_bot.py`.
+By default it connects to `irc.quakenet.org`. Server, port and nickname are set in
+`src/irc_bot.py`, and so are the channels it joins (`PRODUCTION_CHANNELS`; see [Channels](#channels)).
 
 ## Commands
 
@@ -118,12 +118,8 @@ disallowed` (no reason is given: the Liiga feed has none). A goal that was alrea
 started is never retracted, and one that returns after being retracted is announced again. The feed's goal list also holds entries that are not goals - a goal taken off by video review (no scorer) and a
 missed penalty shot (tagged `RL0`, with its shooter as the scorer and the score unchanged) - and the tracker skips both;
 a scored penalty shot (`RL`) is a goal. Uses the unofficial liiga.fi
-JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable. **Only works in
-`#smliiga` and `#veikkaus`** — like `!superpesis`, it's restricted to those channels
-(see `CHANNELS` on the command class); typing it elsewhere is silently ignored. `#veikkaus`
-is an *exclusive* channel: only `!liiga`, `!nhl`, `!stock`, `!crypto` and `!help` work there (`!help` lists just the first four), and posted links get no title reply either.
-Such channels are set in `CommandHandler.EXCLUSIVE_CHANNELS`; every other channel keeps the
-default of all commands.
+JSON API, so no key is needed but the endpoint isn't guaranteed to stay stable.
+**Channel-restricted:** works only in the channels [Channels](#channels) lists for it.
 
 `!liiga next <team> [count]` lists that team's next games from the whole regular-season schedule (one request, kept
 for five minutes): `Next JYP games: Thu 22.10. 18:30 JYP-HPK | Sat 24.10. 17:00 Ässät-JYP | ...`, home team first,
@@ -241,18 +237,14 @@ whole season: regular-season and playoff games still to come (preseason and post
 `Next TOR games: Tue 20.10. 02:30 TOR-SJS | ...`. The clubs and their names come from the standings, so a new team
 needs no change; `new york` and `ny` answer with both New York clubs.
 
-**Only works in `#nhl.fi` and `#veikkaus`** - like `!superpesis`, it's restricted to those channels; typing it
-elsewhere is silently ignored.
+**Channel-restricted:** works only in the channels [Channels](#channels) lists for it.
 
 `!superpesis start` polls today's Miesten Superpesis (pesäpallo, men's top division) matches
 every 30s and announces runs and final results as they happen, the same way `!liiga start` does
 for hockey — stops automatically once all of today's matches have finished, or on
 `!superpesis stop`. `!superpesis next` looks up the next upcoming matchday (today if there's
 still something scheduled and not already finished, otherwise the next date with matches,
-searched day by day up to 21 days ahead) and lists it the same way `!liiga next` does. **Only
-works in `#pesis.fi`** — unlike
-every other command, it's restricted to that one channel (see `"channels"` in
-`command_handler.py`); typing it elsewhere is silently ignored. Uses pesistulokset.fi's
+searched day by day up to 21 days ahead) and lists it the same way `!liiga next` does. **Channel-restricted:** works only in the channels [Channels](#channels) lists for it. Uses pesistulokset.fi's
 unofficial JSON API. Each run announcement names the lyöjä (batter) and etenijä (scorer), in
 that order matching pesistulokset.fi's own column order, when they're different people, plus the
 jakso and vuoropari (batting turn, e.g. "3. lopettava") it happened in, e.g.
@@ -274,7 +266,7 @@ line means that score temporarily trails by the same one run rather than ever ov
 authoritative live-result summary rather than computed locally.
 
 `!ykkospesis` tracks Miesten Ykköspesis (pesäpallo's second division) exactly the same way —
-same commands, same message formats, same `#pesis.fi` restriction — since both share one
+same commands, same message formats, same channel restriction — since both share one
 implementation (`src/pesis_command.py`'s `PesisCommand`, with `SuperpesisCommand`/
 `YkkospesisCommand` as thin per-league subclasses); a fix to one fixes both. Both trackers can
 run at once, including in the same channel, without interfering with each other.
@@ -285,6 +277,27 @@ to public addresses: a link to the machine the bot runs on or to a private netwo
 `192.168.x`, link-local addresses, a name that resolves to one of those, or a redirect that ends at one)
 is ignored without a reply, and a page is read for at most 10 seconds and 2 MB. Wikimedia sites get a
 descriptive User-Agent (their robot policy asks for one); every other site gets a browser one.
+
+## Channels
+
+The bot joins the channels below (`PRODUCTION_CHANNELS` in `src/irc_bot.py`). Every command in the
+[commands table](#commands) works in all of them, and a posted link gets its page title, except that a
+channel-restricted command (one with `CHANNELS` set on its class) works only in the channels listed
+for it here; typing it elsewhere is silently ignored.
+
+| Channel | Channel-restricted commands |
+|---|---|
+| `#smliiga` | `!liiga` |
+| `#valioliiga` | none |
+| `#nakkimuusi` | none |
+| `#pesis.fi` | `!superpesis`, `!ykkospesis` |
+| `#nhl.fi` | `!nhl` |
+
+A channel can also be limited to a few commands, with no link titles either, in
+`CommandHandler.EXCLUSIVE_CHANNELS`. No channel is limited now.
+
+`tests/test_readme.py` checks this section and the commands table against the code, so a channel
+or command change that leaves them behind fails the tests.
 
 ## Tests
 

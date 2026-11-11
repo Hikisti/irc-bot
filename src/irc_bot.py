@@ -9,6 +9,10 @@ import traceback
 from command_handler import CommandHandler
 from url_fetcher import URLFetcher
 
+# The channels the bot joins in production. README.md's "Channels" table describes them, and
+# tests/test_readme.py fails when the two disagree.
+PRODUCTION_CHANNELS = ("#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi")
+
 class IrcBot:
     # mIRC bold/colour/reset/reverse/italic/underline - what a +c channel refuses.
     FORMATTING_CODES = re.compile("[\x02\x03\x0f\x16\x1d\x1f]")
@@ -249,6 +253,6 @@ if __name__ == "__main__":
         print("Running in debug mode: Joining only the default channel.")
         bot = IrcBot()  # No channels argument, so it defaults to ["#bottest123"]
     else:
-        bot = IrcBot(channels=["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi"])
+        bot = IrcBot(channels=list(PRODUCTION_CHANNELS))
 
     bot.connect()

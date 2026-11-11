@@ -98,7 +98,10 @@ not what it is.
    ...)`. A test enforces the `Usage:` prefix for every argument-taking
    command.
 4. Add tests, plus a row in the README commands table and a paragraph if
-   the behavior isn't obvious.
+   the behavior isn't obvious. `tests/test_readme.py` fails if the commands
+   table or the README's Channels section disagrees with the code; a new
+   channel goes in `PRODUCTION_CHANNELS` (`src/irc_bot.py`) and in that
+   table, and channel names appear nowhere else in the README.
 
 ## How new code should look here
 

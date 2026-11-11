@@ -6,6 +6,7 @@ import pytest
 # tests/conftest.py for the sys.path setup that makes this resolve).
 from aijamatto import AijaMattoCommand
 from command_handler import CommandHandler
+from irc_bot import PRODUCTION_CHANNELS
 
 
 @pytest.fixture
@@ -254,8 +255,6 @@ class TestChannelRestriction:
 
 
 
-# The channels the bot actually joins (see src/irc_bot.py).
-PRODUCTION_CHANNELS = ["#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi"]
 GENERAL_COMMANDS = ["!weather", "!stock", "!crypto", "!sähkö", "!time", "!f1", "!distance", "!imdb", "!bjorck"]
 
 
@@ -340,78 +339,69 @@ class TestUsageConvention:
 
 
 class TestExclusiveChannel:
-    """#veikkaus allows only !liiga, !nhl, !stock and !crypto (and !help, which lists just
-    those there). Every other channel keeps the default rules."""
+    """A channel in EXCLUSIVE_CHANNELS allows only its listed commands (and !help lists just those
+    there); every other channel keeps the default rules. None is set in production (the last one,
+    #veikkaus, went with the bot leaving it), so the rule is checked on a stand-in channel."""
+
+    EXCLUSIVE = "#exclusive"
+
+    @pytest.fixture(autouse=True)
+    def exclusive_channel(self, handler):
+        handler.EXCLUSIVE_CHANNELS = {self.EXCLUSIVE: ("!stock", "!crypto", "!liiga", "!help")}
 
     def _run(self, handler, channel, message):
         bot = MagicMock()
         handler.handle_command(bot, "nick", channel, message)
         return bot
 
-    def test_liiga_is_dispatched_in_veikkaus(self, handler):
-        mock = MagicMock()
-        mock.execute.return_value = "ok"
-        replace_command(handler, "!liiga", mock)
-
-        self._run(handler, "#veikkaus", "!liiga start")
-
-        mock.execute.assert_called_once()
-        assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
-
-    @pytest.mark.parametrize("message", [
-        "!weather helsinki", "!w helsinki", "!sähkö", "!sahko",
-        "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck",
-        "!superpesis start",
-    ])
-    def test_every_other_command_is_ignored_in_veikkaus(self, handler, message):
-        bot = self._run(handler, "#veikkaus", message)
-        bot.send_message.assert_not_called()
-
-    def test_other_commands_are_not_even_executed_in_veikkaus(self, handler):
-        mock = MagicMock()
-        replace_command(handler, "!weather", mock)
-        self._run(handler, "#veikkaus", "!weather helsinki")
-        mock.execute.assert_not_called()
-
-    def test_nhl_is_dispatched_in_veikkaus(self, handler):
-        mock = MagicMock()
-        mock.execute.return_value = "ok"
-        replace_command(handler, "!nhl", mock)
-
-        self._run(handler, "#veikkaus", "!nhl start")
-
-        mock.execute.assert_called_once()
-        assert mock.execute.call_args.kwargs["channel"] == "#veikkaus"
-
     @pytest.mark.parametrize("alias, message", [("!stock", "!stock aapl"), ("!crypto", "!crypto btc")])
-    def test_stock_and_crypto_are_dispatched_in_veikkaus(self, handler, alias, message):
+    def test_a_listed_command_is_dispatched(self, handler, alias, message):
         mock = MagicMock()
         mock.execute.return_value = "ok"
         replace_command(handler, alias, mock)
 
-        bot = self._run(handler, "#veikkaus", message)
+        bot = self._run(handler, self.EXCLUSIVE, message)
 
         mock.execute.assert_called_once()
-        bot.send_message.assert_called_once_with("#veikkaus", "ok")
+        bot.send_message.assert_called_once_with(self.EXCLUSIVE, "ok")
 
-    def test_help_works_in_veikkaus_and_lists_only_its_four_commands(self, handler):
-        bot = self._run(handler, "#veikkaus", "!help")
-        assert bot.send_message.call_args[0] == (
-            "#veikkaus",
-            "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next [team [count]] | !nhl start|stop|next [team [count]]|now|results")
-
-    def test_channel_name_matching_is_case_insensitive(self, handler):
-        assert handler.help_text("#Veikkaus") == "Commands: !stock <ticker> | !crypto <coin> | !liiga start|stop|next [team [count]] | !nhl start|stop|next [team [count]]|now|results"
-        bot = self._run(handler, "#VEIKKAUS", "!weather helsinki")
+    @pytest.mark.parametrize("message", [
+        "!weather helsinki", "!w helsinki", "!sähkö", "!sahko",
+        "!time", "!f1", "!distance a b", "!imdb terminator", "!bjorck",
+        "!superpesis start", "!nhl start",
+    ])
+    def test_every_other_command_is_ignored(self, handler, message):
+        bot = self._run(handler, self.EXCLUSIVE, message)
         bot.send_message.assert_not_called()
 
-    def test_liiga_still_works_in_smliiga_and_general_commands_stay_out_of_it_only_via_veikkaus(self, handler):
+    def test_other_commands_are_not_even_executed(self, handler):
+        mock = MagicMock()
+        replace_command(handler, "!weather", mock)
+        self._run(handler, self.EXCLUSIVE, "!weather helsinki")
+        mock.execute.assert_not_called()
+
+    def test_listing_a_channel_restricted_command_does_not_open_it_outside_its_own_channels(self, handler):
+        mock = MagicMock()
+        replace_command(handler, "!liiga", mock)
+        self._run(handler, self.EXCLUSIVE, "!liiga start")
+        mock.execute.assert_not_called()
+
+    def test_help_lists_only_what_works_there(self, handler):
+        bot = self._run(handler, self.EXCLUSIVE, "!help")
+        assert bot.send_message.call_args[0] == (self.EXCLUSIVE, "Commands: !stock <ticker> | !crypto <coin>")
+
+    def test_channel_name_matching_is_case_insensitive(self, handler):
+        assert handler.help_text("#EXCLUSIVE") == "Commands: !stock <ticker> | !crypto <coin>"
+        bot = self._run(handler, "#Exclusive", "!weather helsinki")
+        bot.send_message.assert_not_called()
+
+    def test_other_channels_keep_the_default_rules(self, handler):
         assert "!liiga start|stop|next [team [count]]" in handler.help_text("#smliiga")
         assert "!weather" in handler.help_text("#smliiga")
         assert "!liiga" not in handler.help_text("#nakkimuusi")
 
     def test_help_and_dispatch_agree_for_every_command_in_every_channel(self, handler):
-        for channel in PRODUCTION_CHANNELS:
+        for channel in (*PRODUCTION_CHANNELS, self.EXCLUSIVE):
             listed = handler.help_text(channel)
             for command in handler._commands:
                 allowed = handler.is_allowed(command, channel)

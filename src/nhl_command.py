@@ -44,7 +44,7 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
     """
 
     ALIASES = ("!nhl",)
-    CHANNELS = ("#nhl.fi", "#veikkaus")
+    CHANNELS = ("#nhl.fi",)
 
     DISPLAY_NAME = "NHL"
     COMMAND_NAME = "!nhl"

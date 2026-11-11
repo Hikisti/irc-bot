@@ -51,9 +51,7 @@ class CommandHandler:
     # commands, subject to their own CHANNELS, plus link titles. To open
     # one more command up in such a channel, add its alias here (and the
     # channel to its own CHANNELS if it has one).
-    EXCLUSIVE_CHANNELS = {
-        "#veikkaus": ("!liiga", "!nhl", "!stock", "!crypto", "!help"),
-    }
+    EXCLUSIVE_CHANNELS = {}
 
     def __init__(self):
         self.commands_by_alias = {}

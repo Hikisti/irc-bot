@@ -79,44 +79,34 @@ class TestProcessMessage:
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
 class TestUrlTitlesInExclusiveChannel:
-    """#veikkaus only answers its listed commands - a posted link must not
-    get a title reply there, while every other channel still does."""
+    """A channel in EXCLUSIVE_CHANNELS only answers its listed commands - a posted link must not
+    get a title reply there, while every other channel still does. None is set in production, so
+    a stand-in channel is used."""
 
-    def test_link_in_veikkaus_gets_no_title_reply(self, bot):
-        bot.channels = ["#veikkaus", "#nakkimuusi"]
+    @pytest.fixture(autouse=True)
+    def exclusive_channel(self, bot):
+        bot.channels = ["#exclusive", "#nakkimuusi"]
+        bot.command_handler.EXCLUSIVE_CHANNELS = {"#exclusive": ("!stock", "!help")}
         bot.url_fetcher = MagicMock()
 
-        bot.process_message(":alice!a@host PRIVMSG #veikkaus :look http://example.com/x")
-
+    def test_link_in_an_exclusive_channel_gets_no_title_reply(self, bot):
+        bot.process_message(":alice!a@host PRIVMSG #exclusive :look http://example.com/x")
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
     def test_channel_match_ignores_case(self, bot):
-        bot.channels = ["#VEIKKAUS"]
-        bot.url_fetcher = MagicMock()
-
-        bot.process_message(":alice!a@host PRIVMSG #VEIKKAUS :http://example.com/x")
-
+        bot.process_message(":alice!a@host PRIVMSG #EXCLUSIVE :http://example.com/x")
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
     def test_link_in_a_normal_channel_still_gets_its_title(self, bot):
-        bot.channels = ["#veikkaus", "#nakkimuusi"]
-        bot.url_fetcher = MagicMock()
-
         bot.process_message(":alice!a@host PRIVMSG #nakkimuusi :look http://example.com/x")
-
         bot.url_fetcher.detect_and_fetch.assert_called_once_with(
             "alice", "#nakkimuusi", "look http://example.com/x"
         )
 
-    def test_liiga_command_still_works_in_veikkaus(self, bot):
-        bot.channels = ["#veikkaus"]
+    def test_a_command_still_reaches_the_handler_in_an_exclusive_channel(self, bot):
         bot.command_handler = MagicMock()
-        bot.url_fetcher = MagicMock()
-
-        bot.process_message(":alice!a@host PRIVMSG #veikkaus :!liiga next")
-
+        bot.process_message(":alice!a@host PRIVMSG #exclusive :!stock aapl")
         bot.command_handler.handle_command.assert_called_once()
-
 
 class TestSendRaw:
     def test_sends_the_message_with_crlf(self, bot):
