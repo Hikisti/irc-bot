@@ -202,8 +202,9 @@ Penguins) was disallowed (offside challenge)` (clock and period right after the 
 `GOAL:` line). The reason comes from the
 stoppage the feed records near the goal: a coach's challenge (offside, goaltender interference, or just
 "challenge"; the code can sit in either of the stoppage's two reason fields) or a video review (`... was disallowed (video review)`); the nearest one wins, and a challenge that
-failed, which is followed by a bench penalty, is not taken as a reason. A goal with no such stoppage in the feed
-is retracted without a reason.
+failed, which is followed by a bench penalty, is not taken as a reason. A challenge entry can reach the feed after
+the goal has left it, so a goal with no such stoppage yet waits up to three more polls (about 90 s) for one, and is
+then retracted with whatever the feed shows, without a reason if there is still none.
 If a new goal takes the running score of a goal that has only just left the feed (seen when the feed corrects a wrong
 first scorer: the first entry disappears and a new one appears seconds later), nothing is retracted: the new goal is
 announced and the first line stays, since the goal was not disallowed. Goals that were already in the feed when

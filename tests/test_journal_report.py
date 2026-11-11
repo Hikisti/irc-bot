@@ -475,6 +475,30 @@ class TestLevelFinal:
         events = [jr.parse_line(line("03:00:08", text), YEAR) for text in capsys.readouterr().out.splitlines()]
         assert [e["kind"] for e in events if e and e["kind"] == "taken_back"] == ["taken_back"]
 
+    def test_the_reason_wait_line_is_parsed_counted_and_listed(self):
+        text_line = "NHL: game 2026020123: goal 05:25 3rd by Jack Hughes is gone, no reason in the feed yet, waiting up to 3 more poll(s)"
+        e = jr.parse_line(line("01:41:02", text_line), YEAR)
+        assert (e["kind"], e["gid"], e["label"], e["name"], e["n"]) == ("reason_wait", "2026020123", "05:25 3rd", "Jack Hughes", "3")
+        text = jr.render(report(line("01:41:02", text_line)))
+        assert "a retraction held back for a reason not yet in the feed (#64): 1 time(s)" in text
+        assert "game 2026020123: 05:25 3rd by Jack Hughes" in text
+
+    def test_the_bots_own_reason_wait_line_round_trips(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.nhl_test_helpers import goal_play, make_pbp, roster_spot
+        nhl = NHLCommand()
+        goal = goal_play(event_id=1, event_owner_team_id=20, scoring_player_id=1, home_score=0, away_score=1,
+                         time_in_period="05:25", period_number=3)
+        roster = [roster_spot(1, "Jack", "Hughes")]
+        record = {}
+        for plays in [[goal]] + [[]] * 4:
+            faceoff = {"typeDescKey": "faceoff", "eventId": 900, "periodDescriptor": {"number": 3}, "timeInPeriod": "01:00"}
+            pbp = make_pbp(game_id=7, home_id=10, away_id=20, plays=plays + [faceoff], roster=roster)
+            _, _, record = nhl._resolve_goals(pbp, record)
+        events = [jr.parse_line(line("01:41:02", text), YEAR) for text in capsys.readouterr().out.splitlines()]
+        assert [(e["kind"], e["label"], e["name"]) for e in events if e and e["kind"] == "reason_wait"] == \
+            [("reason_wait", "05:25 3rd", "Jack Hughes")]
+
     def test_the_held_conflict_line_is_parsed_counted_and_listed(self):
         text_line = "NHL: game 2026020205: goal (team 68, 3-4) also listed as event [1141] while event [1142] is listed under another score, not announcing it yet"
         e = jr.parse_line(line("01:50:51", text_line), YEAR)

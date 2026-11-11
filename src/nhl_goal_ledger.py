@@ -21,6 +21,9 @@ class NHLGoalLedgerMixin:
     # enough to still be news. Goals have been seen to vanish for good
     # 101-281 s after appearing.
     RETRACT_AFTER_MISSING_POLLS = 4
+    # A retraction that would go out without a reason waits up to this many more polls for one: a challenge
+    # stoppage has reached the feed after the goal left it (2 of 9 retractions to 2026-11-11, issue #64).
+    REASON_WAIT_POLLS = 3
 
     # How far before/after a removed goal's clock a challenge stoppage may
     # sit and still be taken as its explanation (seen: from 31 s before the
@@ -184,9 +187,17 @@ class NHLGoalLedgerMixin:
             if key in by_key or rec["posted"] is None or rec["retracted"] or broken:
                 continue
             rec["missing"] += 1
-            if rec["missing"] >= self.RETRACT_AFTER_MISSING_POLLS:
-                rec["retracted"] = True
-                gone.append(rec["posted"])
+            if rec["missing"] < self.RETRACT_AFTER_MISSING_POLLS:
+                continue
+            if (rec["missing"] < self.RETRACT_AFTER_MISSING_POLLS + self.REASON_WAIT_POLLS
+                    and self._retraction_reason(pbp, rec["posted"]) is None):
+                if rec["missing"] == self.RETRACT_AFTER_MISSING_POLLS:
+                    posted = rec["posted"]
+                    print(f"NHL: game {pbp.get('id')}: goal {posted['label']} by {posted['scorer_name']} is gone, "
+                          f"no reason in the feed yet, waiting up to {self.REASON_WAIT_POLLS} more poll(s)")
+                continue
+            rec["retracted"] = True
+            gone.append(rec["posted"])
 
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
         return sorted(new, key=lambda goal: position[id(goal)]), gone, record
@@ -238,7 +249,7 @@ class NHLGoalLedgerMixin:
         home = self._team_name(pbp.get("homeTeam") or {})
         away = self._team_name(pbp.get("awayTeam") or {})
         home_score, away_score = self._current_score(pbp)
-        reason = self._challenge_reason(pbp, posted.get("period"), self._clock_seconds(posted.get("clock")))
+        reason = self._retraction_reason(pbp, posted)
         why = f" ({reason})" if reason else ""
         # Same shape as the GOAL: line (score, then clock and period). An earlier
         # "the 11:47 3rd goal by ..." was read as "the 3rd goal" - the 3rd is the period.
@@ -247,6 +258,9 @@ class NHLGoalLedgerMixin:
             f"{self.NO_GOAL_PREFIX} {BOLD}{home} {home_score}-{away_score} {away}{RESET}{when}"
             f" | {posted['scorer_name']} ({posted['team']}) was disallowed{why}"
         )
+
+    def _retraction_reason(self, pbp, posted):
+        return self._challenge_reason(pbp, posted.get("period"), self._clock_seconds(posted.get("clock")))
 
     def _current_score(self, pbp) -> tuple:
         """The score as the remaining goals show it: the running score of the

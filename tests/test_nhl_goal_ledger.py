@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from irc_format import RESET
+from nhl_goal_ledger import NHLGoalLedgerMixin
 from tests.nhl_test_helpers import (
     goal_play, make_pbp, make_schedule_game, penalty_play, review_play, roster_spot,
     seeded, stoppage_play,
@@ -276,6 +277,8 @@ class TestRetraction:
     (issue #13, stage 1). Cases are the real ones seen over three nights."""
 
     HOME, AWAY = 10, 20
+    # A goal gone with no reason in the feed is retracted after this many missed polls (#64).
+    NO_REASON_MISSES = NHLGoalLedgerMixin.RETRACT_AFTER_MISSING_POLLS + NHLGoalLedgerMixin.REASON_WAIT_POLLS
 
     def _pbp(self, *plays):
         roster = [roster_spot(i, f"P{i}", "X") for i in range(1, 9)]
@@ -323,14 +326,14 @@ class TestRetraction:
         lines = self._run(nhl_command, [self._pbp(goal)] + gap + [self._pbp(goal)] + gap)
         assert self._retractions(lines) == []  # 3 + 3 missed polls, never 4 in a row
 
-    def test_a_goal_gone_for_four_polls_is_retracted_once(self, nhl_command):
+    def test_a_goal_gone_for_good_is_retracted_once(self, nhl_command):
         goal = self._goal()
         lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 7)
         assert len(self._retractions(lines)) == 1
 
     def test_the_retraction_names_the_goal_and_the_current_score(self, nhl_command):
         goal = self._goal(scorer=1)
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4)
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * self.NO_REASON_MISSES)
         text = self._retractions(lines)[0]
         assert "NO GOAL:" in text
         assert "Carolina Hurricanes 0-0 Florida Panthers" in text
@@ -346,7 +349,7 @@ class TestRetraction:
 
     def test_a_goal_that_returns_after_being_retracted_is_announced_again(self, nhl_command):
         goal = self._goal()
-        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4 + [self._pbp(goal)])
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * self.NO_REASON_MISSES + [self._pbp(goal)])
         assert len(self._retractions(lines)) == 1 and len(self._goals(lines)) == 2
 
     def test_fetch_failures_do_not_count_as_missing(self, nhl_command):
@@ -399,14 +402,14 @@ class TestRetraction:
 
     def test_a_goal_after_one_that_was_retracted_on_its_own_is_announced_and_nothing_else_is_said(self, nhl_command):
         disallowed, next_goal = self._goal(1, scorer=1), self._goal(2, scorer=2, time_in_period="15:00")
-        feeds = [self._pbp(disallowed)] + [self._quiet()] * 4 + [self._pbp(next_goal)]
+        feeds = [self._pbp(disallowed)] + [self._quiet()] * self.NO_REASON_MISSES + [self._pbp(next_goal)]
         lines = self._run(nhl_command, feeds)
         assert len(self._retractions(lines)) == 1 and len(self._goals(lines)) == 2  # one retraction, from the misses
 
     def test_two_goals_gone_at_once_while_another_goal_is_still_there_give_two_retractions(self, nhl_command):
         a, b = self._goal(1, away=1), self._goal(2, home=1, away=1, team=self.HOME, scorer=2, time_in_period="08:00")
         keep = self._goal(3, home=1, away=2, scorer=3, time_in_period="12:00")
-        lines = self._run(nhl_command, [self._pbp(a, b, keep)] + [self._quiet(keep)] * 4)
+        lines = self._run(nhl_command, [self._pbp(a, b, keep)] + [self._quiet(keep)] * self.NO_REASON_MISSES)
         assert len(self._retractions(lines)) == 2
 
     # -- a broken feed is not a run of disallowed goals ---------------------------------
@@ -427,12 +430,12 @@ class TestRetraction:
 
     def test_polls_skipped_as_broken_do_not_reset_the_count(self, nhl_command):
         goal = self._goal()
-        feeds = [self._pbp(goal)] + [self._quiet()] * 2 + [self._pbp()] * 3 + [self._quiet()] * 2
-        assert len(self._retractions(self._run(nhl_command, feeds))) == 1  # 2 + 2 real misses
+        feeds = [self._pbp(goal)] + [self._quiet()] * 2 + [self._pbp()] * 3 + [self._quiet()] * 5
+        assert len(self._retractions(self._run(nhl_command, feeds))) == 1  # 2 + 5 real misses
 
     def test_the_label_of_an_overtime_goal(self, nhl_command):
         goal = self._goal(period_number=4, period_type="OT", time_in_period="03:18")
-        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 4))[0]
+        text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * self.NO_REASON_MISSES))[0]
         assert f"{RESET} 03:18 OT | P1 X" in text
 
     # -- the score shown ------------------------------------------------------------
@@ -441,10 +444,10 @@ class TestRetraction:
         first = self._goal(1, home=1, away=0, team=self.HOME, scorer=2, time_in_period="03:00")
         removed = self._goal(2, home=1, away=1, scorer=1)
         later = self._goal(3, home=2, away=1, team=self.HOME, scorer=3, time_in_period="09:00")
-        feeds = [self._pbp(first, removed)] + [self._quiet(first)] * 4
+        feeds = [self._pbp(first, removed)] + [self._quiet(first)] * self.NO_REASON_MISSES
         assert "Carolina Hurricanes 1-0 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
         # a later goal is still there when the earlier one is retracted: the score shown is that goal's
-        feeds = [self._pbp(first, removed, later)] + [self._pbp(first, later)] * 4
+        feeds = [self._pbp(first, removed, later)] + [self._pbp(first, later)] * self.NO_REASON_MISSES
         assert "Carolina Hurricanes 2-1 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
 
     def test_without_a_running_score_the_header_score_is_used(self, nhl_command):
@@ -452,14 +455,14 @@ class TestRetraction:
         other = self._goal(2, home=None, away=None, scorer=2, time_in_period="08:00")
         pbp = self._pbp(other)
         pbp["homeTeam"]["score"], pbp["awayTeam"]["score"] = 4, 5
-        feeds = [self._pbp(goal, other)] + [pbp] * 4
+        feeds = [self._pbp(goal, other)] + [pbp] * self.NO_REASON_MISSES
         assert "Carolina Hurricanes 4-5 Florida Panthers" in self._retractions(self._run(nhl_command, feeds))[0]
 
     # -- the explanation ----------------------------------------------------------------
 
     def _reason_text(self, nhl_command, *extra_plays):
         goal = self._goal(time_in_period="05:25", period_number=3)
-        return self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp(*extra_plays)] * 4))[0]
+        return self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp(*extra_plays)] * self.NO_REASON_MISSES))[0]
 
     def test_offside_challenge_even_half_a_minute_before_the_goals_clock(self, nhl_command):
         # real case: the stoppage sat at 04:54, the goal at 05:25
@@ -564,10 +567,49 @@ class TestRetraction:
         assert not self._reason_text(nhl_command, stoppage_play("chlg-vis-off-side", "05:25", 3),
                                      penalty_play("delaying-game-unsuccessful-challenge", "05:25", 3)).endswith(")")
 
+    # -- waiting for the explanation (#64) ------------------------------------------------
+
+    def _polls_until_retracted(self, nhl_command, feeds):
+        """The 1-based number of the missed poll that posted the NO GOAL: line, or None."""
+        goal = self._goal(time_in_period="05:25", period_number=3)
+        for n in range(1, len(feeds) + 1):
+            nhl_command._channels.clear()
+            if self._retractions(self._run(nhl_command, [self._pbp(goal)] + feeds[:n])):
+                return n
+        return None
+
+    def test_a_reason_already_in_the_feed_is_not_waited_for(self, nhl_command):
+        challenge = self._pbp(stoppage_play("chlg-vis-off-side", "05:20", 3))
+        assert self._polls_until_retracted(nhl_command, [challenge] * 8) == 4
+
+    def test_with_no_reason_the_retraction_waits_three_more_polls_and_goes_out_without_one(self, nhl_command, capsys):
+        assert self._polls_until_retracted(nhl_command, [self._quiet()] * 8) == 7
+        capsys.readouterr()
+        lines = self._run(nhl_command, [self._pbp(self._goal())] + [self._quiet()] * 8)
+        assert self._retractions(lines)[0].endswith("was disallowed")
+        out = capsys.readouterr().out
+        assert out.count("is gone, no reason in the feed yet, waiting up to 3 more poll(s)") == 1
+        assert "goal 05:25 3rd by P1 X is gone" in out
+
+    def test_a_challenge_that_reaches_the_feed_during_the_wait_is_the_reason(self, nhl_command):
+        # real case (2026-10-22): two offside challenges entered the feed after their goals had left it
+        challenge = self._pbp(stoppage_play("chlg-hm-off-side", "05:20", 3))
+        feeds = [self._quiet()] * 5 + [challenge] * 3
+        assert self._polls_until_retracted(nhl_command, feeds) == 6
+        nhl_command._channels.clear()
+        lines = self._run(nhl_command, [self._pbp(self._goal())] + feeds)
+        assert len(self._retractions(lines)) == 1
+        assert self._retractions(lines)[0].endswith("was disallowed (offside challenge)")
+
+    def test_a_goal_back_during_the_wait_is_neither_retracted_nor_announced_again(self, nhl_command):
+        goal = self._goal()
+        lines = self._run(nhl_command, [self._pbp(goal)] + [self._quiet()] * 5 + [self._pbp(goal)] * 2)
+        assert self._retractions(lines) == [] and len(self._goals(lines)) == 1
+
     def test_a_goal_with_an_unreadable_clock_gets_no_explanation(self, nhl_command):
         goal = self._goal(time_in_period="")
         text = self._retractions(self._run(nhl_command, [self._pbp(goal)] + [self._pbp(
-            stoppage_play("chlg-hm-off-side", "05:25", 3))] * 4))[0]
+            stoppage_play("chlg-hm-off-side", "05:25", 3))] * self.NO_REASON_MISSES))[0]
         assert not text.endswith(")")
 
     # -- what is kept for the corrections that build on this -------------------------------

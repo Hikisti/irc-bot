@@ -57,6 +57,8 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
     ("final_changed", re.compile(r"^NHL: game (?P<gid>\d+): the score changed between the first FINAL poll and the "
                                  r"confirming one: (?P<before>\S+) -> (?P<after>\S+)$")),
     ("taken_back", re.compile(r"^NHL: game (?P<gid>\d+): the feed took the game back from final after its FINAL line$")),
+    ("reason_wait", re.compile(r"^NHL: game (?P<gid>\d+): goal (?P<label>.+?) by (?P<name>.+?) is gone, "
+                               r"no reason in the feed yet, waiting up to (?P<n>\d+) more poll\(s\)$")),
     ("held_conflict", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) also listed as event .*, "
                                  r"not announcing it yet$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
@@ -363,6 +365,10 @@ def render(report):
         out.append(f"  a game the feed took back from final after its FINAL line (#73): {len(ev['taken_back'])} time(s)")
         for e in ev["taken_back"]:
             out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}")
+    if ev["reason_wait"]:
+        out.append(f"  a retraction held back for a reason not yet in the feed (#64): {len(ev['reason_wait'])} time(s)")
+        for e in ev["reason_wait"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: {e['label']} by {e['name']}")
     if ev["held_conflict"]:
         out.append(f"  a second goal at the score of an announced one held back while the announced one was still "
                    f"listed (#68): {len(ev['held_conflict'])} time(s)")
