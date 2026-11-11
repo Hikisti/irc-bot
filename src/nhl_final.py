@@ -27,7 +27,8 @@ class NHLFinalMixin:
     # The report's attendance figure shows up 61-212 s after the final horn in
     # about two games of three (17 games on two nights, issue #8; one more took
     # longer than 240 s); a missing figure is retried every poll for this long.
-    ATTENDANCE_RETRY_SECONDS = 420
+    # 420 s missed 7 games on four nights (issue #65), each one there the next day.
+    ATTENDANCE_RETRY_SECONDS = 900
 
     FINAL_SCORE_MAX_AGE_SECONDS = 3
 
