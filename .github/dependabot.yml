@@ -5,3 +5,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+  # The workflows pin each Action to a commit hash (#46); this keeps those pins current. Monthly and grouped,
+  # so at most one pull request a month for all of them: every merge to main deploys and restarts the bot.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
