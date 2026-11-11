@@ -220,6 +220,14 @@ consistent, deliberate discipline - keep following it:
   (`nhl`, `liiga`, `pesis`, `imdb`; when none fits, the priority label alone);
   the pinned tracking issue holds the order of work, so update its checklist
   when a priority changes.
+- An issue's description says where it stands now, not where it stood when
+  it was opened. Whenever its state changes (fixed, deployed, seen live,
+  parked, decided), rewrite its `## Status` section in the same session -
+  a comment alone is not enough, since the description is what gets read -
+  and update its line in the tracking issue (tick it when the issue closes,
+  and drop it from any waiting list there). Before starting work on an
+  issue, check `git log --grep="#N"` as well: a description that has
+  fallen behind once made finished work look undone.
 - Only commit when explicitly asked. Never push proactively either - see
   below for why that's a bigger deal here than in most repos.
 
