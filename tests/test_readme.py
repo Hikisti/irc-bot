@@ -1,5 +1,5 @@
-"""README.md's commands table and Channels section, checked against the code: the aliases every command
-answers to, the channels the bot joins, and which channel-restricted command works where. A command or
+"""README.md's commands table and Channels section, checked against the code and channels.toml: the
+aliases every command answers to, the channels the bot joins, and what each adds to the default set. A command or
 channel change that leaves the README behind fails here (the bot left a channel once and the README
 went on naming it in five places)."""
 import os
@@ -8,7 +8,6 @@ import re
 import pytest
 
 from command_handler import CommandHandler
-from irc_bot import PRODUCTION_CHANNELS
 
 README = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md")
 NO_COMMANDS = "none"
@@ -50,37 +49,39 @@ class TestCommandsTable:
 
 class TestChannelsSection:
     def _table(self, readme):
-        """{channel: [channel-restricted commands]} as the README's Channels table states them."""
+        """{channel: [commands added to the default set]} as the README's Channels table states them."""
         table = {}
         for cells in table_rows(section(readme, "Channels")):
             (channel,) = code_spans(cells[0])
             table[channel] = [] if cells[1] == NO_COMMANDS else code_spans(cells[1])
         return table
 
-    def test_the_table_lists_exactly_the_channels_the_bot_joins(self, readme):
-        assert sorted(self._table(readme)) == sorted(PRODUCTION_CHANNELS)
+    def test_the_table_lists_exactly_the_channels_the_bot_joins(self, readme, handler):
+        assert list(self._table(readme)) == list(handler.channel_config.channels)
 
-    def test_each_channels_restricted_commands_are_the_ones_the_code_allows_there(self, readme, handler):
-        restricted = [c for c in handler._commands if c.CHANNELS]
+    def test_each_channels_additions_are_the_ones_in_channels_toml(self, readme, handler):
+        rules = handler.channel_config.rules
         for channel, documented in self._table(readme).items():
-            allowed = [c.ALIASES[0] for c in restricted if handler.is_allowed(c, channel)]
-            assert sorted(documented) == sorted(allowed), channel
+            assert sorted(documented) == sorted(rules[channel].add), channel
 
-    def test_no_command_is_restricted_to_a_channel_the_bot_does_not_join(self, handler):
-        joined = {c.lower() for c in PRODUCTION_CHANNELS}
-        for command in handler._commands:
-            stray = [c for c in command.CHANNELS or () if c.lower() not in joined]
-            assert not stray, f"{command.ALIASES[0]} is restricted to {stray}, which the bot does not join"
+    def test_the_default_set_is_every_command_but_the_channel_only_ones_as_the_section_says(self, handler):
+        general = {c.ALIASES[0] for c in handler._commands if not c.CHANNEL_ONLY}
+        assert handler.channel_config.default_commands == general
+        assert handler.channel_config.default_link_titles is True
 
-    def test_exclusive_channels_are_joined_and_named_in_the_section(self, readme, handler):
+    def test_a_channel_off_the_default_rules_is_named_in_the_section(self, readme, handler):
         body = section(readme, "Channels")
-        if not handler.EXCLUSIVE_CHANNELS:
-            assert "No channel is limited now." in body
+        config = handler.channel_config
+        unusual = {
+            channel: (*rule.remove, *(rule.only or ()))
+            for channel, rule in config.rules.items()
+            if rule.remove or rule.only is not None or rule.link_titles != config.default_link_titles
+        }
+        if not unusual:
+            assert "No channel does now." in body
             return
-        assert "No channel is limited now." not in body
-        joined = {c.lower() for c in PRODUCTION_CHANNELS}
-        for channel, aliases in handler.EXCLUSIVE_CHANNELS.items():
-            assert channel in joined, f"exclusive channel {channel} is not joined"
+        assert "No channel does now." not in body
+        for channel, aliases in unusual.items():
             assert f"`{channel}`" in body and all(f"`{alias}`" in body for alias in aliases), channel
 
     def test_no_other_part_of_the_readme_names_a_channel(self, readme):

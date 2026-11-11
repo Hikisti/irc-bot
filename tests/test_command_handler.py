@@ -5,8 +5,8 @@ import pytest
 # Bare import to match command_handler.py's own sibling-import style (see
 # tests/conftest.py for the sys.path setup that makes this resolve).
 from aijamatto import AijaMattoCommand
+from channel_config import parse as parse_channels
 from command_handler import CommandHandler
-from irc_bot import PRODUCTION_CHANNELS
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def handler(monkeypatch, tmp_path):
 
 def replace_command(handler, alias, mock_command):
     """Swap the real command object registered for `alias` with a mock,
-    carrying over its ALLOW_ARGS/CHANNELS/needs_irc_context so
+    carrying over its ALIASES/ALLOW_ARGS/CHANNEL_ONLY/needs_irc_context so
     CommandHandler enforces the same restrictions and dispatch shape
     against the mock - and swap every OTHER alias pointing at that same
     real instance too (e.g. !weather and !w both need to route to the
@@ -37,8 +37,9 @@ def replace_command(handler, alias, mock_command):
     if real_command is None:
         raise AssertionError(f"No command registered for alias {alias}")
 
+    mock_command.ALIASES = real_command.ALIASES
     mock_command.ALLOW_ARGS = real_command.ALLOW_ARGS
-    mock_command.CHANNELS = real_command.CHANNELS
+    mock_command.CHANNEL_ONLY = real_command.CHANNEL_ONLY
     mock_command.needs_irc_context = real_command.needs_irc_context
     for other_alias, command in list(handler.commands_by_alias.items()):
         if command is real_command:
@@ -310,7 +311,7 @@ class TestHelp:
     def test_help_fits_on_one_irc_line_in_every_production_channel(self, handler):
         # IRC lines cap at 512 bytes including the protocol framing the
         # server adds when relaying - stay well clear of it.
-        for channel in PRODUCTION_CHANNELS:
+        for channel in handler.channel_config.channels:
             text = handler.help_text(channel)
             assert len(text.encode("utf-8")) <= 400, f"{channel}: {len(text)} chars"
 
@@ -339,15 +340,22 @@ class TestUsageConvention:
 
 
 class TestExclusiveChannel:
-    """A channel in EXCLUSIVE_CHANNELS allows only its listed commands (and !help lists just those
-    there); every other channel keeps the default rules. None is set in production (the last one,
-    #veikkaus, went with the bot leaving it), so the rule is checked on a stand-in channel."""
+    """A channel with its own set (`only` in channels.toml) allows only those commands (and !help
+    lists just those there); every other channel keeps the default rules. No channel has one in
+    production, so the rule is checked on a stand-in channel."""
 
     EXCLUSIVE = "#exclusive"
 
     @pytest.fixture(autouse=True)
     def exclusive_channel(self, handler):
-        handler.EXCLUSIVE_CHANNELS = {self.EXCLUSIVE: ("!stock", "!crypto", "!liiga", "!help")}
+        handler.channel_config = parse_channels({
+            "debug": {"channel": "#bottest123"},
+            "channels": {
+                "#smliiga": {"add": ["!liiga"]},
+                "#nakkimuusi": {},
+                self.EXCLUSIVE: {"only": ["!stock", "!crypto"], "link_titles": False},
+            },
+        }, handler._commands)
 
     def _run(self, handler, channel, message):
         bot = MagicMock()
@@ -380,12 +388,6 @@ class TestExclusiveChannel:
         self._run(handler, self.EXCLUSIVE, "!weather helsinki")
         mock.execute.assert_not_called()
 
-    def test_listing_a_channel_restricted_command_does_not_open_it_outside_its_own_channels(self, handler):
-        mock = MagicMock()
-        replace_command(handler, "!liiga", mock)
-        self._run(handler, self.EXCLUSIVE, "!liiga start")
-        mock.execute.assert_not_called()
-
     def test_help_lists_only_what_works_there(self, handler):
         bot = self._run(handler, self.EXCLUSIVE, "!help")
         assert bot.send_message.call_args[0] == (self.EXCLUSIVE, "Commands: !stock <ticker> | !crypto <coin>")
@@ -401,7 +403,7 @@ class TestExclusiveChannel:
         assert "!liiga" not in handler.help_text("#nakkimuusi")
 
     def test_help_and_dispatch_agree_for_every_command_in_every_channel(self, handler):
-        for channel in (*PRODUCTION_CHANNELS, self.EXCLUSIVE):
+        for channel in (*handler.channel_config.channels, "#bottest123"):
             listed = handler.help_text(channel)
             for command in handler._commands:
                 allowed = handler.is_allowed(command, channel)

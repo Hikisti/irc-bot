@@ -1,0 +1,34 @@
+# The channels the bot joins and the commands that work in each. Read once at startup by
+# src/channel_config.py: a mistake here stops the bot with a message naming it, and
+# tests/test_channel_config.py loads this file, so CI catches the mistake before a deploy.
+#
+# A command is named by its first alias; its other aliases follow (!weather brings !w).
+# Every channel gets the default set. A channel can `add` commands to it, `remove` some, or
+# replace it with its own set, `only = [...]` (not together with add/remove). A channel-only
+# command (the live trackers) is never in the default set and works only where a channel adds it.
+# !help always works and lists what works in the channel it is asked in.
+
+[default]
+commands = "general"   # every command that is not channel-only; or a list of commands
+link_titles = true     # a posted link gets its page title
+
+[debug]                # the one channel `irc_bot.py --debug` joins, with the default set
+channel = "#bottest123"
+
+[channels."#smliiga"]
+add = ["!liiga"]
+
+[channels."#valioliiga"]
+
+[channels."#nakkimuusi"]
+
+[channels."#pesis.fi"]
+add = ["!superpesis", "!ykkospesis"]
+
+[channels."#nhl.fi"]
+add = ["!nhl"]
+
+# A channel with its own set and no link titles:
+# [channels."#example"]
+# only = ["!liiga", "!nhl", "!stock", "!crypto"]
+# link_titles = false

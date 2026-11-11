@@ -15,9 +15,10 @@ class BaseCommand:
     - `ALLOW_ARGS` (default True): set to False for a command that takes
       no arguments (e.g. "!f1") - a message like "!f1 something" is then
       silently ignored rather than reaching execute() at all.
-    - `CHANNELS` (default None, meaning "every channel the bot has
-      joined"): restrict a command to specific channels, e.g.
-      `("#pesis.fi",)` for !superpesis/!ykkospesis.
+    - `CHANNEL_ONLY` (default False): True keeps the command out of
+      channels.toml's default set, so it works only in a channel that
+      adds it (the live trackers). Which channels those are is in
+      channels.toml, not on the class.
     - `execute(args, irc_bot=None, channel=None) -> str | None`. `args`
       is the text after the command word (e.g. "austin" for
       "!weather austin"), or "" if none was given. The return value is
@@ -44,7 +45,7 @@ class BaseCommand:
 
     ALIASES = ()
     ALLOW_ARGS = True
-    CHANNELS = None
+    CHANNEL_ONLY = False
     needs_irc_context = False
     HELP = None
 

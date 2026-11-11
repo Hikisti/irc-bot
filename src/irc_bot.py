@@ -9,10 +9,6 @@ import traceback
 from command_handler import CommandHandler
 from url_fetcher import URLFetcher
 
-# The channels the bot joins in production. README.md's "Channels" table describes them, and
-# tests/test_readme.py fails when the two disagree.
-PRODUCTION_CHANNELS = ("#smliiga", "#valioliiga", "#nakkimuusi", "#pesis.fi", "#nhl.fi")
-
 class IrcBot:
     # mIRC bold/colour/reset/reverse/italic/underline - what a +c channel refuses.
     FORMATTING_CODES = re.compile("[\x02\x03\x0f\x16\x1d\x1f]")
@@ -34,12 +30,13 @@ class IrcBot:
         self.server = server
         self.port = port
         self.nickname = nickname
-        self.channels = channels if channels else ["#bottest123"]  # Default channel
         self.running = False
         self.sock = None
         self._send_lock = threading.Lock()  # serializes socket writes across threads
         self._last_sent = {}  # channel -> last message sent to it, for _report_refused_send()
         self.command_handler = CommandHandler()  # Initialize command handler
+        # channels.toml names both the production channels and the debug one, the default here.
+        self.channels = channels if channels else [self.command_handler.channel_config.debug_channel]
         self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
 
     def connect(self):
@@ -251,8 +248,9 @@ if __name__ == "__main__":
 
     if debug_mode:
         print("Running in debug mode: Joining only the default channel.")
-        bot = IrcBot()  # No channels argument, so it defaults to ["#bottest123"]
+        bot = IrcBot()  # No channels argument, so it joins channels.toml's debug channel
     else:
-        bot = IrcBot(channels=list(PRODUCTION_CHANNELS))
+        bot = IrcBot()
+        bot.channels = list(bot.command_handler.channel_config.channels)
 
     bot.connect()

@@ -1,4 +1,5 @@
 import traceback
+import channel_config as channel_config_module
 from electricity import ElectricityCommand
 from weather import WeatherCommand
 from stock import StockCommand
@@ -17,7 +18,7 @@ class CommandHandler:
     """Handles IRC bot commands and delegates them to specific classes.
 
     See base_command.py for the interface every command class here
-    implements (ALIASES/ALLOW_ARGS/CHANNELS, execute()'s signature, the
+    implements (ALIASES/ALLOW_ARGS/CHANNEL_ONLY, execute()'s signature, the
     optional needs_irc_context attribute) - dispatch below is still
     plain duck-typing (attribute access, not isinstance()), just built
     once from each class's own declared ALIASES instead of a
@@ -26,7 +27,7 @@ class CommandHandler:
 
     # Every command class the bot knows about - the only place that has
     # to change to register a new one; everything else (alias lookup,
-    # ALLOW_ARGS/CHANNELS enforcement, its line in !help) is driven by
+    # ALLOW_ARGS enforcement, its line in !help) is driven by
     # each class's own BaseCommand attributes. (HelpCommand is the one
     # exception: it needs the finished handler, so __init__ registers it.)
     COMMAND_CLASSES = [
@@ -45,15 +46,7 @@ class CommandHandler:
         YkkospesisCommand,
     ]
 
-    # Channels where ONLY the listed aliases work (checked before each
-    # command's own CHANNELS) and links posted are not expanded into page
-    # titles either. Every channel not named here keeps the default: all
-    # commands, subject to their own CHANNELS, plus link titles. To open
-    # one more command up in such a channel, add its alias here (and the
-    # channel to its own CHANNELS if it has one).
-    EXCLUSIVE_CHANNELS = {}
-
-    def __init__(self):
+    def __init__(self, channel_config=None):
         self.commands_by_alias = {}
         self._commands = []  # each command once (its aliases share one instance)
         for command_class in self.COMMAND_CLASSES:
@@ -66,23 +59,18 @@ class CommandHandler:
         for alias in help_command.ALIASES:
             self.commands_by_alias[alias] = help_command
 
-    def is_allowed(self, command, channel, aliases=None) -> bool:
+        # Which commands work in which channel: channels.toml, checked here so a mistake in it
+        # stops the bot at startup instead of leaving a command quietly on or off somewhere.
+        self.channel_config = channel_config or channel_config_module.load(self._commands)
+
+    def is_allowed(self, command, channel) -> bool:
         """The one place that decides whether `command` may run in
         `channel`, used by both handle_command() and help_text() so !help
-        can never list something dispatch would ignore (or the reverse).
-        `aliases` defaults to all of the command's own; dispatch passes
-        just the one that was typed. IRC channel names are
-        case-insensitive, so both rules compare lowercased."""
-        channel = (channel or "").lower()
-        exclusive = self.EXCLUSIVE_CHANNELS.get(channel)
-        if exclusive is not None and not any(a in exclusive for a in (aliases or command.ALIASES)):
-            return False
-        return not command.CHANNELS or channel in (c.lower() for c in command.CHANNELS)
+        can never list something dispatch would ignore (or the reverse)."""
+        return self.channel_config.allows(command.ALIASES[0], channel)
 
     def url_titles_allowed(self, channel) -> bool:
-        """False in an exclusive channel: the bot does nothing there
-        beyond its listed commands, so posted links get no title reply."""
-        return (channel or "").lower() not in self.EXCLUSIVE_CHANNELS
+        return self.channel_config.link_titles(channel)
 
     def help_text(self, channel) -> str:
         """One line listing every command usable in `channel` (same
@@ -106,11 +94,8 @@ class CommandHandler:
                 print(f"Unknown command: {command}")  # Debugging
                 return
 
-            # Some commands are restricted to specific channels (e.g. !superpesis
-            # -> #pesis.fi only), and some channels to specific commands
-            # (EXCLUSIVE_CHANNELS). Otherwise a command works in every
-            # channel the bot has joined.
-            if not self.is_allowed(main_command, channel, aliases=(command,)):
+            # channels.toml decides which commands work in which channel.
+            if not self.is_allowed(main_command, channel):
                 print(f"Command {command} is not allowed in channel {channel}. Ignoring.")
                 return  # Ignore command
 

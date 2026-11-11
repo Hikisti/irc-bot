@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from channel_config import parse as parse_channels
 from irc_bot import IrcBot
 
 
@@ -79,14 +80,16 @@ class TestProcessMessage:
         bot.url_fetcher.detect_and_fetch.assert_not_called()
 
 class TestUrlTitlesInExclusiveChannel:
-    """A channel in EXCLUSIVE_CHANNELS only answers its listed commands - a posted link must not
-    get a title reply there, while every other channel still does. None is set in production, so
-    a stand-in channel is used."""
+    """A channel with link titles off in channels.toml gets no title reply for a posted link, while
+    every other channel still does. None is set in production, so a stand-in channel is used."""
 
     @pytest.fixture(autouse=True)
     def exclusive_channel(self, bot):
         bot.channels = ["#exclusive", "#nakkimuusi"]
-        bot.command_handler.EXCLUSIVE_CHANNELS = {"#exclusive": ("!stock", "!help")}
+        bot.command_handler.channel_config = parse_channels({
+            "debug": {"channel": "#bottest123"},
+            "channels": {"#exclusive": {"only": ["!stock"], "link_titles": False}, "#nakkimuusi": {}},
+        }, bot.command_handler._commands)
         bot.url_fetcher = MagicMock()
 
     def test_link_in_an_exclusive_channel_gets_no_title_reply(self, bot):

@@ -50,7 +50,7 @@ python irc_bot.py --debug    # joins only #bottest123, for local testing
 ```
 
 By default it connects to `irc.quakenet.org`. Server, port and nickname are set in
-`src/irc_bot.py`, and so are the channels it joins (`PRODUCTION_CHANNELS`; see [Channels](#channels)).
+`src/irc_bot.py`; the channels it joins are in `channels.toml` (see [Channels](#channels)).
 
 ## Commands
 
@@ -280,12 +280,13 @@ descriptive User-Agent (their robot policy asks for one); every other site gets 
 
 ## Channels
 
-The bot joins the channels below (`PRODUCTION_CHANNELS` in `src/irc_bot.py`). Every command in the
-[commands table](#commands) works in all of them, and a posted link gets its page title, except that a
-channel-restricted command (one with `CHANNELS` set on its class) works only in the channels listed
-for it here; typing it elsewhere is silently ignored.
+The bot joins the channels below, and which commands work in each is set in `channels.toml` at the
+repository root. Every channel gets the default set: every command in the [commands table](#commands)
+except the live trackers, plus link titles. The live trackers are channel-only: one works only in a
+channel that adds it, and typing it elsewhere is silently ignored. `!help` lists what works in the
+channel it is asked in.
 
-| Channel | Channel-restricted commands |
+| Channel | Added to the default set |
 |---|---|
 | `#smliiga` | `!liiga` |
 | `#valioliiga` | none |
@@ -293,8 +294,11 @@ for it here; typing it elsewhere is silently ignored.
 | `#pesis.fi` | `!superpesis`, `!ykkospesis` |
 | `#nhl.fi` | `!nhl` |
 
-A channel can also be limited to a few commands, with no link titles either, in
-`CommandHandler.EXCLUSIVE_CHANNELS`. No channel is limited now.
+A channel can also remove commands from the default set, have its own set instead, or turn link
+titles off (`channels.toml` shows how). No channel does now.
+
+A mistake in `channels.toml` (an unknown command, a typo in a key) stops the bot at startup with a
+message naming it; the tests load the file, so CI catches it before a deploy.
 
 `tests/test_readme.py` checks this section and the commands table against the code, so a channel
 or command change that leaves them behind fails the tests.

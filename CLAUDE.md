@@ -9,9 +9,17 @@ not what it is.
 ## Architecture at a glance
 
 - `BaseCommand` (`src/base_command.py`) is the contract every command
-  implements: `ALIASES`, `ALLOW_ARGS`, `CHANNELS`, `HELP`, `execute(args,
+  implements: `ALIASES`, `ALLOW_ARGS`, `CHANNEL_ONLY`, `HELP`, `execute(args,
   irc_bot=, channel=)`. `CommandHandler` builds its alias-dispatch table from
   these at startup - a command with no `ALIASES` is unreachable.
+- Which channels the bot joins and which commands work in each is
+  `channels.toml` at the repository root, read and checked by
+  `src/channel_config.py` at startup (a mistake stops the bot with a message
+  naming it). Every channel gets the default set (every command not
+  `CHANNEL_ONLY`) and can add, remove, or replace it; `CommandHandler.is_allowed()`
+  and `url_titles_allowed()` are the only places that ask it. The live trackers
+  are `CHANNEL_ONLY` (set once on `LiveTrackerCommand`), so a new tracker works
+  nowhere until a channel in the file adds it.
 - `LiveTrackerCommand` (`src/live_tracker_command.py`) is the shared engine
   behind `LiigaCommand`, `PesisCommand`, and `NHLCommand` - identical
   start/stop/next lifecycle, poll loop, early-start guard, and
@@ -99,9 +107,9 @@ not what it is.
    command.
 4. Add tests, plus a row in the README commands table and a paragraph if
    the behavior isn't obvious. `tests/test_readme.py` fails if the commands
-   table or the README's Channels section disagrees with the code; a new
-   channel goes in `PRODUCTION_CHANNELS` (`src/irc_bot.py`) and in that
-   table, and channel names appear nowhere else in the README.
+   table or the README's Channels section disagrees with the code or
+   `channels.toml`; a new channel goes in `channels.toml` and in that table,
+   and channel names appear nowhere else in the README.
 
 ## How new code should look here
 

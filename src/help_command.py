@@ -3,8 +3,8 @@ from base_command import BaseCommand
 
 class HelpCommand(BaseCommand):
     """Lists the commands usable in the channel it's asked in, on one IRC
-    line. Built from each command's own HELP string and CHANNELS
-    restriction (see CommandHandler.help_text()), so a command added to
+    line. Built from each command's own HELP string and channels.toml
+    (see CommandHandler.help_text()), so a command added to
     COMMAND_CLASSES shows up here without touching this class.
 
     Takes the CommandHandler itself (not just a list of commands) since it

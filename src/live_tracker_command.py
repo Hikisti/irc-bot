@@ -19,9 +19,9 @@ class LiveTrackerCommand(BaseCommand):
     equivalent of; they also differ in iteration direction and
     new/missing-item handling).
 
-    A subclass must set: ALIASES/CHANNELS (BaseCommand's own contract -
-    every subclass here restricts itself to specific channels, unlike
-    most other commands), DISPLAY_NAME, COMMAND_NAME, CACHE_SLUG,
+    A subclass must set: ALIASES (BaseCommand's own contract; every
+    tracker is CHANNEL_ONLY, so channels.toml has to add it to a channel
+    before it works there), DISPLAY_NAME, COMMAND_NAME, CACHE_SLUG,
     TRACKED_NOUN (plural, e.g. "games"/"matches"), TRACKED_NOUN_COUNTED
     (the same, but with an irregular count suffix for _run's "Tracking N
     ..." message, e.g. "game(s)"/"match(es)"), PERIOD_NOUN (e.g.
@@ -41,6 +41,7 @@ class LiveTrackerCommand(BaseCommand):
 
     needs_irc_context = True
 
+    CHANNEL_ONLY = True
     HELSINKI_TZ = ZoneInfo("Europe/Helsinki")
     POLL_INTERVAL_SECONDS = 30
     REQUEST_TIMEOUT_SECONDS = 10

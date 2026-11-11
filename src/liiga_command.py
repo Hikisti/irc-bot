@@ -30,7 +30,6 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
     """
 
     ALIASES = ("!liiga",)
-    CHANNELS = ("#smliiga",)
 
     DISPLAY_NAME = "Liiga"
     COMMAND_NAME = "!liiga"
