@@ -1,0 +1,30 @@
+name: Feed contract check
+
+# Reads the unofficial NHL and Liiga feeds and fails when a field the bot reads has gone or changed type
+# (tools/feed_contract.py), so a change shows up before a game night instead of during one. Read-only: no
+# secrets, no deploy. A failed scheduled run is reported by GitHub's usual workflow notification.
+on:
+  schedule:
+    - cron: "30 7,15 * * *"  # 07:30 and 15:30 UTC: before the Liiga evening games and the NHL night
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check feeds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check the feeds
+        run: python tools/feed_contract.py

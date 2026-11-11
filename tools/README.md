@@ -43,6 +43,23 @@ chat and addresses: keep it in `tools/logs/` (ignored by git), never commit or p
 (`tests/test_journal_report.py` includes round trips through the bot's own message builders, so a
 reworded message breaks a test there.)
 
+### `feed_contract.py` - a daily check of the feeds' shape
+
+Not a probe either: one pass, no loop. It fetches yesterday's NHL schedule, score games and one finished
+game's play-by-play, and the latest Liiga day with an ended game in the last two weeks, and checks that
+every field the trackers read is still there with the same type (values are never checked, so a day
+without games passes). Exit status 0 when all is as expected, 1 when a field is missing or of another
+type or an endpoint answers 404/410, 2 when a feed cannot be reached (an outage, told apart from a
+change). `.github/workflows/feed-contract.yml` runs it at 07:30 and 15:30 UTC and on demand; a failed run
+comes as GitHub's usual workflow notification.
+
+    .venv/bin/python tools/feed_contract.py
+
+It uses the trackers' URLs and sessions (`NHLCommand.BASE_URL`, `LiigaCommand.BASE_URL` / `TOURNAMENTS` /
+`_current_season`), and its field lists mirror what the code reads: a tracker that starts reading a new
+field should add it there. Pesis is not covered yet (no matches out of season).
+(`tests/test_feed_contract.py` checks it against payloads trimmed from the live feeds.)
+
 `goal_probe.py` polls every `poll_seconds` (default 10, half of that while a game is ending) and stops by
 itself when the games are settled, after `hours`, or when the API has not answered for 10 cycles in a row
 (so an outage or a throttle is not hammered). It makes about 1 + N requests per cycle for N live games:

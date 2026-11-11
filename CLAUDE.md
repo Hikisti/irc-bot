@@ -69,7 +69,11 @@ not what it is.
   wording (GOAL:/NO GOAL:/FINAL: and the `NHL:`/`Liiga:` prints), so changing
   one of those, or adding a new journal print, means updating it;
   `tests/test_journal_report.py` round-trips the bot's own message builders to
-  catch that.
+  catch that. `feed_contract.py` is the other non-probe: one pass, run twice a
+  day by `.github/workflows/feed-contract.yml`, that fails when a field the
+  NHL or Liiga trackers read has gone or changed type in the live feed. Its
+  field lists mirror what the code reads, so a tracker that starts reading a
+  new field adds it there.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on
