@@ -48,7 +48,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
-            cd "${{ vars.DEPLOY_PATH }}"
+            cd "${{ secrets.DEPLOY_PATH }}"
             git fetch --all
             git reset --hard origin/main
             # A restart drops every channel and stops any running tracker, so a push that changes only files
@@ -58,7 +58,7 @@ jobs:
             # restarts. `is-active` with no other flag: the deploy user's sudo rule allows exactly that command.
             if [ "${{ github.event_name }}" = workflow_dispatch ]; then
               echo "restart: manual run"
-            elif ! sudo -n systemctl is-active "${{ vars.DEPLOY_SERVICE_NAME }}" >/dev/null; then
+            elif ! sudo -n systemctl is-active "${{ secrets.DEPLOY_SERVICE_NAME }}" >/dev/null; then
               echo "restart: the bot is not running"
             elif ! sh .github/needs-restart.sh "$(cat .deployed-commit 2>/dev/null || true)"; then
               exit 0
@@ -72,8 +72,8 @@ jobs:
             # live: happened when .venv-py314 was mv'd to .venv during
             # the Python 3.14 migration). "python3 -m pip" invokes the
             # interpreter directly instead, which isn't affected.
-            "${{ vars.DEPLOY_PATH }}/.venv/bin/python3" -m pip install -r requirements.txt
-            sudo -n systemctl restart "${{ vars.DEPLOY_SERVICE_NAME }}"
+            "${{ secrets.DEPLOY_PATH }}/.venv/bin/python3" -m pip install -r requirements.txt
+            sudo -n systemctl restart "${{ secrets.DEPLOY_SERVICE_NAME }}"
             sleep 2
-            sudo -n systemctl is-active "${{ vars.DEPLOY_SERVICE_NAME }}"
+            sudo -n systemctl is-active "${{ secrets.DEPLOY_SERVICE_NAME }}"
             git rev-parse HEAD > .deployed-commit
