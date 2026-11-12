@@ -215,9 +215,15 @@ class IrcBot:
             )
         print(f"SEND REFUSED: the server would not deliver a message to {channel} (404 Cannot send to channel); {hint}")
 
+    # Control bytes no message of ours needs. Titles and API replies are text someone else chose: \x01 would
+    # frame a CTCP request or /me action from the bot to the whole channel (#84), NUL and DEL have no place in
+    # a line. The formatting codes the bot sends on purpose (FORMATTING_CODES) are kept.
+    STRAY_CONTROLS = re.compile("[\x00\x01\x04-\x08\x0b\x0c\x0e\x10-\x15\x17-\x1c\x1e\x7f]")
+
     def send_message(self, channel, message):
         """Send a message to the specified IRC channel."""
-        safe_message = message.replace("\n", " ").replace("\r", " ")  # Remove line breaks
+        safe_message = re.sub("[\r\n\t]", " ", message)  # line breaks and tabs become spaces
+        safe_message = self.STRAY_CONTROLS.sub("", safe_message)
         self._last_sent[channel] = safe_message
         self.send_raw(f"PRIVMSG {channel} :{safe_message}")  # Prefix colon to prevent misinterpretation
         

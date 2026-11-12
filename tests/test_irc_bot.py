@@ -164,6 +164,22 @@ class TestSendMessage:
         assert b"\n" not in sent[:-2]  # only the trailing \r\n terminator
         assert b"line one line two line three" in sent
 
+    def test_a_title_cannot_frame_a_ctcp_message(self, bot):
+        # A page title is text its author chose; \x01 at the start made the bot send a CTCP to the channel (#84).
+        bot.send_message("#chan", "\x01ACTION waves\x01")
+        bot.sock.sendall.assert_called_once_with(b"PRIVMSG #chan :ACTION waves\r\n")
+
+    def test_every_stray_control_byte_is_removed_and_tabs_become_spaces(self, bot):
+        kept = set("\x02\x03\x0f\x16\x1d\x1f")
+        stray = "".join(chr(c) for c in [*range(32), 127] if chr(c) not in kept | {"\r", "\n", "\t"})
+        bot.send_message("#chan", f"a{stray}b\tc")
+        assert bot.sock.sendall.call_args[0][0] == b"PRIVMSG #chan :ab c\r\n"
+
+    def test_the_formatting_codes_the_bot_uses_are_sent_unchanged(self, bot):
+        line = "\x02\x0303GOAL:\x0f Toronto 1-0 Montreal \x1ditalic\x1d \x1funder\x1f \x16rev\x16 \x0304,01red\x03"
+        bot.send_message("#nhl.fi", line)
+        assert bot.sock.sendall.call_args[0][0] == f"PRIVMSG #nhl.fi :{line}\r\n".encode()
+
 
 class TestListen:
     """listen()'s two ways of ending are both logged with a consistent
