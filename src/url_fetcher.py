@@ -9,6 +9,9 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
+import requests.adapters
+import urllib3.connection
+import urllib3.connectionpool
 from urllib3.exceptions import LocationParseError
 from urllib3.util import parse_url
 
@@ -18,6 +21,50 @@ from request_errors import format_request_error
 
 class _RefusedURL(Exception):
     """A link the bot will not fetch (a non-public address, or not http(s))."""
+
+
+def _is_public_address(address) -> bool:
+    ip = ipaddress.ip_address(address.split("%")[0])
+    ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 is 127.0.0.1
+    return ip.is_global
+
+
+class _PublicPeerMixin:
+    """Refuses a connection whose peer is not a public address, after connecting and before anything is sent.
+    The check before the request resolves the name itself and requests resolves it again to connect, so a name
+    whose answer changes in between (DNS rebinding) would pass the first with a public address and connect to
+    an internal one (#82); checking the socket's actual peer closes that whatever DNS does. For HTTPS this runs
+    before the TLS handshake, and the certificate is still checked against the name."""
+
+    def _new_conn(self):
+        sock = super()._new_conn()
+        peer = sock.getpeername()[0]
+        if not _is_public_address(peer):
+            sock.close()
+            raise _RefusedURL(f"{self.host} (connected to a non-public address)")
+        return sock
+
+
+class _PublicPeerHTTPConnection(_PublicPeerMixin, urllib3.connection.HTTPConnection):
+    pass
+
+
+class _PublicPeerHTTPSConnection(_PublicPeerMixin, urllib3.connection.HTTPSConnection):
+    pass
+
+
+class _PublicPeerHTTPPool(urllib3.connectionpool.HTTPConnectionPool):
+    ConnectionCls = _PublicPeerHTTPConnection
+
+
+class _PublicPeerHTTPSPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = _PublicPeerHTTPSConnection
+
+
+class _PublicPeerAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {"http": _PublicPeerHTTPPool, "https": _PublicPeerHTTPSPool}
 
 
 class URLFetcher:
@@ -79,6 +126,11 @@ class URLFetcher:
         """
         self.bot = bot
         self.session = make_session("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", accept_json=False)
+        # Every connection's peer is checked (see _PublicPeerMixin); and no proxy or .netrc from the
+        # environment, which would connect somewhere the check cannot see.
+        self.session.trust_env = False
+        for scheme in ("http://", "https://"):
+            self.session.mount(scheme, _PublicPeerAdapter())
         self._pending = queue.Queue(maxsize=self.MAX_PENDING_MESSAGES)
         self._worker = None
         self._abandoned = []  # fetches that overran LINK_BUDGET_SECONDS and are still running
@@ -230,17 +282,13 @@ class URLFetcher:
     def _is_public_host(self, host) -> bool:
         """False if `host` is, or resolves to, a loopback, private, link-local or other non-public
         address (any one of several addresses is enough to refuse). A name that does not resolve is
-        let through: the request then fails with its own, ordinary error."""
+        let through: the request then fails with its own, ordinary error, and should a second lookup
+        succeed, the connection's own peer check (_PublicPeerMixin) still refuses a non-public address."""
         try:
             addresses = self._resolve(host)
         except OSError:
             return True
-        for address in addresses:
-            ip = ipaddress.ip_address(address.split("%")[0])
-            ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 is 127.0.0.1
-            if not ip.is_global:
-                return False
-        return True
+        return all(_is_public_address(address) for address in addresses)
 
     def _connect_host(self, url):
         """The host requests will actually connect to, read with the parser requests itself uses (urllib3),

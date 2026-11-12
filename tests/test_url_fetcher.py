@@ -1,4 +1,5 @@
 import queue
+import socket
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+import url_fetcher
 from url_fetcher import URLFetcher
 
 REAL_RESOLVE = URLFetcher._resolve  # the autouse public_dns fixture replaces it for every test
@@ -316,6 +318,77 @@ class TestOnlyPublicAddressesAreFetched:
         with patch.object(fetcher.session, "get", side_effect=requests.exceptions.ConnectionError):
             assert fetcher.get_title("https://no-such-host.example/") is None
         assert "URL title: none for no-such-host.example: Could not connect to the webpage." in capsys.readouterr().out
+
+
+class LoopbackServer:
+    """A TCP server on 127.0.0.1 that records every byte a client sends and answers nothing (local only)."""
+
+    def __init__(self):
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen()
+        self.listener.settimeout(5)
+        self.port = self.listener.getsockname()[1]
+        self.received, self.connections = b"", 0
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        try:
+            conn, _ = self.listener.accept()
+        except OSError:
+            return
+        self.connections += 1
+        conn.settimeout(2)
+        try:
+            while data := conn.recv(4096):
+                self.received += data
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self.listener.close()
+        self.thread.join(timeout=5)
+
+
+class TestThePeerIsChecked:
+    """The check before the request resolves the name, and requests resolves it again to connect; a name whose
+    answer changes in between could pass the first and reach an internal address (#82). The connection's own
+    peer is checked before anything is sent. The autouse public_dns fixture plays the first, lying answer."""
+
+    @pytest.fixture
+    def server(self):
+        server = LoopbackServer()
+        yield server
+        server.close()
+
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_a_connection_that_lands_on_an_internal_address_sends_nothing(self, fetcher, server, capsys, scheme):
+        assert fetcher.get_title(f"{scheme}://127.0.0.1:{server.port}/admin") is None
+        server.thread.join(timeout=5)  # ends once the refused client has closed the socket
+        assert server.connections == 1 and server.received == b""  # connected, then refused before a byte
+        assert "(connected to a non-public address)" in capsys.readouterr().out
+
+    def test_a_public_peer_is_let_through(self):
+        class Base:
+            def _new_conn(self):
+                return sock
+        class Checked(url_fetcher._PublicPeerMixin, Base):
+            host = "example.com"
+        sock = MagicMock()
+        sock.getpeername.return_value = ("93.184.216.34", 443)
+        assert Checked()._new_conn() is sock
+        sock.getpeername.return_value = ("::ffff:10.0.0.1", 443, 0, 0)
+        with pytest.raises(url_fetcher._RefusedURL):
+            Checked()._new_conn()
+        sock.close.assert_called_once()
+
+    def test_no_proxy_or_netrc_from_the_environment(self, fetcher):
+        assert fetcher.session.trust_env is False
+        assert all(isinstance(fetcher.session.get_adapter(f"{s}://example.com/"), url_fetcher._PublicPeerAdapter)
+                   for s in ("http", "https"))
 
 
 class TestRedirects:
