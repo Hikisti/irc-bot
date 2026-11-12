@@ -51,6 +51,18 @@ jobs:
             cd "${{ vars.DEPLOY_PATH }}"
             git fetch --all
             git reset --hard origin/main
+            # A restart drops every channel and stops any running tracker, so a push that changes only files
+            # the bot never runs (docs, tests, tools) leaves it running; .github/needs-restart.sh decides and
+            # says why. .deployed-commit (untracked, gitignored) is the commit the running bot was started
+            # from, written only after a restart succeeded. A manual run, or a bot that is not running, always
+            # restarts. `is-active` with no other flag: the deploy user's sudo rule allows exactly that command.
+            if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+              echo "restart: manual run"
+            elif ! sudo -n systemctl is-active "${{ vars.DEPLOY_SERVICE_NAME }}" >/dev/null; then
+              echo "restart: the bot is not running"
+            elif ! sh .github/needs-restart.sh "$(cat .deployed-commit 2>/dev/null || true)"; then
+              exit 0
+            fi
             # Adjust this if the server's venv isn't named/located ".venv"
             # directly under DEPLOY_PATH. "python3 -m pip", not the "pip"
             # script directly - "pip" (and every other installed console
@@ -64,3 +76,4 @@ jobs:
             sudo -n systemctl restart "${{ vars.DEPLOY_SERVICE_NAME }}"
             sleep 2
             sudo -n systemctl is-active "${{ vars.DEPLOY_SERVICE_NAME }}"
+            git rev-parse HEAD > .deployed-commit

@@ -136,6 +136,9 @@ src/.ykkospesis_series_cache.json
 # the reasoning). Back this up somewhere private, not here.
 DEPLOY.md
 
+# Written on the server by the deploy: the commit the running bot was started from
+.deployed-commit
+
 # Environments
 .env
 .venv

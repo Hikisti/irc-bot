@@ -347,6 +347,13 @@ the bot's service — that user's `sudo` access is scoped to just restarting
 and checking the one service, nothing more. Server-specific setup details
 aren't kept in this repo.
 
+A restart drops every channel and stops any running tracker, so a push that
+changes only files the bot never runs (`README.md`, `CLAUDE.md`, `tests/`,
+`tools/`, `.github/` and the lint and test settings) is pulled but does not
+restart the bot. Anything else, a file the list does not know included,
+restarts it, and so does a manual run or a bot that is not running.
+`.github/needs-restart.sh` makes the decision and the deploy log says why.
+
 A quiet connection is checked by the bot itself: a server only pings a connection that is idle both ways, and
 a bot that keeps announcing goals is never pinged. After 180 s without hearing anything the bot sends its own
 `PING`, which a live server answers at once. If nothing at all arrives for 600 s (not even that answer) the
