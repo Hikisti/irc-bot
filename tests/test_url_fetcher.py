@@ -1,3 +1,6 @@
+import queue
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -520,6 +523,89 @@ class TestDetectAndFetch:
             fetcher.detect_and_fetch("nick", "#chan", "https://x.com/post")
         mock_get.assert_not_called()
         bot.send_message.assert_not_called()
+
+
+def wait_until(condition, seconds=5):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return condition()
+
+
+class TestOffTheListenerThread:
+    """A slow page must not hold the thread that reads the IRC socket and answers the server's PING (#83).
+    Every blocking fetch below waits on an Event with a timeout, so a regression fails instead of hanging."""
+
+    @pytest.fixture
+    def release(self):
+        event = threading.Event()
+        yield event
+        event.set()  # lets any fetch still blocked finish
+
+    def blocking(self, release, title="Late"):
+        def get_title(url):
+            release.wait(timeout=5)
+            return title
+        return get_title
+
+    def test_submit_returns_at_once_while_the_fetch_is_slow(self, fetcher, bot, release):
+        with patch.object(fetcher, "get_title", side_effect=self.blocking(release)):
+            started = time.monotonic()
+            fetcher.submit("nick", "#chan", "https://slow.example/")
+            assert time.monotonic() - started < 1
+            bot.send_message.assert_not_called()
+            release.set()
+            assert wait_until(lambda: bot.send_message.called)
+        bot.send_message.assert_called_once_with("#chan", "Late")
+
+    def test_a_message_without_links_starts_no_worker(self, fetcher):
+        fetcher.submit("nick", "#chan", "no links here")
+        assert fetcher._worker is None
+
+    def test_at_most_three_links_of_a_message_are_fetched(self, fetcher, bot):
+        links = " ".join(f"https://site{i}.example/" for i in range(5))
+        with patch.object(fetcher, "get_title", return_value="T") as mock_title:
+            fetcher.detect_and_fetch("nick", "#chan", links)
+        assert [c.args[0] for c in mock_title.call_args_list] == [f"https://site{i}.example/" for i in range(3)]
+
+    def test_a_link_that_overruns_its_budget_is_given_up(self, fetcher, bot, release, capsys, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "LINK_BUDGET_SECONDS", 0.2)
+        with patch.object(fetcher, "get_title", side_effect=self.blocking(release)):
+            started = time.monotonic()
+            fetcher.detect_and_fetch("nick", "#chan", "https://drip.example/page")
+            assert time.monotonic() - started < 2
+        bot.send_message.assert_not_called()
+        assert "URL title: gave up after 0.2 s on drip.example" in capsys.readouterr().out
+
+    def test_the_title_of_a_given_up_fetch_is_never_posted(self, fetcher, bot, release, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "LINK_BUDGET_SECONDS", 0.2)
+        with patch.object(fetcher, "get_title", side_effect=self.blocking(release)):
+            fetcher.detect_and_fetch("nick", "#chan", "https://drip.example/")
+            release.set()
+            assert wait_until(lambda: not any(t.is_alive() for t in fetcher._abandoned))
+        bot.send_message.assert_not_called()
+
+    def test_while_too_many_fetches_hang_new_links_are_skipped(self, fetcher, bot, release, capsys, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "LINK_BUDGET_SECONDS", 0.1)
+        monkeypatch.setattr(URLFetcher, "MAX_ABANDONED_FETCHES", 2)
+        with patch.object(fetcher, "get_title", side_effect=self.blocking(release)) as mock_title:
+            fetcher.detect_and_fetch("nick", "#chan", "https://a.example/ https://b.example/ https://c.example/")
+        assert mock_title.call_count == 2
+        assert "URL title: skipping a link, 2 slow fetches still running" in capsys.readouterr().out
+
+    def test_the_journal_names_the_host_or_says_it_does_not_parse(self, fetcher):
+        assert fetcher._host_for_log("https://Example.com/x?token=1") == "example.com"
+        assert fetcher._host_for_log("http://[") == "an address that does not parse"
+
+    def test_a_full_queue_drops_new_messages(self, fetcher, release, capsys, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "MAX_PENDING_MESSAGES", 1)
+        fetcher._pending = queue.Queue(maxsize=1)
+        with patch.object(fetcher, "get_title", side_effect=self.blocking(release)):
+            fetcher.submit("nick", "#chan", "https://a.example/")  # taken by the worker, which then blocks
+            assert wait_until(lambda: fetcher._pending.empty())
+            fetcher.submit("nick", "#chan", "https://b.example/")  # waits in the queue
+            fetcher.submit("nick", "#chan", "https://c.example/")  # no room
+        assert "URL title: busy, skipping the links of a message in #chan" in capsys.readouterr().out
 
 
 class TestTrimMessage:

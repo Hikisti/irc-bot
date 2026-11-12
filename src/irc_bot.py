@@ -234,7 +234,7 @@ class IrcBot:
             if msg.startswith("!"):  # Command handling
                 self.command_handler.handle_command(self, nick, channel, msg)
             elif self.command_handler.url_titles_allowed(channel):  # Check for URLs in messages
-                self.url_fetcher.detect_and_fetch(nick, channel, msg)
+                self.url_fetcher.submit(nick, channel, msg)
     
     def stop(self):
         """Stop the bot and close the connection."""

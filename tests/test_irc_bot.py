@@ -48,7 +48,7 @@ class TestProcessMessage:
         bot.command_handler.handle_command.assert_called_once_with(
             bot, "alice", "#bottest123", "!weather austin"
         )
-        bot.url_fetcher.detect_and_fetch.assert_not_called()
+        bot.url_fetcher.submit.assert_not_called()
 
     def test_non_command_message_dispatches_to_url_fetcher(self, bot):
         bot.command_handler = MagicMock()
@@ -56,7 +56,7 @@ class TestProcessMessage:
 
         bot.process_message(":alice!a@host PRIVMSG #bottest123 :check this out")
 
-        bot.url_fetcher.detect_and_fetch.assert_called_once_with(
+        bot.url_fetcher.submit.assert_called_once_with(
             "alice", "#bottest123", "check this out"
         )
         bot.command_handler.handle_command.assert_not_called()
@@ -68,7 +68,7 @@ class TestProcessMessage:
         bot.process_message(":alice!a@host PRIVMSG #some-other-channel :!weather austin")
 
         bot.command_handler.handle_command.assert_not_called()
-        bot.url_fetcher.detect_and_fetch.assert_not_called()
+        bot.url_fetcher.submit.assert_not_called()
 
     def test_malformed_line_is_silently_ignored(self, bot):
         bot.command_handler = MagicMock()
@@ -77,7 +77,7 @@ class TestProcessMessage:
         bot.process_message(":alice!a@host PRIVMSG")  # missing the trailing message part
 
         bot.command_handler.handle_command.assert_not_called()
-        bot.url_fetcher.detect_and_fetch.assert_not_called()
+        bot.url_fetcher.submit.assert_not_called()
 
 class TestUrlTitlesInExclusiveChannel:
     """A channel with link titles off in channels.toml gets no title reply for a posted link, while
@@ -94,15 +94,15 @@ class TestUrlTitlesInExclusiveChannel:
 
     def test_link_in_an_exclusive_channel_gets_no_title_reply(self, bot):
         bot.process_message(":alice!a@host PRIVMSG #exclusive :look http://example.com/x")
-        bot.url_fetcher.detect_and_fetch.assert_not_called()
+        bot.url_fetcher.submit.assert_not_called()
 
     def test_channel_match_ignores_case(self, bot):
         bot.process_message(":alice!a@host PRIVMSG #EXCLUSIVE :http://example.com/x")
-        bot.url_fetcher.detect_and_fetch.assert_not_called()
+        bot.url_fetcher.submit.assert_not_called()
 
     def test_link_in_a_normal_channel_still_gets_its_title(self, bot):
         bot.process_message(":alice!a@host PRIVMSG #nakkimuusi :look http://example.com/x")
-        bot.url_fetcher.detect_and_fetch.assert_called_once_with(
+        bot.url_fetcher.submit.assert_called_once_with(
             "alice", "#nakkimuusi", "look http://example.com/x"
         )
 
@@ -192,11 +192,28 @@ class TestListen:
         bot.sock.recv.side_effect = [line, b""]
 
         bot.listen()
+        pending = bot.url_fetcher._pending
+        deadline = time.monotonic() + 5  # the link-title worker finishes the message on its own thread
+        while pending.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
 
         out = capsys.readouterr().out
+        assert pending.unfinished_tasks == 0
+        assert "not fetching an address that does not parse" in out
         assert "DISCONNECTED: server closed the connection (EOF)" in out
         assert "error in listen loop" not in out
         assert not any("PRIVMSG #bottest123" in str(c) for c in bot.sock.sendall.call_args_list)
+
+    def test_a_slow_link_does_not_hold_the_listener(self, bot):
+        # The listener answers the server's PING; a page that never finishes once stalled it until the server
+        # dropped the bot (#83). The fetch now runs on the link-title worker.
+        release = threading.Event()
+        with patch.object(bot.url_fetcher, "get_title", side_effect=lambda url: release.wait(timeout=5) and None):
+            started = time.monotonic()
+            bot.process_message(":alice!a@host PRIVMSG #bottest123 :see https://slow.example/")
+            elapsed = time.monotonic() - started
+            release.set()
+        assert elapsed < 1
 
     def test_recv_exception_is_logged_as_disconnected_with_traceback(self, bot, capsys):
         bot.running = True

@@ -1,7 +1,9 @@
 import codecs
 import ipaddress
+import queue
 import re
 import socket
+import threading
 import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
@@ -59,6 +61,17 @@ class URLFetcher:
     MAX_REDIRECTS = 5
     REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
+    # Titles are fetched on a worker thread, never on the thread that reads the IRC socket: a slow page there
+    # stopped every channel and the answers to the server's PING until the server dropped the bot (#83).
+    # MAX_FETCH_SECONDS only bounds the body between chunks; the lookup, the hops and a body dripped below a
+    # chunk are not, so each link also gets a hard wall-clock budget. A fetch that overruns it is left to
+    # finish on its own thread and its title is never posted; while MAX_ABANDONED_FETCHES of those are still
+    # running, further links are skipped, so a hostile site cannot pile up threads.
+    MAX_URLS_PER_MESSAGE = 3
+    LINK_BUDGET_SECONDS = 20
+    MAX_PENDING_MESSAGES = 5
+    MAX_ABANDONED_FETCHES = 3
+
     def __init__(self, bot):
         """
         Initialize the URLFetcher with a reference to the IRC bot.
@@ -66,26 +79,66 @@ class URLFetcher:
         """
         self.bot = bot
         self.session = make_session("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", accept_json=False)
+        self._pending = queue.Queue(maxsize=self.MAX_PENDING_MESSAGES)
+        self._worker = None
+        self._abandoned = []  # fetches that overran LINK_BUDGET_SECONDS and are still running
+
+    def submit(self, nick, channel, message):
+        """Called on the listener thread: hands a message with links to the worker and returns at once."""
+        if not self.extract_urls(message):
+            return
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._work, name="url-titles", daemon=True)
+            self._worker.start()
+        try:
+            self._pending.put_nowait((nick, channel, message))
+        except queue.Full:
+            print(f"URL title: busy, skipping the links of a message in {channel}")
+
+    def _work(self):
+        while True:
+            nick, channel, message = self._pending.get()
+            try:
+                self.detect_and_fetch(nick, channel, message)
+            finally:
+                self._pending.task_done()
 
     def detect_and_fetch(self, nick, channel, message):
-        """
-        Extracts URLs from a message and fetches their titles.
-        Sends shortened titles back to the IRC channel to avoid flooding.
-        """
-        urls = self.extract_urls(message)
-        if not urls:
-            return  # No URLs found in the message
+        """Fetches the title of each link in `message` (at most MAX_URLS_PER_MESSAGE) and posts it."""
+        for url in self.extract_urls(message)[:self.MAX_URLS_PER_MESSAGE]:
+            title_info = self._title_within_budget(url)
+            if title_info:
+                self.bot.send_message(channel, self.trim_message(title_info))
 
-        for url in urls:
-            # Anyone in the channel chooses this text, and an exception that escaped from here would end the
-            # listen loop and with it the bot (a posted "http://[" once could): one link fails, not the bot.
+    def _title_within_budget(self, url):
+        """get_title(url) if it finishes within LINK_BUDGET_SECONDS, else None (see MAX_ABANDONED_FETCHES)."""
+        self._abandoned = [t for t in self._abandoned if t.is_alive()]
+        if len(self._abandoned) >= self.MAX_ABANDONED_FETCHES:
+            print(f"URL title: skipping a link, {len(self._abandoned)} slow fetches still running")
+            return None
+        result = {}
+
+        def fetch():
+            # Anyone in the channel chooses this text: an exception here fails this link, nothing else.
             try:
-                title_info = self.get_title(url)
-                if title_info:
-                    safe_msg = self.trim_message(title_info)
-                    self.bot.send_message(channel, safe_msg)
+                result["title"] = self.get_title(url)
             except Exception as e:
                 print(f"URL title: failed: {type(e).__name__}")
+
+        thread = threading.Thread(target=fetch, name="url-title-fetch", daemon=True)
+        thread.start()
+        thread.join(self.LINK_BUDGET_SECONDS)
+        if thread.is_alive():
+            self._abandoned.append(thread)
+            print(f"URL title: gave up after {self.LINK_BUDGET_SECONDS} s on {self._host_for_log(url)}")
+            return None
+        return result.get("title")
+
+    def _host_for_log(self, url):
+        try:
+            return urlparse(url).netloc.lower()
+        except ValueError:
+            return "an address that does not parse"
 
     def extract_urls(self, text):
         """

@@ -275,7 +275,10 @@ The bot also watches every message for `http(s)://` links and replies with the p
 unless the domain is blacklisted (see `BLACKLISTED_DOMAINS` in `src/url_fetcher.py`). The fetch only goes
 to public addresses: a link to the machine the bot runs on or to a private network (`localhost`, `10.x`,
 `192.168.x`, link-local addresses, a name that resolves to one of those, or a redirect that ends at one)
-is ignored without a reply, and a page is read for at most 10 seconds and 2 MB. Wikimedia sites get a
+is ignored without a reply, and a page is read for at most 10 seconds and 2 MB. Titles are fetched in the
+background, so a slow page never holds up commands or the connection: at most three links per message are
+looked up, a link that takes more than 20 seconds in all gets no reply, and while the bot is busy with
+earlier links new ones may be skipped. Wikimedia sites get a
 descriptive User-Agent (their robot policy asks for one); every other site gets a browser one.
 
 ## Channels
