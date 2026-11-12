@@ -234,10 +234,16 @@ consistent, deliberate discipline - keep following it:
 ## Deployment is not free - `git push` to `main` is a live production action
 
 Every push to `main` runs the test suite, then - if it passes - deploys
-over SSH to the production VPS and **restarts the live bot**, dropping and
-rejoining every IRC channel it's in, with real users present. Treat a push
-here the same way you'd treat any other production deploy, not a plain git
-operation:
+over SSH to the production VPS and, when the push changes anything the bot
+runs (`src/`, `channels.toml`, `requirements.txt`, or any file not known to
+be safe), **restarts the live bot**, dropping and rejoining every IRC
+channel it's in and stopping every running tracker, with real users
+present. A push of only docs, tests or tools (`README.md`, `CLAUDE.md`,
+`tests/`, `tools/`, `.github/`, the lint and test settings) is pulled
+without a restart; `.github/needs-restart.sh` decides and the deploy log
+says which. Only add a path to its safe list if the bot never reads it.
+A push still goes out to production either way, so treat it the same way
+you'd treat any other production deploy, not a plain git operation:
 
 - Confirm with Heikki before pushing, even if you were explicitly asked to
   implement something - "implement this" is not the same as "push this."
