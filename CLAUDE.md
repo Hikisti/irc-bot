@@ -195,6 +195,16 @@ consistent, deliberate discipline - keep following it:
   (this happened once). `tests/conftest.py` disables `.env` loading during
   tests (`PYTHON_DOTENV_DISABLED`), so a test that needs a key must set it
   itself with `monkeypatch.setenv`.
+- A change to code that handles untrusted input (a new command taking user
+  arguments that reach an outside service, link titles, IRC message
+  handling, `send_message`), to the deploy pipeline, or a major upgrade of
+  the HTTP libraries or Python, gets a scoped security audit: the
+  `security-audit` skill in quick profile, limited to the changed files,
+  capped at about 15 agents, on a day without tracked games. Its reports
+  stay outside the repository (they are not for GitHub), and a later run
+  builds on the previous ledger, so keep it. A confirmed problem is fixed
+  before any public issue describes it; leads that cannot be fixed now go
+  in issues without step-by-step detail.
 - Never silently change observable behavior (a message's wording, a
   command's output shape) without calling it out first.
 - Don't add features, refactor, or add abstractions beyond what a task
