@@ -183,6 +183,21 @@ class TestListen:
         captured = capsys.readouterr()
         assert "DISCONNECTED: server closed the connection (EOF)" in captured.out
 
+    @pytest.mark.parametrize("link", ["http://[", "http://[x]/", "http://a＃b/"])
+    def test_a_link_that_does_not_parse_does_not_end_the_bot(self, bot, capsys, link):
+        # Anyone in a channel can post this; it once raised from the link-title path straight into listen()'s
+        # catch-all, which ends the loop and the process. Now the loop carries on until the server closes.
+        bot.running = True
+        line = f":alice!a@host PRIVMSG #bottest123 :see {link}\r\n".encode()
+        bot.sock.recv.side_effect = [line, b""]
+
+        bot.listen()
+
+        out = capsys.readouterr().out
+        assert "DISCONNECTED: server closed the connection (EOF)" in out
+        assert "error in listen loop" not in out
+        assert not any("PRIVMSG #bottest123" in str(c) for c in bot.sock.sendall.call_args_list)
+
     def test_recv_exception_is_logged_as_disconnected_with_traceback(self, bot, capsys):
         bot.running = True
         bot.sock.recv.side_effect = OSError("connection reset by peer")

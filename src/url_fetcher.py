@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
+from urllib3.exceptions import LocationParseError
+from urllib3.util import parse_url
 
 from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
@@ -75,10 +77,15 @@ class URLFetcher:
             return  # No URLs found in the message
 
         for url in urls:
-            title_info = self.get_title(url)
-            if title_info:
-                safe_msg = self.trim_message(title_info)
-                self.bot.send_message(channel, safe_msg)
+            # Anyone in the channel chooses this text, and an exception that escaped from here would end the
+            # listen loop and with it the bot (a posted "http://[" once could): one link fails, not the bot.
+            try:
+                title_info = self.get_title(url)
+                if title_info:
+                    safe_msg = self.trim_message(title_info)
+                    self.bot.send_message(channel, safe_msg)
+            except Exception as e:
+                print(f"URL title: failed: {type(e).__name__}")
 
     def extract_urls(self, text):
         """
@@ -107,7 +114,11 @@ class URLFetcher:
         Skips known services (like X and Reddit) where scraping is unreliable or blocked.
         Also skips any URL whose domain is in the blacklist.
         """
-        domain = urlparse(url).netloc.lower()
+        try:
+            domain = urlparse(url).netloc.lower()
+        except ValueError as e:  # "http://[" and the like: not an address at all
+            print(f"URL title: not fetching an address that does not parse ({e})")
+            return None
 
         # Check blacklist first
         if self.is_blacklisted(domain):
@@ -178,6 +189,17 @@ class URLFetcher:
                 return False
         return True
 
+    def _connect_host(self, url):
+        """The host requests will actually connect to, read with the parser requests itself uses (urllib3),
+        or None if it cannot read one. The standard library reads some addresses differently:
+        "http://127.0.0.1:8080\\@example.com/" is example.com to urlparse but 127.0.0.1 to urllib3, so
+        checking urlparse's host would let the request reach an address the check never saw."""
+        try:
+            host = parse_url(url).host
+        except LocationParseError:
+            return None
+        return host.strip("[]") if host else None
+
     def _fetch_page(self, url, headers):
         """The page at `url` as a response whose body is at most MAX_PAGE_BYTES, read for at most
         MAX_FETCH_SECONDS. Redirects are followed by hand so that every hop is checked, not only the
@@ -185,10 +207,11 @@ class URLFetcher:
         deadline = time.monotonic() + self.MAX_FETCH_SECONDS
         for _ in range(self.MAX_REDIRECTS + 1):
             parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            host = self._connect_host(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or not host:
                 raise _RefusedURL(f"{url[:80]} (not an http(s) address)")
-            if not self._is_public_host(parsed.hostname):
-                raise _RefusedURL(f"{parsed.hostname} (not a public address)")
+            if not self._is_public_host(host):
+                raise _RefusedURL(f"{host} (not a public address)")
             response = self.session.get(
                 url, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS, allow_redirects=False, stream=True
             )

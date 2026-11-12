@@ -268,6 +268,32 @@ class TestOnlyPublicAddressesAreFetched:
             assert fetcher.get_title("https://mixed.example/") is None
         mock_get.assert_not_called()
 
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1:8080\\@example.com/", "http://169.254.169.254\\@example.com/latest/meta-data/",
+        "http://[::1]\\@example.com/",
+    ])
+    def test_the_host_checked_is_the_host_connected_to(self, fetcher, url):
+        # urlparse reads these as example.com, urllib3 (what requests connects with) as the internal address.
+        with patch.object(URLFetcher, "_resolve", REAL_RESOLVE), \
+                patch.object(fetcher.session, "get") as mock_get:
+            assert fetcher.get_title(url) is None
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("url", ["http://example.com:99999/", "http://example.com:x/"])
+    def test_an_address_the_http_library_cannot_read_is_refused(self, fetcher, url, capsys):
+        with patch.object(fetcher.session, "get") as mock_get:
+            assert fetcher.get_title(url) is None
+        mock_get.assert_not_called()
+        assert "(not an http(s) address)" in capsys.readouterr().out
+
+    def test_a_non_ascii_host_is_still_fetched(self, fetcher, monkeypatch):
+        checked = []
+        monkeypatch.setattr(URLFetcher, "_resolve", lambda self, host: checked.append(host) or {"93.184.216.34"})
+        html = "<html><head><title>Hei</title></head></html>"
+        with patch.object(fetcher.session, "get", return_value=make_response(html)):
+            assert fetcher.get_title("https://ääkkönen.fi/sivu") == "Hei"
+        assert checked == ["xn--kknen-fraa0m.fi"]  # the name as it is looked up when connecting
+
     def test_a_refusal_is_journaled_without_the_path(self, fetcher, capsys):
         with patch.object(URLFetcher, "_resolve", REAL_RESOLVE):
             fetcher.get_title("http://127.0.0.1/secret?token=abc")
@@ -307,6 +333,13 @@ class TestRedirects:
     def test_a_redirect_to_an_internal_address_is_refused_at_that_hop(self, fetcher, monkeypatch):
         monkeypatch.setattr(URLFetcher, "_resolve", resolving_to({"metadata.internal": ["169.254.169.254"]}))
         with patch.object(fetcher.session, "get", side_effect=[redirect("http://metadata.internal/latest")]) as mock_get:
+            assert fetcher.get_title("https://example.com/short") is None
+        assert mock_get.call_count == 1  # the first, public hop only
+
+    def test_a_backslash_redirect_to_an_internal_address_is_refused_at_that_hop(self, fetcher, monkeypatch):
+        monkeypatch.setattr(URLFetcher, "_resolve", resolving_to({"example.com": ["93.184.216.34"], "169.254.169.254": ["169.254.169.254"]}))
+        hop = redirect("http://169.254.169.254\\@example.com/latest")
+        with patch.object(fetcher.session, "get", side_effect=[hop]) as mock_get:
             assert fetcher.get_title("https://example.com/short") is None
         assert mock_get.call_count == 1  # the first, public hop only
 
@@ -468,6 +501,19 @@ class TestDetectAndFetch:
     def test_no_url_does_not_send_message(self, fetcher, bot):
         fetcher.detect_and_fetch("nick", "#chan", "no links here")
         bot.send_message.assert_not_called()
+
+    @pytest.mark.parametrize("link", ["http://[", "http://[::1", "http://[x]/", "http://a＃b/"])
+    def test_a_link_that_does_not_parse_posts_nothing_and_raises_nothing(self, fetcher, bot, link):
+        with patch.object(fetcher.session, "get") as mock_get:
+            fetcher.detect_and_fetch("nick", "#chan", f"see {link}")
+        mock_get.assert_not_called()
+        bot.send_message.assert_not_called()
+
+    def test_one_failing_link_does_not_stop_the_others(self, fetcher, bot, capsys):
+        with patch.object(fetcher, "get_title", side_effect=[RuntimeError("boom"), "Second"]):
+            fetcher.detect_and_fetch("nick", "#chan", "https://a.example/ https://b.example/")
+        bot.send_message.assert_called_once_with("#chan", "Second")
+        assert "URL title: failed: RuntimeError" in capsys.readouterr().out
 
     def test_blacklisted_url_does_not_send_message(self, fetcher, bot):
         with patch.object(fetcher.session, "get") as mock_get:
