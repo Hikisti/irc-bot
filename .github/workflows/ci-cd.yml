@@ -34,11 +34,16 @@ jobs:
     name: Deploy
     needs: test
     runs-on: ubuntu-latest
-    # Only for real pushes to main, or a manual re-run - never for PRs
+    # Only for real pushes to main, or a manual re-run on main - never for PRs
     # (including from forks, which can't see the deploy secrets anyway).
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
+    # One deploy at a time, in push order: a newer push waits for the running deploy instead of racing it, and
+    # a deploy still waiting is replaced by the newer one (#86).
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
@@ -49,8 +54,9 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            git fetch --all
-            git reset --hard origin/main
+            # The commit this run tested, not whatever main points at by the time the deploy starts (#86).
+            git fetch origin main
+            git reset --hard "${{ github.sha }}"
             # A restart drops every channel and stops any running tracker, so a push that changes only files
             # the bot never runs (docs, tests, tools) leaves it running; .github/needs-restart.sh decides and
             # says why. .deployed-commit (untracked, gitignored) is the commit the running bot was started
