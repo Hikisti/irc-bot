@@ -62,7 +62,7 @@ By default it connects to `irc.quakenet.org`. Server, port and nickname are set 
 | Electricity price | `!sähkö`, `!sahko` | none | `!sähkö` |
 | Time | `!time` | city, or timezone abbreviation | `!time austin`, `!time cdt` |
 | F1 schedule | `!f1` | none | `!f1` |
-| Liiga live tracker | `!liiga` | `start`, `stop`, `next`, or `next <team> [count]` | `!liiga next jyp` |
+| Liiga live tracker | `!liiga` | `start`, `stop`, `next`, `next <team> [count]`, `now`, or `results` | `!liiga now` |
 | Distance | `!distance` | `city1,city2` (or two single-word cities) | `!distance Kokkola,Vimpeli` |
 | IMDb | `!imdb` | movie/show title, optionally with `series`/`movie` first and/or a year last; or an IMDb ID/link | `!imdb terminator 2`, `!imdb series flipper 1995` |
 | NHL live tracker | `!nhl` | `start`, `stop`, `next`, `next <team> [count]`, `now`, or `results` | `!nhl now` |
@@ -128,6 +128,18 @@ Helsinki time. The team is matched without case or diacritics and by any unique 
 the teams. The count defaults to 3 and the maximum is 10 (a larger number is cut to 10 and the reply says so),
 which is what fits one IRC line; fewer games left than asked shows what remains. Playoffs and the preseason are
 not included, and a game that is on or was postponed is skipped. `!liiga next` alone works as before.
+
+`!liiga now` and `!liiga results` work like `!nhl now` and `!nhl results` (below): one-shot looks that start no
+tracking and work while a tracker is running. `!liiga now` is today's board: `Live:` games with score, period and
+minutes played in it (`HIFK 2-1 Ilves 2nd 12'`; the feed's clock moves in coarse steps, so no seconds), `1st int.`
+and `2nd int.` while the clock stands at a period's end, `3rd end` (or `OT end`) between the end of play and the
+moment the feed calls the game ended, which can take several minutes, and `SO` during a shootout; then `Final:`
+(with `(OT)`/`(SO)`, the same rule as the `FINAL:` line) and `Upcoming:` (Helsinki start times; a game still not
+started after its scheduled end says `(not played)`). With no games today it points at the next gameday.
+`!liiga results` lists the finished games of today, or else of the previous gameday (`Liiga results 13.11.: HPK
+3-2 Jukurit, TPS 4-3 Jokerit`), with `(N game(s) still on: !liiga now)` when games are being played. Both read the
+same games list the tracker polls (Helsinki dates, briefly cached), and since the feed sometimes answers with an
+older copy of a game, a copy seen in the last minute that is further along is shown instead.
 
 `!stock <ticker>` answers from Yahoo Finance with the company name, price, today's change (green or red),
 volume and the 52-week range, e.g. `Apple Inc. (AAPL): 345.18 USD, today +4.04 (+1.18%). Volume 17.11M. 52W: 243.42 - 348.15.`

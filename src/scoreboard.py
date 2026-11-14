@@ -75,9 +75,12 @@ class ScoreboardMixin:
         if ended:
             sections += self._chunk("Final: ", [self._final_label(g) for g in ended], ", ")
         if upcoming:
-            summary = self._format_games_summary(upcoming)
-            sections += self._chunk("Upcoming: ", summary.split(" | "), " | ")
+            sections += self._chunk("Upcoming: ", self._upcoming_summary(upcoming).split(" | "), " | ")
         return self._pack(sections)
+
+    def _upcoming_summary(self, games) -> str:
+        """The upcoming games grouped by start time, '17:00 A-B, C-D | 18:30 E-F'."""
+        return self._format_games_summary(games)
 
     def _no_games_message(self) -> str:
         name = self.DISPLAY_NAME

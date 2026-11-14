@@ -55,7 +55,8 @@ LIIGA_EVENT = {"eventId": 102, "period": 3, "gameTime": 2535, "scorerPlayerId": 
                "homeTeamScore": 1, "awayTeamScore": 0, "assistantPlayers": [{"playerId": 1, "lastName": "C"}]}
 LIIGA_GAMES = [
     {"id": 1, "start": "2026-11-09T16:30:00Z", "started": True, "ended": True, "finishedType": "ENDED_DURING_REGULAR_GAME_TIME",
-     "gameTime": 3600, "spectators": 4200, "periods": [{"index": 1, "category": "REGULAR"}],
+     "gameTime": 3600, "currentPeriod": 3, "spectators": 4200,
+     "periods": [{"index": 1, "category": "REGULAR", "startTime": 0, "endTime": 1200}],
      "homeTeam": {"teamId": "123:hifk", "teamName": "HIFK", "goals": 1, "goalEvents": [LIIGA_EVENT]},
      "awayTeam": {"teamId": "456:tps", "teamName": "TPS", "goals": 0, "goalEvents": []}},
     {"id": 2, "start": "2026-11-09T16:30:00Z", "started": False, "ended": False, "finishedType": "ACTIVE_OR_NOT_STARTED",

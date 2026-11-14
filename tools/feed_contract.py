@@ -103,10 +103,13 @@ LIIGA_GAME = [
 ]
 LIIGA_ENDED = [
     ("gameTime", int),
+    ("currentPeriod", int),
     ("spectators", int),
     ("periods[]", dict),
     ("periods[].index", int),
     ("periods[].category?", str),
+    ("periods[].startTime", int),
+    ("periods[].endTime", int),
 ]
 # Only events with a scorer: the feed also lists a goal taken off by video review, without one, and the bot skips it.
 LIIGA_GOAL_EVENT = [

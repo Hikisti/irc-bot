@@ -5,11 +5,12 @@ import requests
 
 from irc_format import BOLD, RESET, GREEN, ORANGE, prefix as irc_prefix
 from liiga_goal_ledger import LiigaGoalLedgerMixin
+from liiga_scoreboard import LiigaScoreboardMixin
 from live_tracker_command import LiveTrackerCommand
 from team_next import TeamNextMixin
 
 
-class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
+class LiigaCommand(LiigaGoalLedgerMixin, LiigaScoreboardMixin, TeamNextMixin, LiveTrackerCommand):
     """
     Live-tracks today's Finnish Liiga (ice hockey) games in a channel,
     announcing goals and final scores as they happen. Uses the unofficial
@@ -19,6 +20,9 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
       !liiga start  -> start polling today's games in this channel
       !liiga stop   -> stop polling in this channel
       !liiga next   -> show the next upcoming gameday's games and times
+      !liiga now    -> today's board: live, finished and upcoming games
+                       (see LiigaScoreboardMixin)
+      !liiga results -> finished games of the latest gameday that has any
 
     All network I/O (the initial lookup and every later poll) happens on a
     background thread, never on the caller's thread, so a slow or hanging
@@ -43,7 +47,7 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
     # postponed (see _not_played), not at "ended" alone.
     ENDED_STATE_KEY = "over"
 
-    SUBCOMMANDS = ("start", "stop", "next [team [count]]")
+    SUBCOMMANDS = ("start", "stop", "next [team [count]]", "now", "results")
     TEAM_NEXT_EXAMPLE = "jyp"
 
     BASE_URL = "https://www.liiga.fi/api/v2/games"
@@ -380,11 +384,17 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
         return games
 
     def _fetch_games_and_next_date(self, date_str, season):
+        """(games_dict, next_game_date) for one date; see _fetch_games_with_hints."""
+        games, next_date, _previous = self._fetch_games_with_hints(date_str, season)
+        return games, next_date
+
+    def _fetch_games_with_hints(self, date_str, season):
         """Fetch every tournament's games for one date, merged together.
 
         Each tournament is fetched and error-handled independently, so a
         single failing/slow endpoint doesn't discard data already fetched
-        from the others. Returns (games_dict, next_game_date):
+        from the others. Returns (games_dict, next_game_date,
+        previous_game_date):
           - games_dict is None only if every tournament request failed
             (i.e. we have no idea what's happening that day) - callers
             treat that as "API unreachable".
@@ -392,6 +402,8 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
             tournament for this date (liiga.fi returns this even when a
             date has no games, pointing at the next date that does), or
             None if none of them reported one.
+          - previous_game_date is the latest "previousGameDate" earlier than
+            the queried date (given on dates with games too), or None.
 
         Confirmed live: once a tournament's own schedule is exhausted
         (e.g. valmistavat_ottelut/preseason ends and runkosarja takes
@@ -403,7 +415,7 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
         min(next_dates) alongside a different tournament's real one.
         """
         games = {}
-        next_dates = []
+        next_dates, previous_dates = [], []
         any_success = False
 
         for tournament in self.TOURNAMENTS:
@@ -422,6 +434,9 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
                 next_game_date = data.get("nextGameDate")
                 if next_game_date and next_game_date > date_str:
                     next_dates.append(next_game_date)
+                previous_game_date = data.get("previousGameDate")
+                if isinstance(previous_game_date, str) and previous_game_date < date_str:
+                    previous_dates.append(previous_game_date)
                 any_success = True
             except (ValueError, AttributeError, TypeError) as e:
                 # Checked before RequestException below: requests'
@@ -434,8 +449,8 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
                 print(f"Liiga API request failed for tournament={tournament}: {e}")
 
         if not any_success:
-            return None, None
-        return games, (min(next_dates) if next_dates else None)
+            return None, None, None
+        return games, (min(next_dates) if next_dates else None), (max(previous_dates) if previous_dates else None)
 
     def _fetch_next_gameday(self):
         """Returns (date_str, games_dict) for the closest date (today or

@@ -238,8 +238,8 @@ class TestExecuteRouting:
         assert liiga.execute("stop it", irc_bot=MagicMock(), channel="#c").startswith("Usage: ")
 
     def test_the_usage_and_help_show_the_new_form(self, liiga):
-        assert liiga.HELP == "!liiga start|stop|next [team [count]]"
-        assert liiga.execute("nonsense").endswith("!liiga next [team [count]]")
+        assert liiga.HELP == "!liiga start|stop|next [team [count]]|now|results"
+        assert liiga.execute("nonsense").endswith("!liiga next [team [count]] | !liiga now | !liiga results")
 
 
 # ---- NHL -------------------------------------------------------------------------------------------------
