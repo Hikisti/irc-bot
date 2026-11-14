@@ -30,12 +30,17 @@ not what it is.
   independent per-item network calls in parallel here (see "Concurrent
   fetching" below); never hand-roll `ThreadPoolExecutor`/`executor.map()`
   again in a new subclass.
-- `NHLCommand` also mixes in `NHLScoreboardMixin` (`src/nhl_scoreboard.py`):
-  the one-shot `!nhl now`/`!nhl results` lookups, which read the
-  `/score/{date}` endpoint (it carries period and clock; the schedule the
-  tracker polls doesn't) and never touch tracker state. A subcommand that
-  isn't start/stop/next goes in `SUBCOMMANDS` (what `!help` and the usage
-  reply list) and the subclass's own `execute()`.
+- The one-shot `now`/`results` lookups (`!nhl`, `!liiga`) never touch
+  tracker state. Their sport-neutral part - dispatch, background thread,
+  the Live / Final / Upcoming board, the results line, line packing - is
+  `ScoreboardMixin` (`src/scoreboard.py`); each sport supplies the fetch,
+  the state classifiers and the labels: `NHLScoreboardMixin`
+  (`src/nhl_scoreboard.py`, reads `/score/{date}`, which carries period and
+  clock; the schedule the tracker polls doesn't) and `LiigaScoreboardMixin`
+  (`src/liiga_scoreboard.py`, reads the same games list the tracker polls).
+  A subcommand that isn't start/stop/next goes in `SUBCOMMANDS` (what
+  `!help` and the usage reply list) and an `execute()` ahead of
+  `LiveTrackerCommand`'s in the MRO.
 - `NHLCommand` is also built from two more mixins, split out of `nhl_command.py`
   (it was 973 lines) as move-only commits (#10): `NHLGoalLedgerMixin`
   (`src/nhl_goal_ledger.py`: what has been announced per game, how a feed's goal
@@ -48,7 +53,7 @@ not what it is.
   FINAL is posted by the *second* poll in which it is final (#70), so a test
   that ends a game must poll twice or seed `"final_seen": ()` in the previous
   state.
-- `LiigaCommand` is built from two mixins besides the engine. `LiigaGoalLedgerMixin`
+- `LiigaCommand` is built from three mixins besides the engine (one is `LiigaScoreboardMixin`, above). `LiigaGoalLedgerMixin`
   (`src/liiga_goal_ledger.py`, split out of `liiga_command.py` as a move-only
   commit, then extended in its own commit for #22): every announced goal is kept
   by all the identities it has had (event id; period, game time and scorer; scorer
