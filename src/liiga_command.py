@@ -285,12 +285,9 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
         minutes, seconds = divmod(elapsed, 60)
         return f"{minutes:02d}:{seconds:02d}"
 
-    def _announce_end(self, irc_bot, channel, game):
-        home = self._team_name(game, "homeTeam")
-        away = self._team_name(game, "awayTeam")
-        home_goals = self._team_goals(game, "homeTeam")
-        away_goals = self._team_goals(game, "awayTeam")
-
+    def _end_suffix(self, game):
+        """(' (OT)' / ' (SO)' / '', what finishedType alone says, what the periods list alone says) for a game
+        that has ended: the one rule every Liiga final line uses."""
         finished = game.get("finishedType") or ""
         if "SHOOTOUT" in finished or "WINNING_SHOT" in finished:
             suffix_from_type = " (SO)"
@@ -330,6 +327,16 @@ class LiigaCommand(LiigaGoalLedgerMixin, TeamNextMixin, LiveTrackerCommand):
             suffix = " (SO)"
         else:
             suffix = suffix_from_type or suffix_from_periods
+        return suffix, suffix_from_type, suffix_from_periods
+
+    def _announce_end(self, irc_bot, channel, game):
+        home = self._team_name(game, "homeTeam")
+        away = self._team_name(game, "awayTeam")
+        home_goals = self._team_goals(game, "homeTeam")
+        away_goals = self._team_goals(game, "awayTeam")
+
+        suffix, suffix_from_type, suffix_from_periods = self._end_suffix(game)
+        finished = game.get("finishedType") or ""
         if suffix_from_type != suffix_from_periods:
             # Diagnostic for a reported case where a real shootout final
             # was announced with no suffix at all - couldn't reproduce
