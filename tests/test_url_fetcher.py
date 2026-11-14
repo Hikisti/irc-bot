@@ -2,6 +2,7 @@ import queue
 import socket
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -164,7 +165,17 @@ class TestGetTitle:
             mock_get.return_value.json.return_value = {"title": "T", "author_name": "A"}
             fetcher.get_title("https://www.youtube.com/shorts/xyz789")
         called_url = mock_get.call_args[0][0]
-        assert "v=xyz789" in called_url
+        assert parse_qs(urlparse(called_url).query)["url"] == ["https://www.youtube.com/watch?v=xyz789"]
+
+    def test_a_youtube_id_cannot_add_parameters_to_the_oembed_request(self, fetcher):
+        with patch.object(fetcher.session, "get") as mock_get:
+            mock_get.return_value = make_response()
+            mock_get.return_value.json.return_value = {"title": "T", "author_name": "A"}
+            fetcher.get_title("https://youtu.be/abc&format=xml&url=https://evil.example/")
+        query = parse_qs(urlparse(mock_get.call_args[0][0]).query)
+        assert query == {"url": ["https://www.youtube.com/watch?v=abc&format=xml&url=https://evil.example/"],
+                         "format": ["json"]}
+        assert mock_get.call_args.kwargs["allow_redirects"] is False
 
     def test_youtube_invalid_url_posts_nothing_and_is_journaled(self, fetcher, capsys):
         assert fetcher.get_title("https://www.youtube.com/watch") is None
@@ -176,7 +187,7 @@ class TestGetTitle:
             mock_get.return_value.json.return_value = {"title": "T", "author_name": "A"}
             result = fetcher.get_title("https://youtu.be/xyz789")
         called_url = mock_get.call_args[0][0]
-        assert "v=xyz789" in called_url
+        assert parse_qs(urlparse(called_url).query)["url"] == ["https://www.youtube.com/watch?v=xyz789"]
         assert result == "YouTube: T (by A)"
 
     def test_domain_containing_youtube_as_a_substring_is_not_treated_as_youtube(self, fetcher):
@@ -248,10 +259,18 @@ def redirect(location, status=302):
 class TestOnlyPublicAddressesAreFetched:
     """A link anyone can post must not make the bot read services on its own machine or network."""
 
+    @pytest.mark.parametrize("address, public", [
+        ("64:ff9b::7f00:1", False), ("64:ff9b::a00:1", False), ("::7f00:1", False), ("::a9fe:a9fe", False),
+        ("64:ff9b::808:808", True), ("::808:808", True), ("2606:4700::1111", True), ("::1", False), ("::", False),
+    ])
+    def test_an_ipv4_address_inside_ipv6_is_judged_as_that_ipv4_address(self, address, public):
+        assert url_fetcher._is_public_address(address) is public
+
     @pytest.mark.parametrize("url", [
         "http://127.0.0.1/", "http://127.0.0.1:8080/admin", "http://localhost/", "http://0.0.0.0/",
         "http://10.1.2.3/", "http://192.168.0.10/", "http://172.16.5.5/", "http://169.254.169.254/latest/meta-data/",
         "http://100.64.0.1/", "http://[::1]/", "http://[fe80::1]/", "http://[fc00::1]/", "http://[::ffff:127.0.0.1]/",
+        "http://[64:ff9b::7f00:1]/", "http://[64:ff9b::a9fe:a9fe]/", "http://[::7f00:1]/",
     ])
     def test_non_public_addresses_are_never_requested(self, fetcher, url):
         # No fixture override here: _resolve() is the real one, a literal address resolves to itself;

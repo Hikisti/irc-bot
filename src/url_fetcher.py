@@ -6,7 +6,7 @@ import socket
 import threading
 import time
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode
 
 import requests
 import requests.adapters
@@ -23,9 +23,17 @@ class _RefusedURL(Exception):
     """A link the bot will not fetch (a non-public address, or not http(s))."""
 
 
+# IPv6 ranges that carry an IPv4 address in their last 32 bits and that is_global counts as public whatever that
+# address is: NAT64's well-known prefix (64:ff9b::7f00:1 reaches 127.0.0.1 through a NAT64 gateway) and the
+# deprecated IPv4-compatible form (::7f00:1). The embedded address is what gets checked (#86).
+_EMBEDDED_IPV4_NETWORKS = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
+
+
 def _is_public_address(address) -> bool:
     ip = ipaddress.ip_address(address.split("%")[0])
     ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 is 127.0.0.1
+    if ip.version == 6 and any(ip in network for network in _EMBEDDED_IPV4_NETWORKS):
+        ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip.is_global
 
 
@@ -396,8 +404,11 @@ class URLFetcher:
             if not video_id:
                 return self._no_title(url, "Invalid YouTube URL.")
 
-            api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-            response = self.session.get(api_url, timeout=DEFAULT_TIMEOUT_SECONDS)
+            # Encoded, so an id carrying '&' or '#' cannot add parameters to the oEmbed request; no redirects,
+            # since the answer is expected from this fixed address only (#86).
+            query = urlencode({"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"})
+            api_url = f"https://www.youtube.com/oembed?{query}"
+            response = self.session.get(api_url, timeout=DEFAULT_TIMEOUT_SECONDS, allow_redirects=False)
             response.raise_for_status()
             data = response.json()
 
