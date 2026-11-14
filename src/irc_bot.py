@@ -25,12 +25,18 @@ class IrcBot:
     KEEPALIVE_PING_SECONDS = 180
     SOCKET_POLL_SECONDS = 30  # how often listen() wakes up to check
     CONNECT_TIMEOUT_SECONDS = 30
+    # A taken nick (433) before the welcome: the bot tries the nick with this many underscores added, one more
+    # each time, then gives up. Without it the server never welcomes the bot and it joins nothing, while
+    # looking connected (#86).
+    MAX_NICK_SUFFIX = 3
 
     def __init__(self, server="irc.quakenet.org", port=6667, nickname="KukistiBot", channels=None):
         self.server = server
         self.port = port
         self.nickname = nickname
         self.running = False
+        self.stop_requested = False
+        self.registered = False
         self.sock = None
         self._send_lock = threading.Lock()  # serializes socket writes across threads
         self._last_sent = {}  # channel -> last message sent to it, for _report_refused_send()
@@ -115,8 +121,11 @@ class IrcBot:
                     command = parts[1] if line.startswith(":") and len(parts) > 1 else None
 
                     if command == "001":  # Server welcome message
+                        self.registered = True
                         print("Server welcome message received. Joining channels...")
                         self.join_channels()  # Join multiple channels
+                    elif command == "433" and not self.registered:  # ERR_NICKNAMEINUSE
+                        self._try_another_nick()
                     elif command == "PRIVMSG":
                         self.process_message(line)
                     elif command == "404":  # ERR_CANNOTSENDTOCHAN
@@ -156,10 +165,21 @@ class IrcBot:
             print(f"< {line}")
 
     def pong(self, message):
-        """Respond to PING messages from the server."""
-        server = message.split()[1]
+        """Respond to PING messages from the server, with the token it sent (if any)."""
+        server = message.partition(" ")[2].strip()
         print(f"Responding to PING from {server}")
-        self.send_raw(f"PONG {server}")
+        self.send_raw(f"PONG {server}".rstrip())
+
+    def _try_another_nick(self):
+        taken = self.nickname
+        base = taken.rstrip("_")
+        suffix = len(taken) - len(base) + 1
+        if suffix > self.MAX_NICK_SUFFIX:
+            print(f"NICK IN USE: {taken}, no more nicks to try; the server will not let the bot in")
+            return
+        self.nickname = base + "_" * suffix
+        print(f"NICK IN USE: {taken}, trying {self.nickname}")
+        self.send_raw(f"NICK {self.nickname}")
 
     def send_raw(self, message):
         """Send a raw command to the IRC server."""
@@ -245,12 +265,13 @@ class IrcBot:
     def stop(self):
         """Stop the bot and close the connection."""
         print("DISCONNECTED: stop() called (requested shutdown)")
+        self.stop_requested = True
         self.running = False
         self.send_raw("QUIT :Bot shutting down")
         self.sock.close()
 
-if __name__ == "__main__":
-    debug_mode = "--debug" in sys.argv  # Check if --debug argument is present
+def main(argv) -> int:
+    debug_mode = "--debug" in argv  # Check if --debug argument is present
 
     if debug_mode:
         print("Running in debug mode: Joining only the default channel.")
@@ -260,3 +281,10 @@ if __name__ == "__main__":
         bot.channels = list(bot.command_handler.channel_config.channels)
 
     bot.connect()
+    # connect() returns when the connection has ended. Anything but a requested stop is a failure, and says so
+    # to the service manager instead of exiting as if all were well (#86).
+    return 0 if bot.stop_requested else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

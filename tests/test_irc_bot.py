@@ -33,6 +33,84 @@ class TestPong:
         assert "Responding to PING from :irc.example.net" in captured.out
 
 
+    def test_a_bare_ping_is_answered_instead_of_ending_the_listener(self, bot):
+        # "PING" with no token once raised IndexError, which the listen loop's catch-all turns into a disconnect.
+        bot.pong("PING")
+        bot.sock.sendall.assert_called_once_with(b"PONG\r\n")
+
+    def test_a_ping_with_a_token_without_colon(self, bot):
+        bot.pong("PING irc.example.net")
+        bot.sock.sendall.assert_called_once_with(b"PONG irc.example.net\r\n")
+
+
+class TestNickInUse:
+    def test_a_taken_nick_tries_one_with_an_underscore(self, bot, capsys):
+        bot._try_another_nick()
+        bot.sock.sendall.assert_called_once_with(b"NICK KukistiBot_\r\n")
+        assert bot.nickname == "KukistiBot_"
+        assert "NICK IN USE: KukistiBot, trying KukistiBot_" in capsys.readouterr().out
+
+    def test_each_refusal_adds_one_more_until_the_limit(self, bot, capsys):
+        for _ in range(bot.MAX_NICK_SUFFIX + 2):
+            bot._try_another_nick()
+        sent = [c.args[0] for c in bot.sock.sendall.call_args_list]
+        assert sent == [b"NICK KukistiBot_\r\n", b"NICK KukistiBot__\r\n", b"NICK KukistiBot___\r\n"]
+        assert "no more nicks to try" in capsys.readouterr().out
+
+    def test_433_before_the_welcome_tries_another_nick(self, bot):
+        TestListenDispatch()._stop_after_one_line(bot, b":irc.example.net 433 * KukistiBot :Nickname is already in use.\r\n")
+        with patch.object(bot, "_try_another_nick") as retry:
+            bot.listen()
+        retry.assert_called_once()
+
+    def test_433_after_the_welcome_is_ignored(self, bot):
+        bot.registered = True
+        TestListenDispatch()._stop_after_one_line(bot, b":irc.example.net 433 KukistiBot x :Nickname is already in use.\r\n")
+        with patch.object(bot, "_try_another_nick") as retry:
+            bot.listen()
+        retry.assert_not_called()
+
+    def test_the_welcome_marks_the_bot_registered(self, bot):
+        TestListenDispatch()._stop_after_one_line(bot, b":irc.example.net 001 KukistiBot :Welcome\r\n")
+        with patch.object(bot, "join_channels"):
+            bot.listen()
+        assert bot.registered
+
+
+class TestExitStatus:
+    """The bot exits 1 when the connection ended by itself and 0 only after stop()."""
+
+    def _run_main(self, stop_requested, argv=("irc_bot.py",)):
+        import irc_bot
+        joined = []
+
+        def fake_connect(self):
+            joined.extend(self.channels)
+            self.stop_requested = stop_requested
+
+        with patch.object(irc_bot.IrcBot, "connect", fake_connect):
+            self.joined = joined
+            return irc_bot.main(list(argv))
+
+    def test_debug_mode_joins_only_the_debug_channel(self):
+        assert self._run_main(True, ("irc_bot.py", "--debug")) == 0
+        assert self.joined == [IrcBot().command_handler.channel_config.debug_channel]
+
+    def test_production_joins_every_configured_channel(self):
+        self._run_main(True)
+        assert self.joined == list(IrcBot().command_handler.channel_config.channels)
+
+    def test_a_connection_that_ended_is_a_failure(self):
+        assert self._run_main(False) == 1
+
+    def test_a_requested_stop_is_not(self):
+        assert self._run_main(True) == 0
+
+    def test_stop_marks_the_stop_as_requested(self, bot):
+        bot.stop()
+        assert bot.stop_requested and not bot.running
+
+
 class TestProcessMessage:
     """process_message() has no direct tests until now - only exercised
     indirectly through listen()'s dispatch tests, which don't cover its
