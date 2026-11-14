@@ -65,12 +65,6 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
 
     GOAL_PREFIX = irc_prefix("GOAL:", GREEN)
 
-    def execute(self, args=None, irc_bot=None, channel=None, **kwargs):
-        arg = (args or "").strip().lower()
-        if arg in ("now", "results"):
-            return self._scoreboard(irc_bot, channel, arg)
-        return super().execute(args, irc_bot=irc_bot, channel=channel, **kwargs)
-
     # ---- "next"/"run" lookup hooks (see LiveTrackerCommand._run_next / _run) --
 
     def _fetch_next_period(self, context):

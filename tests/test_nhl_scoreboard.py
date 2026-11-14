@@ -447,7 +447,7 @@ class _InlineThread:
 class TestExecute:
     def _run(self, nhl, arg, bot=None):
         bot = bot or MagicMock()
-        with patch("nhl_scoreboard.threading.Thread", _InlineThread):
+        with patch("scoreboard.threading.Thread", _InlineThread):
             result = nhl.execute(arg, irc_bot=bot, channel="#nhl.fi")
         return result, bot
 

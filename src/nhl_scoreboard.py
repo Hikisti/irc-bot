@@ -1,11 +1,12 @@
 import datetime
-import threading
 import time
 
 import requests
 
+from scoreboard import ScoreboardMixin
 
-class NHLScoreboardMixin:
+
+class NHLScoreboardMixin(ScoreboardMixin):
     """`!nhl now` and `!nhl results` - one-shot looks at the scoreboard, as
     opposed to the start/stop tracker. Both read api-web.nhle.com's
     /score/{date}, which (unlike the schedule the tracker polls) carries
@@ -16,47 +17,19 @@ class NHLScoreboardMixin:
     runs past Eastern midnight still belongs to the previous date, so
     `now` also looks at yesterday's date for games still being played.
 
-    Mixed into NHLCommand (it relies on the session, _score_pair,
-    _team_abbrev, _is_ended and the date/summary helpers defined there and
-    in LiveTrackerCommand).
+    The sport-neutral part (dispatch, thread, board layout, packing) is
+    ScoreboardMixin. Mixed into NHLCommand (it relies on the session,
+    _score_pair, _team_abbrev, _is_ended and the date/summary helpers
+    defined there and in LiveTrackerCommand).
     """
 
     LIVE_STATES = ("LIVE", "CRIT")
     UPCOMING_STATES = ("FUT", "PRE")
     # gameScheduleState values for a game that will not be played as scheduled.
     NOT_PLAYED_SCHEDULE_STATES = ("PPD", "CNCL", "TBD")
-    # /score/{date} is cheap, but anyone can spam the command - a short
-    # cache keeps that from becoming a request per message.
-    SCORE_CACHE_SECONDS = 15
     # How many Eastern dates back `results` looks for a slate with a
     # finished game (covers an off day or two).
     RESULTS_LOOKBACK_DAYS = 4
-    # Well under IRC's 512-byte line limit, which the server's own framing
-    # also eats into.
-    MAX_LINE_BYTES = 380
-    SECTION_SEPARATOR = " || "
-
-    # ---- entry point --------------------------------------------------------
-
-    def _scoreboard(self, irc_bot, channel, kind):
-        """Starts the lookup on a background thread (a slow API can't stall
-        the bot - same reasoning as `next`) and returns at once. The
-        result is sent as one or more channel messages, not returned."""
-        if irc_bot is None or channel is None:
-            return "Error: this command needs channel context."
-        threading.Thread(target=self._run_scoreboard, args=(irc_bot, channel, kind), daemon=True).start()
-        return None
-
-    def _run_scoreboard(self, irc_bot, channel, kind):
-        try:
-            messages = self._board_messages() if kind == "now" else self._results_messages()
-        except Exception as e:
-            print(f"NHL {kind} lookup error: {e}")
-            messages = None
-        if not messages:
-            messages = [f"Error: could not reach the {self.DISPLAY_NAME} API."]
-        for message in messages:
-            self._safe_send(irc_bot, channel, message)
 
     # ---- data ---------------------------------------------------------------
 
@@ -104,9 +77,6 @@ class NHLScoreboardMixin:
         any state not seen before - which must never look like 'not started'."""
         return not self._is_upcoming(game) and not self._is_ended(game)
 
-    def _by_start(self, games):
-        return sorted(games, key=lambda g: g.get("startTimeUTC") or "")
-
     # ---- `!nhl now` ---------------------------------------------------------
 
     def _board_messages(self):
@@ -123,35 +93,7 @@ class NHLScoreboardMixin:
             if self._is_live(game):
                 games[gid] = game
 
-        if not games:
-            return [self._no_games_message()]
-
-        live = self._by_start(g for g in games.values() if self._is_live(g))
-        ended = self._by_start(g for g in games.values() if self._is_ended(g))
-        upcoming = self._by_start(
-            g for g in games.values() if self._is_upcoming(g) and not self._is_ended(g)
-        )
-
-        sections = []
-        if live:
-            sections += self._chunk("Live: ", [self._live_label(g) for g in live], ", ")
-        if ended:
-            sections += self._chunk("Final: ", [self._final_label(g) for g in ended], ", ")
-        if upcoming:
-            summary = self._format_games_summary(upcoming)
-            sections += self._chunk("Upcoming: ", summary.split(" | "), " | ")
-        return self._pack(sections)
-
-    def _no_games_message(self) -> str:
-        try:
-            date_str, games = self._fetch_next_gameday()
-        except Exception as e:
-            print(f"NHL next-gameday lookup error: {e}")
-            date_str, games = None, None
-        if not games:
-            return "No NHL games today."
-        label = self._format_date_label(date_str)
-        return f"No NHL games today. Next NHL gameday ({label}): {self._format_games_summary(games.values())}"
+        return self._board_from(games)
 
     # ---- `!nhl results` -----------------------------------------------------
 
@@ -178,12 +120,8 @@ class NHLScoreboardMixin:
         date, games = chosen
         finished = self._by_start(g for g in games.values() if self._is_ended(g))
         label = self._result_date_label(games, date)
-        messages = self._pack(self._chunk(f"NHL results {label}: ", [self._final_label(g) for g in finished], ", "))
-
         still_on = {gid for gid, g in {**today, **games}.items() if self._is_live(g)}
-        if still_on:
-            messages[-1] += f" ({len(still_on)} game(s) still on: {self.COMMAND_NAME} now)"
-        return messages
+        return self._results_from(label, finished, len(still_on))
 
     def _result_date_label(self, games, eastern_date) -> str:
         """The slate's date as Helsinki shows it, 'D.M.' - an Eastern
@@ -241,30 +179,3 @@ class NHLScoreboardMixin:
         if remaining == "00:00" and clock.get("running") is False:
             return f"{name} end".strip()
         return f"{name} {remaining} left".strip() if remaining else name
-
-    # ---- message packing ----------------------------------------------------
-
-    def _chunk(self, prefix, items, sep):
-        """Splits `items` into strings that each start with `prefix` and
-        stay within MAX_LINE_BYTES, breaking only between items."""
-        chunks, current = [], []
-        for item in items:
-            candidate = prefix + sep.join(current + [item])
-            if current and len(candidate.encode("utf-8")) > self.MAX_LINE_BYTES:
-                chunks.append(prefix + sep.join(current))
-                current = []
-            current.append(item)
-        if current:
-            chunks.append(prefix + sep.join(current))
-        return chunks
-
-    def _pack(self, parts):
-        """Joins as many parts as fit into each message (never splitting a
-        part), so a short board is one line and a long one a few."""
-        messages = []
-        for part in parts:
-            if messages and len((messages[-1] + self.SECTION_SEPARATOR + part).encode("utf-8")) <= self.MAX_LINE_BYTES:
-                messages[-1] += self.SECTION_SEPARATOR + part
-            else:
-                messages.append(part)
-        return messages
