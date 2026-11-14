@@ -85,6 +85,13 @@ exists but every game/match on it is already finished (e.g. run late in the even
 a single `All of today's Liiga games have already finished.` instead of announcing "Tracking N
 games" and then immediately "all finished, stopped" a moment later.
 
+`!liiga` and `!nhl` tracking also starts by itself: if nobody has started it in a channel that has
+the tracker by the scheduled start of the day's first game, the bot starts it there, through the
+same `start` and its guards, and the channel sees the usual "Tracking N games" line. It does so once
+a day: not again after the tracker has ended, and not after someone has used `stop` that day. A
+start that finds nothing to track says so in the bot's log only. After a restart during the games,
+the tracker comes back on its own.
+
 For `!liiga start` and `!nhl start`, the "Tracking N games" reply also shows the current score of
 any game already underway, e.g. `Tracking 3 NHL game(s) today: 00:00 CAR 0-1 FLA (final) | 02:00
 TOR 1-1 MTL | 05:00 EDM-VAN` (`(final)` once it has ended, plain names for games not started yet).

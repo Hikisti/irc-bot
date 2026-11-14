@@ -6,6 +6,7 @@ import time
 import sys
 import traceback
 
+from auto_start import AutoStarter
 from command_handler import CommandHandler
 from url_fetcher import URLFetcher
 
@@ -44,6 +45,7 @@ class IrcBot:
         # channels.toml names both the production channels and the debug one, the default here.
         self.channels = channels if channels else [self.command_handler.channel_config.debug_channel]
         self.url_fetcher = URLFetcher(self)  # Initialize URL fetcher
+        self.auto_starter = None
 
     def connect(self):
         """Connect to the IRC server and join the channel."""
@@ -124,6 +126,7 @@ class IrcBot:
                         self.registered = True
                         print("Server welcome message received. Joining channels...")
                         self.join_channels()  # Join multiple channels
+                        self._start_auto_starter()
                     elif command == "433" and not self.registered:  # ERR_NICKNAMEINUSE
                         self._try_another_nick()
                     elif command == "PRIVMSG":
@@ -205,6 +208,12 @@ class IrcBot:
             print(f"Attempting to join {channel}...")
             self.send_raw(f"JOIN {channel}")
             time.sleep(1)  # Prevent flooding
+
+    def _start_auto_starter(self):
+        """Once the channels are joined, and once per process (the server welcomes the bot once)."""
+        if self.auto_starter is None:
+            self.auto_starter = AutoStarter(self, self.command_handler.auto_start_targets(self.channels))
+            self.auto_starter.start()
 
     def _report_refused_send(self, line):
         """Logs, in plain ASCII, that the server refused a message to a

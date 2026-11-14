@@ -46,6 +46,7 @@ class LiigaCommand(LiigaGoalLedgerMixin, LiigaScoreboardMixin, TeamNextMixin, Li
     # The start-of-tracking guard ("already finished") looks at "over", which also covers a game that was
     # postponed (see _not_played), not at "ended" alone.
     ENDED_STATE_KEY = "over"
+    AUTO_START = True
 
     SUBCOMMANDS = ("start", "stop", "next [team [count]]", "now", "results")
     TEAM_NEXT_EXAMPLE = "jyp"

@@ -69,6 +69,17 @@ class CommandHandler:
         can never list something dispatch would ignore (or the reverse)."""
         return self.channel_config.allows(command.ALIASES[0], channel)
 
+    def auto_start_targets(self, channels):
+        """[(tracker, [channel, ...])]: each tracker that starts by itself, with the channels among
+        `channels` where it is allowed."""
+        targets = []
+        for command in self._commands:
+            if getattr(command, "AUTO_START", False):
+                allowed = [channel for channel in channels if self.is_allowed(command, channel)]
+                if allowed:
+                    targets.append((command, allowed))
+        return targets
+
     def url_titles_allowed(self, channel) -> bool:
         return self.channel_config.link_titles(channel)
 

@@ -408,3 +408,26 @@ class TestExclusiveChannel:
             for command in handler._commands:
                 allowed = handler.is_allowed(command, channel)
                 assert (command.HELP in listed) == allowed, f"{command.ALIASES} in {channel}"
+
+
+class TestAutoStartTargets:
+    def test_each_automatic_tracker_with_the_channels_that_have_it(self, handler):
+        handler.channel_config = parse_channels({
+            "debug": {"channel": "#bottest123"},
+            "channels": {
+                "#smliiga": {"add": ["!liiga"]},
+                "#nhl.fi": {"add": ["!nhl"]},
+                "#both": {"only": ["!nhl", "!liiga"]},
+                "#pesis.fi": {"add": ["!superpesis"]},
+                "#other": {},
+            },
+        }, handler._commands)
+        channels = ["#smliiga", "#nhl.fi", "#both", "#pesis.fi", "#other"]
+
+        targets = {command.ALIASES[0]: allowed for command, allowed in handler.auto_start_targets(channels)}
+
+        assert targets == {"!liiga": ["#smliiga", "#both"], "!nhl": ["#nhl.fi", "#both"]}
+
+    def test_only_the_channels_given(self, handler):
+        """--debug joins only the debug channel, which has no tracker."""
+        assert handler.auto_start_targets(["#bottest123"]) == []

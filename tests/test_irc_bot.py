@@ -878,3 +878,22 @@ class TestRefusedSend:
     def test_send_message_still_sends_the_same_line(self, bot):
         bot.send_message("#chan", "hello\nworld")
         bot.sock.sendall.assert_called_once_with(b"PRIVMSG #chan :hello world\r\n")
+
+
+class TestAutoStarter:
+    def test_the_welcome_starts_it_once_with_the_joined_channels(self, bot):
+        bot.channels = ["#smliiga", "#nhl.fi"]
+        with patch.object(bot, "join_channels"), patch("irc_bot.AutoStarter") as starter:
+            TestListenDispatch()._stop_after_one_line(bot, b":irc.example.net 001 KukistiBot :Welcome\r\n")
+            bot.listen()
+            TestListenDispatch()._stop_after_one_line(bot, b":irc.example.net 001 KukistiBot :Welcome\r\n")
+            bot.listen()
+
+        starter.assert_called_once_with(bot, bot.command_handler.auto_start_targets(["#smliiga", "#nhl.fi"]))
+        starter.return_value.start.assert_called_once()
+
+    def test_not_before_the_welcome(self, bot):
+        with patch("irc_bot.AutoStarter") as starter:
+            TestListenDispatch()._stop_after_one_line(bot, b":alice!a@host PRIVMSG #chan :hello\r\n")
+            bot.listen()
+        starter.assert_not_called()

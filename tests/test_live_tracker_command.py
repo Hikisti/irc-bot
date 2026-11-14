@@ -55,7 +55,7 @@ class MinimalTracker(LiveTrackerCommand):
     PERIOD_NOUN = "round"
     STATE_KEY = "items"
 
-    def _run(self, irc_bot, channel, stop_event):
+    def _run(self, irc_bot, channel, stop_event, automatic=False):
         # Tests drive _poll_loop/_poll_once directly rather than through
         # _start's real background thread, so this just has to not blow up
         # if that thread happens to run before a test finishes with it.
@@ -479,3 +479,64 @@ class TestTrackingSummaryHook:
         run_tracker._fetch_next_period = lambda context: ("2026-01-01", {1: "a"})
         run_tracker._run_next(next_bot, "#chan")
         assert "TRACKING-LIST" not in next_bot.send_message.call_args[0][1]
+
+
+class TestAutomaticStart:
+    """What AutoStarter (auto_start.py) relies on: the same start path, but a start that comes to nothing
+    goes to the journal, since nobody in the channel asked for it."""
+
+    def _run(self, tracker, items, automatic=True):
+        bot = MagicMock()
+        stop_event = threading.Event()
+        tracker._channels["#chan"] = {"stop_event": stop_event, "thread": None, tracker.STATE_KEY: {}}
+        tracker._fetch_today_items = lambda context: items
+        tracker._run(bot, "#chan", stop_event, automatic=automatic)
+        return bot
+
+    @pytest.mark.parametrize("items, journal", [
+        (None, "Error: could not reach the Test API."),
+        ({}, "No Test items scheduled today."),
+        ({1: {"ended": True}}, "All of today's Test items have already finished."),
+    ])
+    def test_a_start_that_comes_to_nothing_goes_to_the_journal(self, run_tracker, capsys, items, journal):
+        bot = self._run(run_tracker, items)
+        bot.send_message.assert_not_called()
+        assert f"Test: #chan: automatic start: {journal}" in capsys.readouterr().out
+        assert "#chan" not in run_tracker._channels
+
+    def test_a_start_that_tracks_says_so_in_the_channel(self, run_tracker):
+        bot = self._run(run_tracker, {1: {"ended": False}})
+        assert "Tracking 1 Test item(s) today" in bot.send_message.call_args_list[0][0][1]
+
+    def test_a_manual_start_still_answers_in_the_channel(self, run_tracker):
+        bot = self._run(run_tracker, {}, automatic=False)
+        bot.send_message.assert_called_once_with("#chan", "No Test items scheduled today.")
+
+    def test_start_automatically_goes_through_start(self, tracker, capsys):
+        tracker.start_automatically(MagicMock(), "#chan")
+        assert tracker.is_tracking("#chan")
+        assert "Test: #chan: Checking today's Test items..." in capsys.readouterr().out
+
+    def test_start_automatically_does_not_start_a_second_tracker(self, tracker):
+        tracker._start(MagicMock(), "#chan")
+        entry = tracker._channels["#chan"]
+        tracker.start_automatically(MagicMock(), "#chan")
+        assert tracker._channels["#chan"] is entry
+
+    def test_a_stop_is_remembered(self, tracker):
+        assert tracker.last_stopped("#chan") is None
+        tracker._start(MagicMock(), "#chan")
+        before = datetime.datetime.now(tracker.HELSINKI_TZ)
+        tracker._stop("#chan")
+        assert tracker.last_stopped("#chan") >= before
+        assert not tracker.is_tracking("#chan")
+
+    def test_a_stop_with_nothing_running_is_not(self, tracker):
+        tracker._stop("#chan")
+        assert tracker.last_stopped("#chan") is None
+
+    def test_first_start_is_the_earliest_usable_one(self, tracker):
+        tracker.START_TIME_KEY = "start"
+        items = {1: {"start": "2026-11-14T17:00:00Z"}, 2: {"start": "2026-11-14T15:00:00Z"}, 3: {"start": "x"}}
+        assert tracker.first_start(items) == datetime.datetime(2026, 11, 14, 15, 0, tzinfo=datetime.timezone.utc)
+        assert tracker.first_start({1: {}}) is None

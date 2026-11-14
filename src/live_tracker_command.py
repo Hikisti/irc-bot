@@ -75,11 +75,15 @@ class LiveTrackerCommand(BaseCommand):
     SUBCOMMANDS = ("start", "stop", "next")
     # True for a command that mixes in TeamNextMixin: "next <team> [count]".
     SUPPORTS_TEAM_NEXT = False
+    # True: AutoStarter (auto_start.py) starts the tracker at the first game's scheduled start in every
+    # channel that has it and where nobody has started it by then.
+    AUTO_START = False
 
     def __init__(self):
         self.session = make_session(f"KukistiBot-{self.CACHE_SLUG}/1.0")
         self._lock = threading.Lock()
         self._channels = {}  # channel -> {"stop_event", "thread", STATE_KEY: ...}
+        self._stopped_at = {}  # channel -> when `stop` last ended a tracker there
 
     @property
     def HELP(self):
@@ -101,7 +105,21 @@ class LiveTrackerCommand(BaseCommand):
 
     # ---- start / stop -----------------------------------------------
 
-    def _start(self, irc_bot, channel):
+    def is_tracking(self, channel) -> bool:
+        with self._lock:
+            return channel in self._channels
+
+    def last_stopped(self, channel):
+        """When `stop` last ended a tracker in `channel` (aware), or None."""
+        with self._lock:
+            return self._stopped_at.get(channel)
+
+    def start_automatically(self, irc_bot, channel):
+        """`start` without anyone asking: the same path and guards, but a start that comes to nothing
+        (no games, all finished, the API unreachable) goes to the journal instead of the channel."""
+        print(f"{self.DISPLAY_NAME}: {channel}: {self._start(irc_bot, channel, automatic=True)}")
+
+    def _start(self, irc_bot, channel, automatic=False):
         if irc_bot is None or channel is None:
             return "Error: live tracking is unavailable without channel context."
 
@@ -116,6 +134,7 @@ class LiveTrackerCommand(BaseCommand):
         thread = threading.Thread(
             target=self._run,
             args=(irc_bot, channel, stop_event),
+            kwargs={"automatic": automatic},
             daemon=True,
         )
         with self._lock:
@@ -129,6 +148,8 @@ class LiveTrackerCommand(BaseCommand):
     def _stop(self, channel):
         with self._lock:
             entry = self._channels.pop(channel, None)
+            if entry:
+                self._stopped_at[channel] = datetime.datetime.now(self.HELSINKI_TZ)
         if not entry:
             return f"Not currently tracking {self.DISPLAY_NAME} {self.TRACKED_NOUN} in this channel."
         entry["stop_event"].set()
@@ -191,11 +212,19 @@ class LiveTrackerCommand(BaseCommand):
 
     # ---- background thread entry point ---------------------------------
 
-    def _run(self, irc_bot, channel, stop_event):
+    def _run(self, irc_bot, channel, stop_event, automatic=False):
         """Runs entirely on a background thread: resolves context (if
         REQUIRES_CONTEXT), does the initial lookup, reports what's being
         tracked (or bails out), then polls until everything's done or
-        <command> stop is called."""
+        <command> stop is called. An automatic start bails out to the
+        journal: nobody in the channel asked."""
+        def bail(message):
+            self._drop_if_current(channel, stop_event)
+            if automatic:
+                print(f"{self.DISPLAY_NAME}: {channel}: automatic start: {message}")
+            else:
+                self._safe_send(irc_bot, channel, message)
+
         context = None
         if self.REQUIRES_CONTEXT:
             try:
@@ -205,8 +234,7 @@ class LiveTrackerCommand(BaseCommand):
                 context = None
 
             if context is None:
-                self._drop_if_current(channel, stop_event)
-                self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
+                bail(f"Error: could not reach the {self.DISPLAY_NAME} API.")
                 return
 
         try:
@@ -216,27 +244,19 @@ class LiveTrackerCommand(BaseCommand):
             items = None
 
         if items is None:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, f"Error: could not reach the {self.DISPLAY_NAME} API.")
+            bail(f"Error: could not reach the {self.DISPLAY_NAME} API.")
             return
 
         if not items:
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(irc_bot, channel, f"No {self.DISPLAY_NAME} {self.TRACKED_NOUN} scheduled today.")
+            bail(f"No {self.DISPLAY_NAME} {self.TRACKED_NOUN} scheduled today.")
             return
 
-        earliest = min(
-            (dt for dt in (
-                self._parse_start_dt(item.get(self.START_TIME_KEY)) for item in items.values()
-            ) if dt is not None),
-            default=None,
-        )
+        earliest = self.first_start(items)
         if earliest is not None:
             guard_until = earliest - datetime.timedelta(minutes=self.EARLY_START_GUARD_MINUTES)
             now = datetime.datetime.now(self.HELSINKI_TZ)
             if now < guard_until:
-                self._drop_if_current(channel, stop_event)
-                self._safe_send(irc_bot, channel, (
+                bail((
                     f"Too early to track — {self.DISPLAY_NAME} play starts at "
                     f"{earliest.strftime('%H:%M')}. You can run {self.COMMAND_NAME} start "
                     f"again from {guard_until.strftime('%H:%M')} onward."
@@ -246,11 +266,7 @@ class LiveTrackerCommand(BaseCommand):
         state = self._build_initial_state(items)
 
         if all(s.get(self.ENDED_STATE_KEY) for s in state.values()):
-            self._drop_if_current(channel, stop_event)
-            self._safe_send(
-                irc_bot, channel,
-                f"All of today's {self.DISPLAY_NAME} {self.TRACKED_NOUN} have already finished.",
-            )
+            bail(f"All of today's {self.DISPLAY_NAME} {self.TRACKED_NOUN} have already finished.")
             return
 
         if not self._commit_initial_state(channel, stop_event, state):
@@ -264,6 +280,11 @@ class LiveTrackerCommand(BaseCommand):
 
         poll_args = (context,) if self.REQUIRES_CONTEXT else ()
         self._poll_loop(irc_bot, channel, stop_event, *poll_args)
+
+    def first_start(self, items):
+        """The earliest scheduled start among `items` ({id: item}), Helsinki-local, or None."""
+        starts = (self._parse_start_dt(item.get(self.START_TIME_KEY)) for item in items.values())
+        return min((dt for dt in starts if dt is not None), default=None)
 
     def _format_tracking_summary(self, items) -> str:
         """The item list in the "Tracking N ... today: ..." message. Same

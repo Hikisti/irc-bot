@@ -54,6 +54,7 @@ class NHLCommand(NHLGoalLedgerMixin, NHLFinalMixin, NHLScoreboardMixin, TeamNext
     STATE_KEY = "games"
     START_TIME_KEY = "startTimeUTC"
     ENDED_STATE_KEY = "ended"
+    AUTO_START = True
     SUBCOMMANDS = ("start", "stop", "next [team [count]]", "now", "results")
     TEAM_NEXT_EXAMPLE = "tor"
     # What people call a team that is in none of its official names.
