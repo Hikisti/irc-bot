@@ -30,6 +30,11 @@ not what it is.
   independent per-item network calls in parallel here (see "Concurrent
   fetching" below); never hand-roll `ThreadPoolExecutor`/`executor.map()`
   again in a new subclass.
+- A tracker with `AUTO_START` (Liiga, NHL) is also started by `AutoStarter`
+  (`src/auto_start.py`) at the scheduled start of the day's first game, in
+  every channel that has it where nobody has started it by then, through the
+  same `start` path and its guards: once a day, and not after a `stop` that
+  day. Its decision is the plain function `due()`.
 - The one-shot `now`/`results` lookups (`!nhl`, `!liiga`) never touch
   tracker state. Their sport-neutral part - dispatch, background thread,
   the Live / Final / Upcoming board, the results line, line packing - is
