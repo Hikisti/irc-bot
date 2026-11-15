@@ -611,3 +611,61 @@ class TestRetryAndBudget:
         with self.scripted(distance_command, script) as (calls, _):
             assert distance_command.execute("A,B") == "Error: Distance service (routing) request timed out."
         assert calls.call_count == 3
+
+
+class TestSameLabelTwins:
+    """#74: two candidates with the same label ("Vimpeli, Finland"), told apart only by their area; the bot
+    cannot know which one is meant, so the reply names the area of the one it used."""
+
+    @staticmethod
+    def candidate(label, lon, region=None, county=None, localadmin=None, name="Vimpeli"):
+        props = {"name": name, "layer": "locality", "label": label, "region": region, "county": county,
+                 "localadmin": localadmin}
+        return {"geometry": {"coordinates": [lon, 63.0]}, "properties": {k: v for k, v in props.items() if v}}
+
+    def label(self, distance_command, *features):
+        return distance_command._distinct_label(features[0], list(features))
+
+    def test_the_area_is_added_when_another_candidate_has_the_same_label(self, distance_command):
+        kainuu = self.candidate("Vimpeli, Finland", 27.0, region="Kainuu", localadmin="Kajaani")
+        ostrobothnia = self.candidate("Vimpeli, Finland", 23.8, region="Southern Ostrobothnia", localadmin="Vimpeli")
+        assert self.label(distance_command, kainuu, ostrobothnia) == "Vimpeli (Kainuu), Finland"
+        assert self.label(distance_command, ostrobothnia, kainuu) == "Vimpeli (Southern Ostrobothnia), Finland"
+
+    def test_a_unique_label_is_left_alone(self, distance_command):
+        a = self.candidate("Austin, TX, USA", -97.7, region="Texas", name="Austin")
+        b = self.candidate("Austin, MN, USA", -92.9, region="Minnesota", name="Austin")
+        assert self.label(distance_command, a, b) == "Austin, TX, USA"
+
+    def test_the_first_area_field_that_differs_is_used(self, distance_command):
+        a = self.candidate("X, Finland", 1.0, region="Same", county="North")
+        b = self.candidate("X, Finland", 2.0, region="Same", county="South")
+        assert self.label(distance_command, a, b) == "X (North), Finland"
+
+    def test_twins_with_no_area_that_differs_keep_the_label(self, distance_command):
+        a = self.candidate("X, Finland", 1.0, region="Same")
+        b = self.candidate("X, Finland", 2.0, region="Same")
+        assert self.label(distance_command, a, b) == "X, Finland"
+
+    def test_a_candidate_without_a_label_falls_back_to_the_query(self, distance_command):
+        payload = {"features": [{"geometry": {"coordinates": [1.0, 2.0]}, "properties": {"name": "Vimpeli"}}]}
+        with patch.object(distance_command.session, "get", return_value=make_response(payload)):
+            result, _ = distance_command._geocode("Vimpeli", NO_DEADLINE)
+        assert result["label"] == "Vimpeli"
+
+    def test_a_label_without_a_comma_gets_the_area_at_the_end(self, distance_command):
+        a = self.candidate("Vimpeli", 1.0, region="Kainuu")
+        b = self.candidate("Vimpeli", 2.0, region="Lapland")
+        assert self.label(distance_command, a, b) == "Vimpeli (Kainuu)"
+
+    def test_the_reply_names_the_area(self, distance_command):
+        vimpeli = {"features": [
+            self.candidate("Vimpeli, Finland", 27.0, region="Kainuu"),
+            self.candidate("Vimpeli, Finland", 23.8, region="Southern Ostrobothnia"),
+        ]}
+        kokkola = {"features": [self.candidate("Kokkola, Finland", 23.1, region="Central Ostrobothnia", name="Kokkola")]}
+        with both_methods(distance_command, [make_response(kokkola), make_response(vimpeli),
+                                             make_response(directions_payload(222100, 10380))]):
+            result = distance_command.execute("Kokkola, Vimpeli")
+        assert result == ("Driving distance from Kokkola, Finland to Vimpeli (Kainuu), Finland: "
+                          "222.1 km (138.0 mi), ~2h 53min drive.")

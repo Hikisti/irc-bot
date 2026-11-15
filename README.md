@@ -163,6 +163,9 @@ unless both are a single word, in which case a space works too (`!distance Kokko
 this avoids silently misreading a multi-word city name as the wrong split. The routing provider
 sometimes stalls or answers 502, so a request that times out, loses its connection or gets a
 502/503/504 is tried once more, within a 30-second budget for the whole lookup.
+When the geocoder has two places with the same name in the same country and nothing but their area
+tells them apart, the reply names the area of the one it used, e.g. `Vimpeli (Kainuu), Finland`; if
+that is the wrong one, put the area in the query (`!distance Kokkola, Vimpeli Etelä-Pohjanmaa`).
 
 `!imdb` looks up a movie or show by title via the OMDb API (a third-party service re-publishing
 IMDb's data - IMDb's own official API is an enterprise-only AWS Data Exchange product, not viable

@@ -174,8 +174,32 @@ class DistanceCommand(BaseCommand):
         if not coords or len(coords) < 2:
             return None, f"Error: Could not resolve coordinates for '{city}'."
 
-        label = (feature.get("properties") or {}).get("label") or city
+        label = self._distinct_label(feature, features) or city
         return {"label": label, "lon": coords[0], "lat": coords[1]}, None
+
+    # The properties that can tell apart two candidates with the same label, most familiar first.
+    AREA_FIELDS = ("region", "county", "localadmin")
+
+    def _distinct_label(self, feature, features):
+        """The chosen candidate's label, with its area added when another candidate has the same label:
+        "Vimpeli (Kainuu), Finland". The geocoder returned a village in Kainuu and the municipality in
+        Southern Ostrobothnia, both "Vimpeli, Finland", and nothing but the area tells them apart; every
+        rule tried for picking between such twins broke other cities (#74), so the reply shows which one
+        was used and the user can add the area to the query."""
+        props = feature.get("properties") or {}
+        label = props.get("label")
+        if not label:
+            return label
+        twins = [f.get("properties") or {} for f in features
+                 if f is not feature and (f.get("properties") or {}).get("label") == label]
+        if not twins:
+            return label
+        for field in self.AREA_FIELDS:
+            area = props.get(field)
+            if area and all(twin.get(field) != area for twin in twins):
+                name, comma, rest = label.partition(",")
+                return f"{name} ({area}){comma}{rest}"
+        return label
 
     # Pelias layer values, roughly biggest-to-smallest for the layers that
     # can plausibly be "the city someone means" by a bare name.
