@@ -8,6 +8,8 @@ For every game of one US-Eastern slate date it polls the play-by-play and logs, 
   DOUBLY LISTED  two goal plays with the same team and running score;
   SCORES CONTRADICT  the listed goals' running scores cannot all be right (a score that goes down), with the
               whole goal list at that moment, and "consistent again" when it clears (issue #47);
+  REVIEW STOPPAGE  a challenge or video-review stoppage the first time it appears, and how long after a
+              removed goal near it left the feed: how late the bot's retraction reason arrives (issue #64);
 and, when a game reaches OVER/FINAL, whether the header score agreed with the play list.
 
 Usage (from the repository root):
@@ -111,6 +113,52 @@ def observe(goals, label, pbp, now):
     return events
 
 
+def review_stoppages(pbp):
+    """{eventId: (period, clock, code)} for every stoppage the bot would take as a retraction's reason: a
+    challenge ("chlg-..." in its reason or secondary reason) or a video review."""
+    out = {}
+    for play in pbp.get("plays", []):
+        if play.get("typeDescKey") != "stoppage":
+            continue
+        d = play.get("details") or {}
+        code = next((r for r in (d.get("reason"), d.get("secondaryReason")) if (r or "").startswith("chlg")), None)
+        if code is None and d.get("secondaryReason") == NHLCommand.VIDEO_REVIEW:
+            code = NHLCommand.VIDEO_REVIEW
+        if code is not None:
+            out[play.get("eventId")] = ((play.get("periodDescriptor") or {}).get("number"), play.get("timeInPeriod"), code)
+    return out
+
+
+def observe_reviews(reviews, goals, label, pbp, now):
+    """Logs each review stoppage the first time it appears and, for one near a goal that has left the feed
+    (the bot's own look-back: up to 60 s before to 10 s after the goal's clock), how many seconds after the
+    removal it appeared. Stoppages already there at a game's first look are only counted, not timed."""
+    events = []
+    first_look = label not in reviews["games"]
+    reviews["games"].add(label)
+    for eid, (period, clock, code) in review_stoppages(pbp).items():
+        if (label, eid) in reviews["seen"]:
+            continue
+        reviews["seen"].add((label, eid))
+        at = _seconds(clock)
+        near = [g for key, g in goals.items() if key != "_doubly_listed" and key[0] == label
+                and g["period"] == period and g["removed"] is not None
+                and _seconds(g["last"]["clock"]) - NHLCommand.CHALLENGE_WINDOW_BEFORE_SECONDS <= at
+                <= _seconds(g["last"]["clock"]) + NHLCommand.CHALLENGE_WINDOW_AFTER_SECONDS]
+        line = f"{label} P{period} {clock}: REVIEW STOPPAGE {code}"
+        if first_look:
+            line += " (already in the feed at the first look)"
+        elif near:
+            g = min(near, key=lambda g: abs(_seconds(g["last"]["clock"]) - at))
+            delay = now - (g["t0"] + g["removed"])
+            reviews["delays"].append(delay)
+            line += f", {delay:.0f}s after the goal at {g['last']['clock']} ({g['last']['label']}) left the feed"
+        else:
+            line += ", no removed goal near it yet"
+        events.append(line)
+    return events
+
+
 def header_state(pbp):
     """(header score, running score of the last non-shootout goal, header outcome, last period type)"""
     header = ((pbp.get("homeTeam") or {}).get("score"), (pbp.get("awayTeam") or {}).get("score"))
@@ -196,7 +244,7 @@ def check_header(ends, label, state, pbp, now):
     return not agrees
 
 
-def summarize(goals, ends):
+def summarize(goals, ends, reviews=None):
     real = {k: g for k, g in goals.items() if k != "_doubly_listed"}
     removed = sorted(round(g["removed"]) for g in real.values() if g["removed"] is not None)
     log(f"summary: {len(real)} goals seen in the feed, {len(removed)} removed, "
@@ -213,6 +261,9 @@ def summarize(goals, ends):
     log(f"  removed goals, seconds after first seen: {removed}")
     if gained:
         log(f"  median seconds until assists were gained: {statistics.median(gained):.0f}")
+    if reviews is not None:
+        log(f"  review stoppages: {len(reviews['seen'])}; seconds after a removed goal near it left the feed: "
+            f"{sorted(round(d) for d in reviews['delays'])}")
     for label, rec in ends.items():
         agreed = rec["first_agrees"]
         log(f"  {label}: header at first check in an end state: {'agreed' if agreed else 'MISMATCH'}")
@@ -234,9 +285,10 @@ def parse_args(argv):
 
 def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time):
     """Polls until every game is settled, `deadline` (a clock() value) passes, or the API goes silent for
-    MAX_SILENT_CYCLES cycles in a row. Returns (goals, ends, why it stopped)."""
+    MAX_SILENT_CYCLES cycles in a row. Returns (goals, ends, reviews, why it stopped)."""
     ending_poll = max(ENDING_POLL, poll_seconds / 2)
     goals, ends, ended_at, conflicts = {}, {}, {}, {}
+    reviews = {"seen": set(), "games": set(), "delays": []}
     silent = 0
     reason = "deadline"
     while clock() < deadline:
@@ -264,7 +316,9 @@ def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time
                     continue
                 pbp_ok += 1
                 now = clock()
-                for event in observe(goals, label, pbp, now) + check_scores(conflicts, label, pbp):
+                events = observe(goals, label, pbp, now)
+                events += observe_reviews(reviews, goals, label, pbp, now) + check_scores(conflicts, label, pbp)
+                for event in events:
                     log(event)
                 fast = check_header(ends, label, state, pbp, now) or state == "OVER" or fast
             answered = scores is not None and (pbp_tried == 0 or pbp_ok > 0)
@@ -279,7 +333,7 @@ def run(command, date, deadline, poll_seconds, sleep=time.sleep, clock=time.time
             reason = "API silent"
             break
         sleep(ending_poll if fast else poll_seconds)
-    return goals, ends, reason
+    return goals, ends, reviews, reason
 
 
 def main():
@@ -290,8 +344,8 @@ def main():
     command = NHLCommand()
     command.SCORE_CACHE_SECONDS = 0
     log(f"goal probe start, slate {date}, every {poll_seconds:g} s")
-    goals, ends, _ = run(command, date, time.time() + max_hours * 3600, poll_seconds)
-    summarize(goals, ends)
+    goals, ends, reviews, _ = run(command, date, time.time() + max_hours * 3600, poll_seconds)
+    summarize(goals, ends, reviews)
 
 
 if __name__ == "__main__":

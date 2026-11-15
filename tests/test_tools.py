@@ -232,6 +232,73 @@ class TestHeaderCheck:
         assert goal_probe.header_state(feed(home=0, away=0))[1] == (0, 0)
 
 
+def stoppage(event_id, clock, reason="offside", secondary=None, period=1):
+    return {"typeDescKey": "stoppage", "eventId": event_id, "timeInPeriod": clock,
+            "periodDescriptor": {"number": period}, "details": {"reason": reason, "secondaryReason": secondary}}
+
+
+class TestReviewStoppages:
+    """Issue #64: how long after a goal leaves the feed its challenge or video-review entry appears."""
+
+    def reviews(self):
+        return {"seen": set(), "games": set(), "delays": []}
+
+    def test_which_stoppages_count(self):
+        pbp = feed(stoppage(1, "06:38", "chlg-hm-off-side"),
+                   stoppage(2, "06:38", "referee-or-linesman", "chlg-vis-off-side"),
+                   stoppage(3, "10:00", "referee-or-linesman", "video-review"),
+                   stoppage(4, "06:38", "offside"), stoppage(5, "12:00", "icing"))
+        assert goal_probe.review_stoppages(pbp) == {
+            1: (1, "06:38", "chlg-hm-off-side"), 2: (1, "06:38", "chlg-vis-off-side"), 3: (1, "10:00", "video-review")}
+
+    def test_the_delay_after_the_goal_left_the_feed(self):
+        goals, reviews = {}, self.reviews()
+        goal_probe.observe(goals, "A@B", feed(goal(1, 1, clock="07:01")), 100.0)
+        goal_probe.observe_reviews(reviews, goals, "A@B", feed(goal(1, 1, clock="07:01")), 100.0)
+        goal_probe.observe(goals, "A@B", feed(), 180.0)
+        assert goal_probe.observe_reviews(reviews, goals, "A@B", feed(), 180.0) == []
+        late = feed(stoppage(9, "06:38", "referee-or-linesman", "chlg-vis-off-side"))
+        events = goal_probe.observe_reviews(reviews, goals, "A@B", late, 400.0)
+        assert events == ["A@B P1 06:38: REVIEW STOPPAGE chlg-vis-off-side, 220s after the goal at 07:01 "
+                          "(Alice X [no assists]) left the feed"]
+        assert reviews["delays"] == [220.0]
+        assert goal_probe.observe_reviews(reviews, goals, "A@B", late, 420.0) == []  # once only
+
+    def test_one_before_the_goal_has_left_is_logged_untimed(self):
+        goals, reviews = {}, self.reviews()
+        goal_probe.observe_reviews(reviews, goals, "A@B", feed(goal(1, 1, clock="07:01")), 0.0)
+        pbp = feed(goal(1, 1, clock="07:01"), stoppage(9, "06:38", "chlg-hm-goal-interference"))
+        goal_probe.observe(goals, "A@B", pbp, 20.0)
+        assert goal_probe.observe_reviews(reviews, goals, "A@B", pbp, 20.0) == [
+            "A@B P1 06:38: REVIEW STOPPAGE chlg-hm-goal-interference, no removed goal near it yet"]
+        assert reviews["delays"] == []
+
+    @pytest.mark.parametrize("clock, period", [("05:00", 1), ("07:12", 1), ("06:38", 2)])
+    def test_a_removed_goal_outside_the_bots_look_back_is_not_matched(self, clock, period):
+        goals, reviews = {}, self.reviews()
+        goal_probe.observe(goals, "A@B", feed(goal(1, 1, clock="07:01")), 0.0)
+        goal_probe.observe_reviews(reviews, goals, "A@B", feed(), 0.0)
+        goal_probe.observe(goals, "A@B", feed(), 20.0)
+        events = goal_probe.observe_reviews(reviews, goals, "A@B", feed(stoppage(9, clock, "chlg-vis-off-side",
+                                                                                  period=period)), 40.0)
+        assert events[0].endswith("no removed goal near it yet")
+
+    def test_stoppages_already_there_at_a_games_first_look_are_not_timed(self):
+        goals, reviews = {}, self.reviews()
+        events = goal_probe.observe_reviews(reviews, goals, "A@B", feed(stoppage(9, "06:38", "chlg-vis-off-side")), 0.0)
+        assert events == ["A@B P1 06:38: REVIEW STOPPAGE chlg-vis-off-side (already in the feed at the first look)"]
+
+    def test_the_summary_lists_the_delays(self, log_lines):
+        goal_probe.summarize({}, {}, {"seen": {("A@B", 1), ("A@B", 2)}, "games": {"A@B"}, "delays": [220.4, 35.0]})
+        assert "  review stoppages: 2; seconds after a removed goal near it left the feed: [35, 220]" in log_lines
+
+    def test_the_run_loop_logs_them(self, log_lines):
+        command = FakeNhl([{1: score_game()}], {1: feed(stoppage(9, "06:38", "chlg-vis-off-side"))})
+        clock = FakeClock()
+        goal_probe.run(command, "2026-10-08", 30.0, 10, sleep=clock.sleep, clock=clock.now)
+        assert log_lines.count("B@A P1 06:38: REVIEW STOPPAGE chlg-vis-off-side (already in the feed at the first look)") == 1
+
+
 def score_game(abbrev_home="A", abbrev_away="B", state="LIVE"):
     return {"gameState": state, "homeTeam": {"abbrev": abbrev_home}, "awayTeam": {"abbrev": abbrev_away}}
 
@@ -269,7 +336,8 @@ class FakeClock:
 class TestRun:
     def run(self, command, poll=10, deadline=100000.0):
         clock = FakeClock()
-        goals, ends, reason = goal_probe.run(command, "2026-10-08", deadline, poll, sleep=clock.sleep, clock=clock.now)
+        goals, ends, reviews, reason = goal_probe.run(command, "2026-10-08", deadline, poll, sleep=clock.sleep,
+                                                      clock=clock.now)
         return clock, reason
 
     def test_it_stops_after_ten_silent_cycles_in_a_row_and_says_so(self, log_lines):
