@@ -561,6 +561,15 @@ class TestPageEncoding:
         resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), "text/html; charset=utf-8")
         assert self._title(fetcher, resp) == self.YLE
 
+    @pytest.mark.parametrize("charset, spelled", [("unicode_escape", b"\\ud800"), ("raw_unicode_escape", b"\\ud800"),
+                                                  ("utf-7", b"+2AA-")])
+    def test_a_title_that_cannot_be_utf8_is_posted_with_a_replacement(self, fetcher, bot, charset, spelled):
+        """A charset that spells a lone surrogate (half of a UTF-16 pair) gives a title no UTF-8 line can carry."""
+        resp = real_response(b"<html><head><title>A" + spelled + b"B</title></head></html>", f"text/html; charset={charset}")
+        with patch.object(fetcher.session, "get", return_value=resp):
+            fetcher.detect_and_fetch("nick", "#chan", "https://example.com/a")
+        bot.send_message.assert_called_once_with("#chan", "A?B")
+
     def test_an_unknown_declared_charset_is_logged(self, fetcher, capsys):
         resp = real_response(self.HTML.format("Plain").encode("utf-8"), "text/html; charset=no-such-charset")
         self._title(fetcher, resp)
@@ -688,6 +697,15 @@ class TestOffTheListenerThread:
     def test_the_journal_names_the_host_or_says_it_does_not_parse(self, fetcher):
         assert fetcher._host_for_log("https://Example.com/x?token=1") == "example.com"
         assert fetcher._host_for_log("http://[") == "an address that does not parse"
+
+    def test_a_failure_after_the_fetch_does_not_stop_the_worker(self, fetcher, bot, capsys):
+        bot.send_message.side_effect = [RuntimeError("boom"), None]
+        with patch.object(fetcher, "get_title", side_effect=["First", "Second"]):
+            fetcher.submit("nick", "#chan", "https://a.example/")
+            fetcher.submit("nick", "#chan", "https://b.example/")
+            assert wait_until(lambda: bot.send_message.call_count == 2)
+        assert fetcher._worker.is_alive()
+        assert "URL title: failed to post the titles of a message in #chan: RuntimeError" in capsys.readouterr().out
 
     def test_a_full_queue_drops_new_messages(self, fetcher, release, capsys, monkeypatch):
         monkeypatch.setattr(URLFetcher, "MAX_PENDING_MESSAGES", 1)

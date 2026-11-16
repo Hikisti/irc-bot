@@ -160,6 +160,9 @@ class URLFetcher:
             nick, channel, message = self._pending.get()
             try:
                 self.detect_and_fetch(nick, channel, message)
+            except Exception as e:
+                # The only worker: if it ended, submit() would queue every later link in every channel for nobody.
+                print(f"URL title: failed to post the titles of a message in {channel}: {type(e).__name__}")
             finally:
                 self._pending.task_done()
 
@@ -168,6 +171,9 @@ class URLFetcher:
         for url in self.extract_urls(message)[:self.MAX_URLS_PER_MESSAGE]:
             title_info = self._title_within_budget(url)
             if title_info:
+                # A page's declared charset (unicode_escape, utf-7) can spell a lone surrogate, which no UTF-8
+                # line can carry: it becomes '?' instead of failing the message.
+                title_info = title_info.encode("utf-8", errors="replace").decode("utf-8")
                 self.bot.send_message(channel, self.trim_message(title_info))
 
     def _title_within_budget(self, url):
