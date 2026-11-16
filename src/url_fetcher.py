@@ -5,7 +5,7 @@ import re
 import socket
 import threading
 import time
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, SoupStrainer
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode
 
 import requests
@@ -272,7 +272,9 @@ class URLFetcher:
             headers = {"User-Agent": self.WIKIMEDIA_USER_AGENT} if wikimedia else None
             response = self._fetch_page(url, headers)
 
-            soup = BeautifulSoup(self._page_text(response), "html.parser")
+            # Only the tags a title can come from: a tree of every tag is about 200 times the page, and 2 MiB
+            # of tiny tags would take some 400 MiB on a small machine.
+            soup = BeautifulSoup(self._page_text(response), "html.parser", parse_only=SoupStrainer(["meta", "title"]))
 
             og_title = soup.find("meta", property="og:title")
             if og_title and og_title.get("content"):

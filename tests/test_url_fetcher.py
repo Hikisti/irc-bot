@@ -561,6 +561,20 @@ class TestPageEncoding:
         resp = real_response(self.HTML.format(self.YLE).encode("utf-8"), "text/html; charset=utf-8")
         assert self._title(fetcher, resp) == self.YLE
 
+    def test_a_page_of_many_tags_is_read_without_building_them_all(self, fetcher):
+        """A tree of every tag is about 200 times the page: 2 MiB of '<b>' was some 400 MiB on a 1 GB server."""
+        import tracemalloc
+        body = b"<html><head><title>Kept</title></head><body>" + b"<b>" * 200_000
+        resp = real_response(body, "text/html; charset=utf-8")
+        tracemalloc.start()
+        try:
+            title = self._title(fetcher, resp)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert title == "Kept"
+        assert peak < 20 * 2**20  # the whole tree was about 113 MiB
+
     @pytest.mark.parametrize("charset, spelled", [("unicode_escape", b"\\ud800"), ("raw_unicode_escape", b"\\ud800"),
                                                   ("utf-7", b"+2AA-")])
     def test_a_title_that_cannot_be_utf8_is_posted_with_a_replacement(self, fetcher, bot, charset, spelled):
