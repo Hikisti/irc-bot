@@ -12,6 +12,7 @@ if TOOLS_DIR not in sys.path:
 import goal_probe  # noqa: E402
 import liiga_sampler  # noqa: E402
 import probe_common  # noqa: E402
+import start_extras  # noqa: E402
 
 ROSTER = [{"playerId": i, "firstName": {"default": n}, "lastName": {"default": "X"}}
           for i, n in ((1, "Alice"), (2, "Bob"), (3, "Cara"), (4, "Dan"))]
@@ -481,3 +482,109 @@ class TestLogger:
         text = (tmp_path / "logs" / "x.log").read_text().splitlines()
         assert len(text) == 2 and text[0].endswith("hello") and "Z (" in text[0] and " local) " in text[0]
         assert "hello" in capsys.readouterr().out
+
+
+class TestStartExtras:
+    """The daily timer's decision: which probe to start, from when, with which date and hours."""
+    UTC = start_extras.UTC
+
+    def at(self, day, hour, minute=0):
+        import datetime
+        return datetime.datetime(2026, 11, day, hour, minute, tzinfo=self.UTC)
+
+    def test_a_big_nhl_slate_gets_the_probe_with_its_eastern_date(self):
+        # 11 games from 00:00 UTC on the 20th: the slate of the 19th in US Eastern time.
+        starts = [self.at(20, 0)] * 10 + [self.at(20, 3)]
+        (run,) = start_extras.plan(self.at(19, 10), None, starts)
+        assert run.script == "goal_probe.py"
+        assert run.args == ("2026-11-19", "8", "20")  # 23:30 to 07:00 (last start + 4 h), rounded up
+        assert run.start_at == self.at(19, 23, 30)
+
+    def test_a_big_liiga_day_gets_the_sampler_with_its_helsinki_date(self):
+        starts = [self.at(20, 16, 30)] * 6
+        (run,) = start_extras.plan(self.at(20, 10), starts, None)
+        assert (run.script, run.args, run.start_at) == ("liiga_sampler.py", ("2026-11-20", "4"), self.at(20, 16))
+
+    def test_the_start_is_in_utc_whatever_zone_the_schedule_used(self):
+        helsinki = start_extras.LiigaCommand.HELSINKI_TZ  # the trackers' parser returns Helsinki-local times
+        (run,) = start_extras.plan(self.at(19, 10), None, [self.at(20, 0).astimezone(helsinki)] * 10)
+        assert run.start_at.utcoffset().total_seconds() == 0 and f"{run.start_at:%H:%M}" == "23:30"
+
+    def test_small_days_get_nothing(self):
+        assert start_extras.plan(self.at(19, 10), [self.at(19, 16, 30)] * 4, [self.at(20, 0)] * 9) == []
+
+    def test_both_leagues_in_the_order_they_start(self):
+        runs = start_extras.plan(self.at(20, 10), [self.at(20, 16, 30)] * 7, [self.at(21, 0)] * 12)
+        assert [r.script for r in runs] == ["liiga_sampler.py", "goal_probe.py"]
+
+    def test_a_run_whose_start_has_passed_starts_now_for_the_hours_left(self):
+        (run,) = start_extras.plan(self.at(20, 18), [self.at(20, 16, 30)] * 5, None)
+        assert run.start_at == self.at(20, 18) and run.args[1] == "2"  # until 20:00
+
+    def test_a_day_already_over_gets_nothing(self):
+        assert start_extras.plan(self.at(20, 23), [self.at(20, 16, 30)] * 5, None) == []
+
+    def test_a_schedule_that_could_not_be_read_gets_nothing(self):
+        assert start_extras.plan(self.at(20, 10), None, None) == []
+
+    def test_todays_starts_reads_the_trackers_own_schedule(self):
+        class Command:
+            START_TIME_KEY = "start"
+            def _fetch_today_games(self):
+                return {1: {"start": "2026-11-20T16:30:00Z"}, 2: {"start": None}, 3: {}}
+            _parse_start_dt = start_extras.LiigaCommand._parse_start_dt
+            HELSINKI_TZ = start_extras.LiigaCommand.HELSINKI_TZ
+        assert [dt.astimezone(self.UTC) for dt in start_extras.todays_starts(Command())] == [self.at(20, 16, 30)]
+        Command._fetch_today_games = lambda self: None
+        assert start_extras.todays_starts(Command()) is None
+
+    def test_main_waits_until_each_start_and_skips_a_probe_already_running(self, monkeypatch, capsys):
+        runs = [start_extras.Run("liiga_sampler.py", ("2026-11-20", "4"), self.at(20, 16)),
+                start_extras.Run("goal_probe.py", ("2026-11-20", "8", "20"), self.at(20, 23, 30))]
+        monkeypatch.setattr(start_extras, "plan", lambda now, liiga, nhl: runs)
+        monkeypatch.setattr(start_extras, "todays_starts", lambda command: [])
+        monkeypatch.setattr(start_extras, "already_running", lambda script: script == "goal_probe.py")
+        now = [self.at(20, 10)]
+        slept, launched = [], []
+
+        def sleep(seconds):
+            assert len(slept) < 5, "slept again and again"
+            slept.append(seconds)
+            now[0] += __import__("datetime").timedelta(seconds=seconds)
+
+        class Process:
+            def wait(self):
+                pass
+
+        def launch(argv, **kwargs):
+            launched.append(argv[1:])
+            return Process()
+
+        start_extras.main(clock=lambda: now[0], sleep=sleep, launch=launch)
+        assert slept == [6 * 3600, 7.5 * 3600]
+        assert [os.path.basename(a[0]) for a in launched] == ["liiga_sampler.py"]
+        assert launched[0][1:] == ["2026-11-20", "4"]
+        assert "goal_probe.py is already running" in capsys.readouterr().out
+
+    def test_main_with_nothing_to_do_says_so(self, monkeypatch, capsys):
+        monkeypatch.setattr(start_extras, "todays_starts", lambda command: None)
+        assert start_extras.main(clock=lambda: self.at(20, 10)) == []
+        assert "nothing to start today (2026-11-20)" in capsys.readouterr().out
+
+    def test_a_dry_run_prints_the_plan_and_starts_nothing(self, monkeypatch, capsys):
+        runs = [start_extras.Run("goal_probe.py", ("2026-11-19", "8", "20"), self.at(19, 23, 30))]
+        monkeypatch.setattr(start_extras, "plan", lambda now, liiga, nhl: runs)
+        monkeypatch.setattr(start_extras, "todays_starts", lambda command: [])
+
+        def launch(*args, **kwargs):
+            raise AssertionError("a dry run started a probe")
+
+        assert start_extras.main(clock=lambda: self.at(19, 10), launch=launch, dry_run=True) == []
+        assert "goal_probe.py 2026-11-19 8 20 from 23:30 UTC" in capsys.readouterr().out
+
+    def test_already_running_asks_pgrep_for_the_script(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(start_extras.subprocess, "run",
+                            lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 1})())
+        assert start_extras.already_running("goal_probe.py") is False
+        assert calls == [["pgrep", "-f", "tools/goal_probe.py"]]

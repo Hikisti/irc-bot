@@ -19,7 +19,8 @@ Run `date -u`, look up which slates were played (NHL `https://api-web.nhle.com/v
 Liiga `https://www.liiga.fi/api/v2/games?tournament=runkosarja&season=<season>`), and give Heikki the
 fetch command with the window filled in: from 1 h before the first game to 2 h after the last game
 ends, ending before 06:00 UTC when possible (an automatic update can restart the bot 06:00-07:00
-UTC). Add `--probe` / `--sampler` only if he ran them. Then stop and wait.
+UTC). Add `--probe` on slates of 10+ NHL games and `--sampler` on days of 5+ Liiga games: the
+server's daily timer (`tools/start_extras.py`) starts them by itself on those days. Then stop and wait.
 
 ## The check, in this order
 

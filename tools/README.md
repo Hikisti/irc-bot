@@ -85,6 +85,17 @@ The repository is public. The scripts only print public sports data. Do not hard
 user names, hostnames, keys or addresses in them, and do not commit their logs (`*.log` is ignored;
 keep it that way).
 
+### `start_extras.py` - the probes start themselves on big game days
+
+Run once a day by a timer on the server (installed by hand, see the private deploy notes). It reads
+today's Liiga and NHL schedules with the trackers' own fetch code and starts `liiga_sampler.py` on
+days of 5+ Liiga games and `goal_probe.py` on slates of 10+ NHL games, each from 30 minutes before
+that league's first game, with the date (Helsinki for Liiga, US Eastern for the NHL) and hours
+worked out by `plan()`, a plain function the tests call. A probe already running is left alone; it
+waits for the probes, so its service lasts as long as they do.
+
+    .venv/bin/python tools/start_extras.py --dry-run    # today's plan, starts nothing
+
 ### `fetch_night.sh` - the night's files from the server, in one command
 
 Run on the Mac after a game night: it logs in once, runs the server's `nightcheck.sh` for the window,
