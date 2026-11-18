@@ -669,3 +669,56 @@ class TestSameLabelTwins:
             result = distance_command.execute("Kokkola, Vimpeli")
         assert result == ("Driving distance from Kokkola, Finland to Vimpeli (Kainuu), Finland: "
                           "222.1 km (138.0 mi), ~2h 53min drive.")
+
+
+class TestOwnMunicipalityAmongTwins:
+    """#74: of two candidates with the same label, the one that is its own municipality is used (live fields)."""
+
+    @staticmethod
+    def candidate(name, label, region, localadmin=None, layer="locality"):
+        props = {"name": name, "layer": layer, "label": label, "region": region, "localadmin": localadmin}
+        return {"geometry": {"coordinates": [24.0, 63.0]}, "properties": {k: v for k, v in props.items() if v}}
+
+    def pick(self, distance_command, query, *features):
+        features = list(features)
+        chosen = distance_command._own_municipality_among_twins(distance_command._best_match(features, query), features)
+        return chosen["properties"]["region"]
+
+    def test_the_municipality_wins_over_a_village_of_the_same_name(self, distance_command):
+        village = self.candidate("Vimpeli", "Vimpeli, Finland", "Kainuu", localadmin="Kajaani")
+        town = self.candidate("Vimpeli", "Vimpeli, Finland", "Southern Ostrobothnia", localadmin="Vimpeli")
+        assert self.pick(distance_command, "Vimpeli", village, town) == "Southern Ostrobothnia"
+
+    def test_also_when_the_town_is_listed_on_a_lower_layer(self, distance_command):
+        village = self.candidate("Tornio", "Tornio, Finland", "North Karelen", localadmin="Valtimo")
+        town = self.candidate("Tornio", "Tornio, Finland", "Lapland", localadmin="Tornio", layer="localadmin")
+        assert self.pick(distance_command, "Tornio", village, town) == "Lapland"
+
+    def test_the_municipality_name_is_compared_without_accents(self, distance_command):
+        village = self.candidate("Alajärvi", "Alajärvi, Finland", "Kainuu", localadmin="Sotkamo")
+        town = self.candidate("Alajärvi", "Alajärvi, Finland", "Southern Ostrobothnia", localadmin="Alajarvi")
+        assert self.pick(distance_command, "Alajärvi", village, town) == "Southern Ostrobothnia"
+        assert self.pick(distance_command, "Alajärvi", town, village) == "Southern Ostrobothnia"
+
+    def test_a_chosen_candidate_without_a_twin_is_kept_whatever_its_municipality(self, distance_command):
+        """Swedish `localadmin` holds parishes: Stockholm's is not "Stockholm", and it must not lose to Stockholm TX."""
+        sweden = self.candidate("Stockholm", "Stockholm, Sweden", "Stockholm", localadmin="Vantor")
+        texas = self.candidate("Stockholm", "Stockholm, TX, USA", "Texas")
+        assert self.pick(distance_command, "Stockholm", sweden, texas) == "Stockholm"
+
+    def test_twins_where_none_is_its_own_municipality_keep_the_usual_pick(self, distance_command):
+        a = self.candidate("X", "X, Finland", "North", localadmin="P")
+        b = self.candidate("X", "X, Finland", "South", localadmin="Q")
+        assert self.pick(distance_command, "X", a, b) == "North"
+
+    def test_the_reply_routes_to_the_municipality_and_names_its_area(self, distance_command):
+        vimpeli = {"features": [
+            self.candidate("Vimpeli", "Vimpeli, Finland", "Kainuu", localadmin="Kajaani"),
+            self.candidate("Vimpeli", "Vimpeli, Finland", "Southern Ostrobothnia", localadmin="Vimpeli"),
+        ]}
+        kokkola = {"features": [self.candidate("Kokkola", "Kokkola, Finland", "Central Ostrobothnia",
+                                               localadmin="Kokkola")]}
+        with both_methods(distance_command, [make_response(kokkola), make_response(vimpeli),
+                                             make_response(directions_payload(95900, 5400))]):
+            result = distance_command.execute("Kokkola, Vimpeli")
+        assert result.startswith("Driving distance from Kokkola, Finland to Vimpeli (Southern Ostrobothnia), Finland:")

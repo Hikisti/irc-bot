@@ -11,6 +11,13 @@ from http_session import make_session
 from request_errors import format_request_error
 
 
+
+def _normalize_name(text):
+    """Casefolded, without accents: "leppavaara" typed without the a-umlaut matched no candidate's name, so the
+    fallback took Pelias's first one, "Lopyavara" in Russia, over "Leppävaara" (live, 2026-11-11)."""
+    decomposed = unicodedata.normalize("NFKD", (text or "").strip().casefold())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
 class DistanceCommand(BaseCommand):
     """
     Calculates driving distance (and drive time) between two cities
@@ -169,13 +176,32 @@ class DistanceCommand(BaseCommand):
         if not features:
             return None, f"Error: Could not find a location matching '{city}'."
 
-        feature = self._best_match(features, city)
+        feature = self._own_municipality_among_twins(self._best_match(features, city), features)
         coords = (feature.get("geometry") or {}).get("coordinates")
         if not coords or len(coords) < 2:
             return None, f"Error: Could not resolve coordinates for '{city}'."
 
         label = self._distinct_label(feature, features) or city
         return {"label": label, "lon": coords[0], "lat": coords[1]}, None
+
+    @staticmethod
+    def _own_municipality_among_twins(feature, features):
+        """Among candidates with exactly the chosen one's label, the one that is its own municipality (its
+        `localadmin` is its own name, or it has none). "Vimpeli, Finland" is both a village in Kainuu and the
+        municipality in Southern Ostrobothnia, and "Tornio, Finland" both a village in North Karelia and the
+        town in Lapland; the village came first and won (#74). Only same-label twins are compared: applied to
+        every candidate, the same rule turned Stockholm into Stockholm TX, since Swedish `localadmin` holds
+        parishes, but those never share a label."""
+        def is_own_municipality(f):
+            props = f.get("properties") or {}
+            localadmin = props.get("localadmin")
+            return not localadmin or _normalize_name(localadmin) == _normalize_name(props.get("name"))
+
+        if is_own_municipality(feature):
+            return feature
+        label = (feature.get("properties") or {}).get("label")
+        twins = [f for f in features if label and (f.get("properties") or {}).get("label") == label]
+        return next((f for f in twins if is_own_municipality(f)), feature)
 
     # The properties that can tell apart two candidates with the same label, most familiar first.
     AREA_FIELDS = ("region", "county", "localadmin")
@@ -223,16 +249,10 @@ class DistanceCommand(BaseCommand):
         then breaks ties by layer (city-level beats county/neighbourhood)
         and population, keeping Pelias's own relevance order beyond that.
         """
-        def normalize(text):
-            # Accents are left out: "leppavaara" typed without the a-umlaut matched no candidate's name, so the
-            # fallback took Pelias's first one, "Lopyavara" in Russia, over "Leppävaara" (live, 2026-11-11).
-            decomposed = unicodedata.normalize("NFKD", (text or "").strip().casefold())
-            return "".join(c for c in decomposed if not unicodedata.combining(c))
-
-        query_norm = normalize(query)
+        query_norm = _normalize_name(query)
         named_matches = [
             f for f in features
-            if normalize((f.get("properties") or {}).get("name")) == query_norm
+            if _normalize_name((f.get("properties") or {}).get("name")) == query_norm
         ]
         candidates = named_matches or features
 
