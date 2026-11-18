@@ -679,6 +679,45 @@ class TestListenBuffering:
 
         mock_process.assert_called_once_with(":alice!a@host PRIVMSG #chan :hello")
 
+    def test_a_character_split_across_two_recv_calls_is_kept(self, bot):
+        """Issue #87: a read that ends inside an ä must not lose it."""
+        line = ":alice!a@host PRIVMSG #chan :!liiga next Kärpät\r\n".encode()
+        cut = line.index("ä".encode()) + 1
+        reads = iter([line[:cut], line[cut:]])
+
+        def recv_then_stop(bufsize):
+            chunk = next(reads, None)
+            if chunk is None:
+                bot.running = False
+                return b""
+            return chunk
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+
+        mock_process.assert_called_once_with(":alice!a@host PRIVMSG #chan :!liiga next Kärpät")
+
+    def test_bytes_that_are_not_utf8_are_dropped_and_the_line_kept(self, bot):
+        reads = iter([b":alice!a@host PRIVMSG #chan :K\xe4rp\xe4t\r\n"])
+
+        def recv_then_stop(bufsize):
+            chunk = next(reads, None)
+            if chunk is None:
+                bot.running = False
+                return b""
+            return chunk
+
+        bot.running = True
+        bot.sock.recv.side_effect = recv_then_stop
+
+        with patch.object(bot, "process_message") as mock_process:
+            bot.listen()
+
+        mock_process.assert_called_once_with(":alice!a@host PRIVMSG #chan :Krpt")
+
     def test_multiple_complete_lines_in_one_recv_are_all_processed(self, bot):
         chunk = b":a!a@h PRIVMSG #c :one\r\n:a!a@h PRIVMSG #c :two\r\n"
         call_count = 0

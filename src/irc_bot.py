@@ -81,11 +81,11 @@ class IrcBot:
 
     def listen(self):
         """Listen for messages from the server."""
-        buffer = ""
+        buffer = b""
         last_heard = last_pinged = time.monotonic()
         while self.running:
             try:
-                data = self.sock.recv(2048).decode("utf-8", errors="ignore")
+                data = self.sock.recv(2048)
                 last_heard = time.monotonic()
                 if not data:
                     # "DISCONNECTED: ..." wording matches the exception
@@ -99,12 +99,15 @@ class IrcBot:
                 # recv() call - it can be split across the 2048-byte
                 # boundary. Buffer across calls and only process complete
                 # "\n"-terminated lines, keeping a trailing partial line
-                # (if any) for the next recv() to complete.
+                # (if any) for the next recv() to complete. The buffer stays
+                # bytes until a line is complete: a read can also end inside
+                # a multibyte character (ä, ö), and decoding each read on its
+                # own would drop that character.
                 buffer += data
-                *complete_lines, buffer = buffer.split("\n")
+                *complete_lines, buffer = buffer.split(b"\n")
 
-                for line in complete_lines:
-                    line = line.strip()
+                for raw_line in complete_lines:
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
                     if not line:
                         continue
                     self._log_incoming(line)
