@@ -111,11 +111,22 @@ class _PublicPeerHTTPSConnection(_PublicPeerMixin, urllib3.connection.HTTPSConne
     pass
 
 
-class _PublicPeerHTTPPool(urllib3.connectionpool.HTTPConnectionPool):
+class _NoReuseMixin:
+    """A connection is closed instead of kept for the next request: one reused from the pool would skip _new_conn,
+    so the fetch reading from it could not register it and its budget could not end it (#88). The closed
+    connection goes back to the pool as an empty slot and opens a fresh, registered socket when next used."""
+
+    def _put_conn(self, conn):
+        if conn is not None:
+            conn.close()
+        super()._put_conn(conn)
+
+
+class _PublicPeerHTTPPool(_NoReuseMixin, urllib3.connectionpool.HTTPConnectionPool):
     ConnectionCls = _PublicPeerHTTPConnection
 
 
-class _PublicPeerHTTPSPool(urllib3.connectionpool.HTTPSConnectionPool):
+class _PublicPeerHTTPSPool(_NoReuseMixin, urllib3.connectionpool.HTTPSConnectionPool):
     ConnectionCls = _PublicPeerHTTPSConnection
 
 

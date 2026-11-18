@@ -776,6 +776,45 @@ class TestAGivenUpFetchIsEnded:
         assert ended.wait(timeout=3)
         bot.send_message.assert_not_called()
 
+    def test_a_link_to_the_same_host_does_not_reuse_the_last_links_connection(self, fetcher, monkeypatch):
+        """A reused keep-alive connection skips _new_conn, so the fetch could not register it and the budget
+        could not end it (found by the 2026-11-18 audit): every link gets a connection of its own."""
+        monkeypatch.setattr(url_fetcher, "_is_public_address", lambda address: True)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        accepted = []
+
+        def serve():
+            body = b"<title>Kept alive</title>"
+            answer = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n%s" % (len(body), body)
+            while len(accepted) < 2:
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                accepted.append(conn)
+                conn.settimeout(5)
+                try:
+                    while conn.recv(4096):  # answers every request on this connection the same way
+                        conn.sendall(answer)
+                except OSError:
+                    pass
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            port = listener.getsockname()[1]
+            assert fetcher._title_within_budget(f"http://127.0.0.1:{port}/a") == "Kept alive"
+            assert fetcher._title_within_budget(f"http://127.0.0.1:{port}/b") == "Kept alive"
+            assert len(accepted) == 2
+        finally:
+            listener.close()
+            for conn in accepted:
+                conn.close()
+            thread.join(timeout=10)
+
     def test_a_connection_opened_after_the_cancel_is_shut_down_at_once(self):
         near, far = socket.socketpair()
         try:
