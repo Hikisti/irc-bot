@@ -732,6 +732,87 @@ class TestOffTheListenerThread:
         assert "URL title: busy, skipping the links of a message in #chan" in capsys.readouterr().out
 
 
+class TestAGivenUpFetchIsEnded:
+    """A read timeout is per read, so a server that sends a byte now and then kept a given-up fetch running for
+    ever; enough of those skipped every link in every channel (#88). The budget now shuts its connections down.
+    Every wait below has a deadline, so a regression fails instead of hanging."""
+
+    @pytest.fixture
+    def dripping_server(self, monkeypatch):
+        """A loopback server that answers a request with one header byte every 0.1 s, for up to 30 s."""
+        monkeypatch.setattr(url_fetcher, "_is_public_address", lambda address: True)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        ended = threading.Event()
+
+        def serve():
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                conn.recv(4096)
+                for byte in b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 300:
+                    conn.send(bytes([byte]))
+                    time.sleep(0.1)
+            except OSError:
+                ended.set()  # the client shut the connection down
+            finally:
+                conn.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        yield listener.getsockname()[1], ended
+        listener.close()
+        thread.join(timeout=35)
+
+    def test_the_fetch_thread_ends_once_its_budget_is_spent(self, fetcher, bot, dripping_server, monkeypatch):
+        port, ended = dripping_server
+        monkeypatch.setattr(URLFetcher, "LINK_BUDGET_SECONDS", 0.5)
+        fetcher.detect_and_fetch("nick", "#chan", f"http://127.0.0.1:{port}/")
+        assert wait_until(lambda: not any(t.is_alive() for t in fetcher._abandoned), seconds=3)
+        assert ended.wait(timeout=3)
+        bot.send_message.assert_not_called()
+
+    def test_a_connection_opened_after_the_cancel_is_shut_down_at_once(self):
+        near, far = socket.socketpair()
+        try:
+            connections = url_fetcher._FetchConnections()
+            connections.cancel()
+            connections.add(near)
+            far.settimeout(2)
+            assert far.recv(1) == b""  # the other end sees the connection end
+        finally:
+            near.close()
+            far.close()
+
+    def test_a_connection_already_gone_does_not_stop_the_cancel(self):
+        gone, live = MagicMock(), MagicMock()
+        gone.dup.return_value.shutdown.side_effect = OSError("not connected")
+        connections = url_fetcher._FetchConnections()
+        connections.add(gone)
+        connections.add(live)
+        connections.cancel()
+        live.dup.return_value.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+
+    def test_a_fetch_that_ends_in_time_releases_its_duplicates_and_leaves_the_connection_alone(self):
+        near, far = socket.socketpair()
+        try:
+            connections = url_fetcher._FetchConnections()
+            connections.add(near)
+            connections.close()
+            connections.cancel()  # too late to touch anything
+            near.sendall(b"x")
+            far.settimeout(2)
+            assert far.recv(1) == b"x"
+            assert connections._sockets == []
+        finally:
+            near.close()
+            far.close()
+
+
 class TestTrimMessage:
     def test_short_message_unchanged(self, fetcher):
         assert fetcher.trim_message("short") == "short"

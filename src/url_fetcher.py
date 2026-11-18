@@ -29,6 +29,53 @@ class _RefusedURL(Exception):
 _EMBEDDED_IPV4_NETWORKS = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
 
 
+class _FetchConnections:
+    """The connections one link's fetch has opened, so that the worker can end the fetch when its budget runs
+    out instead of only stopping waiting for it (#88). A read timeout is per read: a server that sends a byte
+    every few seconds keeps a fetch going for ever. A duplicate of each socket is kept because shutting down
+    any descriptor of a connection ends it for all of them, and the original object is no use for that once
+    TLS has wrapped it (wrapping detaches it)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sockets = []
+        self._cancelled = False
+
+    def add(self, sock):
+        duplicate = sock.dup()
+        with self._lock:
+            self._sockets.append(duplicate)
+            cancelled = self._cancelled
+        if cancelled:
+            self._end(duplicate)
+
+    def cancel(self):
+        """Called by the worker: every connection of the fetch is shut down, and any opened later is too."""
+        with self._lock:
+            self._cancelled = True
+            sockets = list(self._sockets)
+        for sock in sockets:
+            self._end(sock)
+
+    def close(self):
+        """Called by the fetch when it ends, however it ends: the duplicates are released."""
+        with self._lock:
+            sockets, self._sockets = self._sockets, []
+        for sock in sockets:
+            sock.close()
+
+    @staticmethod
+    def _end(sock):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # already closed by the other side or by the fetch itself
+
+
+# The _FetchConnections of the fetch running on this thread, if any (see URLFetcher._title_within_budget).
+_this_fetch = threading.local()
+
+
 def _is_public_address(address) -> bool:
     ip = ipaddress.ip_address(address.split("%")[0])
     ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 is 127.0.0.1
@@ -50,6 +97,9 @@ class _PublicPeerMixin:
         if not _is_public_address(peer):
             sock.close()
             raise _RefusedURL(f"{self.host} (connected to a non-public address)")
+        connections = getattr(_this_fetch, "connections", None)
+        if connections is not None:
+            connections.add(sock)
         return sock
 
 
@@ -119,9 +169,10 @@ class URLFetcher:
     # Titles are fetched on a worker thread, never on the thread that reads the IRC socket: a slow page there
     # stopped every channel and the answers to the server's PING until the server dropped the bot (#83).
     # MAX_FETCH_SECONDS only bounds the body between chunks; the lookup, the hops and a body dripped below a
-    # chunk are not, so each link also gets a hard wall-clock budget. A fetch that overruns it is left to
-    # finish on its own thread and its title is never posted; while MAX_ABANDONED_FETCHES of those are still
-    # running, further links are skipped, so a hostile site cannot pile up threads.
+    # chunk are not, so each link also gets a hard wall-clock budget. A fetch that overruns it has its
+    # connections shut down and its title is never posted. A name lookup cannot be interrupted that way, so
+    # while MAX_ABANDONED_FETCHES given-up fetches are still running, further links are skipped and a hostile
+    # site cannot pile up threads.
     MAX_URLS_PER_MESSAGE = 3
     LINK_BUDGET_SECONDS = 20
     MAX_PENDING_MESSAGES = 5
@@ -183,18 +234,24 @@ class URLFetcher:
             print(f"URL title: skipping a link, {len(self._abandoned)} slow fetches still running")
             return None
         result = {}
+        connections = _FetchConnections()
 
         def fetch():
+            _this_fetch.connections = connections
             # Anyone in the channel chooses this text: an exception here fails this link, nothing else.
             try:
                 result["title"] = self.get_title(url)
             except Exception as e:
                 print(f"URL title: failed: {type(e).__name__}")
+            finally:
+                _this_fetch.connections = None
+                connections.close()
 
         thread = threading.Thread(target=fetch, name="url-title-fetch", daemon=True)
         thread.start()
         thread.join(self.LINK_BUDGET_SECONDS)
         if thread.is_alive():
+            connections.cancel()
             self._abandoned.append(thread)
             print(f"URL title: gave up after {self.LINK_BUDGET_SECONDS} s on {self._host_for_log(url)}")
             return None
