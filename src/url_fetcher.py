@@ -12,8 +12,10 @@ import requests
 import requests.adapters
 import urllib3.connection
 import urllib3.connectionpool
-from urllib3.exceptions import LocationParseError
+import urllib3.util.connection
+from urllib3.exceptions import ConnectTimeoutError, LocationParseError, NameResolutionError, NewConnectionError
 from urllib3.util import parse_url
+from urllib3.util.connection import allowed_gai_family
 
 from http_session import DEFAULT_TIMEOUT_SECONDS, make_session
 from request_errors import format_request_error
@@ -48,6 +50,11 @@ class _FetchConnections:
             cancelled = self._cancelled
         if cancelled:
             self._end(duplicate)
+
+    @property
+    def cancelled(self):
+        with self._lock:
+            return self._cancelled
 
     def cancel(self):
         """Called by the worker: every connection of the fetch is shut down, and any opened later is too."""
@@ -99,15 +106,49 @@ class _PublicPeerMixin:
             raise _RefusedURL(f"{self.host} (connected to a non-public address)")
         connections = getattr(_this_fetch, "connections", None)
         if connections is not None:
-            connections.add(sock)
+            try:
+                connections.add(sock)
+            except OSError:  # no descriptor left for the duplicate: the checked socket is not left to the collector
+                sock.close()
+                raise
         return sock
 
 
-class _PublicPeerHTTPConnection(_PublicPeerMixin, urllib3.connection.HTTPConnection):
+class _CancellableConnectMixin:
+    """Tries the addresses a name resolves to one at a time, as urllib3 does, but asks before each one whether
+    the fetch has been given up: urllib3's own loop gives every address its connect timeout, so a name with many
+    unanswering addresses kept a given-up fetch connecting long past its budget (#89). Now it stops within one
+    connect timeout of the cancel. The errors are urllib3's own, so requests reports them as before."""
+
+    def _new_conn(self):
+        connections = getattr(_this_fetch, "connections", None)
+        host = self._dns_host.strip("[]")
+        try:
+            addresses = socket.getaddrinfo(host, self.port, allowed_gai_family(), socket.SOCK_STREAM)
+        except socket.gaierror as e:
+            raise NameResolutionError(self.host, self, e) from e
+        error = NewConnectionError(self, "Failed to establish a new connection: no address to try")
+        for *_, address in addresses:
+            if connections is not None and connections.cancelled:
+                raise NewConnectionError(self, "Failed to establish a new connection: the fetch was given up")
+            try:
+                return urllib3.util.connection.create_connection(
+                    address[:2], self.timeout, source_address=self.source_address, socket_options=self.socket_options
+                )
+            except socket.timeout:
+                error = ConnectTimeoutError(
+                    self, f"Connection to {self.host} timed out. (connect timeout={self.timeout})"
+                )
+            except OSError as e:
+                error = NewConnectionError(self, f"Failed to establish a new connection: {e}")
+        raise error
+
+
+class _PublicPeerHTTPConnection(_PublicPeerMixin, _CancellableConnectMixin, urllib3.connection.HTTPConnection):
     pass
 
 
-class _PublicPeerHTTPSConnection(_PublicPeerMixin, urllib3.connection.HTTPSConnection):
+class _PublicPeerHTTPSConnection(_PublicPeerMixin, _CancellableConnectMixin, urllib3.connection.HTTPSConnection):
     pass
 
 
@@ -181,9 +222,9 @@ class URLFetcher:
     # stopped every channel and the answers to the server's PING until the server dropped the bot (#83).
     # MAX_FETCH_SECONDS only bounds the body between chunks; the lookup, the hops and a body dripped below a
     # chunk are not, so each link also gets a hard wall-clock budget. A fetch that overruns it has its
-    # connections shut down and its title is never posted. A name lookup cannot be interrupted that way, so
-    # while MAX_ABANDONED_FETCHES given-up fetches are still running, further links are skipped and a hostile
-    # site cannot pile up threads.
+    # connections shut down, stops trying further addresses, and its title is never posted. A name lookup or a
+    # connect attempt already under way cannot be interrupted that way, so while MAX_ABANDONED_FETCHES
+    # given-up fetches are still running, further links are skipped and a hostile site cannot pile up threads.
     MAX_URLS_PER_MESSAGE = 3
     LINK_BUDGET_SECONDS = 20
     MAX_PENDING_MESSAGES = 5

@@ -404,6 +404,20 @@ class TestThePeerIsChecked:
             Checked()._new_conn()
         sock.close.assert_called_once()
 
+    def test_a_socket_that_cannot_be_registered_is_closed(self, monkeypatch):
+        class Base:
+            def _new_conn(self):
+                return sock
+        class Checked(url_fetcher._PublicPeerMixin, Base):
+            host = "example.com"
+        sock = MagicMock()
+        sock.getpeername.return_value = ("93.184.216.34", 443)
+        sock.dup.side_effect = OSError("too many open files")
+        monkeypatch.setattr(url_fetcher._this_fetch, "connections", url_fetcher._FetchConnections(), raising=False)
+        with pytest.raises(OSError):
+            Checked()._new_conn()
+        sock.close.assert_called_once()
+
     def test_no_proxy_or_netrc_from_the_environment(self, fetcher):
         assert fetcher.session.trust_env is False
         assert all(isinstance(fetcher.session.get_adapter(f"{s}://example.com/"), url_fetcher._PublicPeerAdapter)
@@ -814,6 +828,69 @@ class TestAGivenUpFetchIsEnded:
             for conn in accepted:
                 conn.close()
             thread.join(timeout=10)
+
+    def test_a_given_up_fetch_stops_trying_further_addresses(self, fetcher, monkeypatch):
+        """A name with many addresses that never answer used to keep a given-up fetch connecting for one
+        connect timeout per address (#89). Every connect here times out after 0.2 s; there are 20 addresses."""
+        monkeypatch.setattr(url_fetcher, "DEFAULT_TIMEOUT_SECONDS", 0.2)
+        monkeypatch.setattr(URLFetcher, "LINK_BUDGET_SECONDS", 0.5)
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (f"93.184.216.{i}", 80)) for i in range(1, 21)]
+
+        def getaddrinfo(host, port, *args, **kwargs):  # a literal address resolves to itself, as for real
+            return [a for a in addresses if a[4][0] == host] or addresses
+
+        monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+        attempts = []
+
+        def connect(sock, address):
+            attempts.append(address)
+            time.sleep(0.2)
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(socket.socket, "connect", connect)
+        assert fetcher._title_within_budget("http://many.example/") is None
+        assert wait_until(lambda: not any(t.is_alive() for t in fetcher._abandoned), seconds=1)
+        assert len(attempts) < 10
+
+    def test_every_address_is_tried_until_one_answers(self, fetcher, monkeypatch):
+        """The connect loop is the bot's own now; it must still fall back like urllib3's (e.g. IPv6 to IPv4)."""
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (f"93.184.216.{i}", 80)) for i in (1, 2)]
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: addresses)
+        tried = []
+
+        def create_connection(address, *args, **kwargs):
+            tried.append(address)
+            if address[0].endswith(".1"):
+                raise ConnectionRefusedError("refused")
+            return MagicMock()
+
+        monkeypatch.setattr(url_fetcher.urllib3.util.connection, "create_connection", create_connection)
+        conn = url_fetcher._PublicPeerHTTPConnection("example.com", 80)
+        url_fetcher._CancellableConnectMixin._new_conn(conn)
+        assert tried == [("93.184.216.1", 80), ("93.184.216.2", 80)]
+
+    def test_when_no_address_answers_the_errors_are_urllib3s_own(self, monkeypatch):
+        from urllib3.exceptions import ConnectTimeoutError, NameResolutionError, NewConnectionError
+        conn = url_fetcher._PublicPeerHTTPConnection("example.com", 80)
+        one = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.1", 80))]
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: one)
+        for raised, expected in ((TimeoutError("timed out"), ConnectTimeoutError),
+                                 (ConnectionRefusedError("refused"), NewConnectionError)):
+            def create_connection(*args, raised=raised, **kwargs):
+                raise raised
+            monkeypatch.setattr(url_fetcher.urllib3.util.connection, "create_connection", create_connection)
+            with pytest.raises(expected):
+                url_fetcher._CancellableConnectMixin._new_conn(conn)
+
+        def no_name(*args, **kwargs):
+            raise socket.gaierror("no such name")
+
+        monkeypatch.setattr(socket, "getaddrinfo", no_name)
+        with pytest.raises(NameResolutionError):
+            url_fetcher._CancellableConnectMixin._new_conn(conn)
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [])
+        with pytest.raises(NewConnectionError):
+            url_fetcher._CancellableConnectMixin._new_conn(conn)
 
     def test_a_connection_opened_after_the_cancel_is_shut_down_at_once(self):
         near, far = socket.socketpair()
