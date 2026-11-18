@@ -84,3 +84,17 @@ over. Running a script without arguments prints its usage.
 The repository is public. The scripts only print public sports data. Do not hard-code local paths,
 user names, hostnames, keys or addresses in them, and do not commit their logs (`*.log` is ignored;
 keep it that way).
+
+### `fetch_night.sh` - the night's files from the server, in one command
+
+Run on the Mac after a game night: it logs in once, runs the server's `nightcheck.sh` for the window,
+saves the bot's raw journal and, with `--probe` / `--sampler`, the goal probe's or Liiga sampler's
+log, and copies them into `tools/logs/` (`nightcheck_NAME.log`, `journal_NAME.log`,
+`goal_probe_server.log`, `liiga_sampler_server.log`). Then `/post-game NAME` in Claude Code runs the
+morning check (`.claude/skills/post-game/`).
+
+    tools/fetch_night.sh 2026-11-19_nhl "2026-11-18 23:30" "2026-11-19 07:30" --probe
+
+The window is UTC. The server's details come from `tools/fetch_night.conf`, which is gitignored and
+holds three lines: `SERVER="<login>@<host>"`, `SERVICE="<the bot's unit>"` and
+`BOT_DIR="<the bot's checkout on the server>"`. `--dry-run` prints the commands without running them.

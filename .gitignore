@@ -184,3 +184,6 @@ cython_debug/
 
 # Visual Studio Code
 .vscode
+
+# Local server details for tools/fetch_night.sh (never commit)
+tools/fetch_night.conf
