@@ -538,6 +538,16 @@ class TestStartExtras:
         Command._fetch_today_games = lambda self: None
         assert start_extras.todays_starts(Command()) is None
 
+    @pytest.mark.parametrize("command", [start_extras.LiigaCommand, start_extras.NHLCommand])
+    def test_the_real_trackers_still_have_what_it_reads(self, command):
+        # The test above uses a stand-in, so a tracker renaming one of these would pass it and crash the
+        # server's timer instead, leaving that night without probe data.
+        assert callable(command._fetch_today_games)
+        assert callable(command._parse_start_dt)
+        assert isinstance(command.START_TIME_KEY, str)
+        assert command.HELSINKI_TZ is not None
+        assert start_extras.NHLCommand.EASTERN_TZ is not None
+
     def test_main_waits_until_each_start_and_skips_a_probe_already_running(self, monkeypatch, capsys):
         runs = [start_extras.Run("liiga_sampler.py", ("2026-11-20", "4"), self.at(20, 16)),
                 start_extras.Run("goal_probe.py", ("2026-11-20", "8", "20"), self.at(20, 23, 30))]
