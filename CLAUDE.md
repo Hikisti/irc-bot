@@ -94,7 +94,11 @@ not what it is.
   new field adds it there. `start_extras.py` starts the goal probe and the
   Liiga sampler by itself on big game days, from a daily timer on the server
   (its decision is the plain function `plan()`), so the probes' command-line
-  arguments are its contract too.
+  arguments are its contract too. It reads each tracker's schedule through
+  `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY` and the trackers'
+  timezones, so those are part of that contract; its thresholds
+  (`LIIGA_MIN_GAMES`, `NHL_MIN_GAMES`) are repeated in `tools/README.md`, the
+  `/post-game` skill and `DEPLOY.md`, which change with them.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on
