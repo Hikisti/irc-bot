@@ -91,7 +91,10 @@ not what it is.
   day by `.github/workflows/feed-contract.yml`, that fails when a field the
   NHL or Liiga trackers read has gone or changed type in the live feed. Its
   field lists mirror what the code reads, so a tracker that starts reading a
-  new field adds it there.
+  new field adds it there. `start_extras.py` starts the goal probe and the
+  Liiga sampler by itself on big game days, from a daily timer on the server
+  (its decision is the plain function `plan()`), so the probes' command-line
+  arguments are its contract too.
 - `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
   reverse-engineered APIs** - not documented, can change shape without
   notice. This is why the code leans defensive throughout (never crash on
