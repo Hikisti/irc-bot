@@ -38,7 +38,10 @@ server's daily timer (`tools/start_extras.py`) starts them by itself on those da
    (`CONNECTED`/`DISCONNECTED`), an error. Times are UTC.
 5. **The probe/sampler log, if fetched.** Pick tonight's run by its start line (`goal probe start,
    slate <date>`), and compare its goal timeline with what the bot posted: re-keyed or double-listed
-   goals, goals that left and came back, challenge stoppages and how late they appeared.
+   goals, goals that left and came back, challenge stoppages and how late they appeared. On a day
+   the daily timer should have started one (10+ NHL / 5+ Liiga games) and the log has no run for the
+   day, ask Heikki for the timer's journal (the command is in DEPLOY.md, "The probes start
+   themselves") to see what it planned.
 6. **Open issues waiting for live evidence.** `gh issue list --state open`, then read each one whose
    Status says "open until ..." and grep the journal for the line it names (for wording, see the fix
    commit: `git log --grep="#N"`). Typical: a `took the game back from final` line (#73), `the score
