@@ -1,14 +1,16 @@
 # irc-bot
 
 A simple IRC bot (KukistiBot) with a handful of chat commands: weather, stock, crypto,
-electricity price, local time, F1 schedule, driving distance, IMDb lookups, and live Liiga (ice
+electricity price, local time, F1 schedule, driving distance, IMDb lookups, `!bjorck`, and live Liiga (ice
 hockey), NHL, and Superpesis (pesäpallo) score tracking. It also auto-fetches and posts page titles
 for links shared in channel.
 
 ## Setup
 
+Requires Python 3.14 (the version CI and production run).
+
 ```bash
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -358,9 +360,11 @@ Logs go to `tools/logs/` (git-ignored). See [tools/README.md](tools/README.md) f
 ## Project structure
 
 ```
-src/     - bot and command implementations
-tests/   - pytest test suite (mirrors src/, one test file per module; test_tools.py covers tools/)
-tools/   - read-only probes of the live NHL/Liiga feeds (not part of the bot)
+src/           - bot and command implementations
+tests/         - pytest test suite (mirrors src/, one test file per module; test_tools.py covers tools/)
+tools/         - read-only probes of the live NHL/Liiga feeds and journal tools (not part of the bot)
+channels.toml  - the channels the bot joins and the commands that work in each
+.github/       - CI/CD (test, then deploy) and the twice-daily feed contract check
 ```
 
 ## Deployment
