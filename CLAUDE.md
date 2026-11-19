@@ -282,6 +282,13 @@ you'd treat any other production deploy, not a plain git operation:
 - `DEPLOY.md` is gitignored on purpose - it holds real server access
   details (paths, service names, SSH setup). Never `git add` it, never
   suggest committing it, even if asked to "just add everything."
+- `DEPLOY.md` holds the from-scratch server runbook as well as the access
+  details. A change that adds or alters anything on the server - a systemd
+  unit or timer, a package, a sudoers rule, a script in a home directory, a
+  GitHub secret the workflow reads - updates that runbook in the same
+  session. Claude has no server access, so it drafts the steps and Heikki
+  runs them. Keep a copy of `DEPLOY.md` outside this Mac; it is in no
+  repository.
 
 ## Commit conventions
 
