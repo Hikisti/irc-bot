@@ -96,6 +96,12 @@ waits for the probes, so its service lasts as long as they do.
 
     .venv/bin/python tools/start_extras.py --dry-run    # today's plan, starts nothing
 
+It reads the schedules through `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY` and the
+trackers' timezones, and starts the probes with their command-line arguments, so all of those are
+its contract (`tests/test_tools.py` checks the real trackers still have them). Its thresholds
+(`LIIGA_MIN_GAMES`, `NHL_MIN_GAMES`) are repeated here, in the `/post-game` skill and in the private
+deploy notes, which change with them.
+
 ### `fetch_night.sh` - the night's files from the server, in one command
 
 Run on the Mac after a game night: it logs in once, runs the server's `nightcheck.sh` for the window,

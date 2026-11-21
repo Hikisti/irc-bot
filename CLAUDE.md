@@ -1,319 +1,233 @@
 # Working on KukistiBot with Claude
 
-This file is for Claude (or anyone else picking this project up cold). See
-`README.md` for what the bot does and how to run it, and `DEPLOY.md`
-(gitignored, not in this repo's history - ask Heikki for it) for actual
-server access details. This file is about *how* to work on this codebase,
-not what it is.
+This file is about *how* to work on this codebase. `README.md` says what the
+bot does and how to run it; `DEPLOY.md` (gitignored, in no repository - ask
+Heikki for it) holds the server access details and runbook.
 
-## Architecture at a glance
+> **`git push` to `main` deploys to production and can restart the live bot**
+> (see "Deployment" below). Never push, or merge a PR, without Heikki's
+> confirmation. Commit only when asked.
 
-- `BaseCommand` (`src/base_command.py`) is the contract every command
-  implements: `ALIASES`, `ALLOW_ARGS`, `CHANNEL_ONLY`, `HELP`, `execute(args,
-  irc_bot=, channel=)`. `CommandHandler` builds its alias-dispatch table from
-  these at startup - a command with no `ALIASES` is unreachable.
-- Which channels the bot joins and which commands work in each is
-  `channels.toml` at the repository root, read and checked by
-  `src/channel_config.py` at startup (a mistake stops the bot with a message
-  naming it). Every channel gets the default set (every command not
-  `CHANNEL_ONLY`) and can add, remove, or replace it; `CommandHandler.is_allowed()`
-  and `url_titles_allowed()` are the only places that ask it. The live trackers
-  are `CHANNEL_ONLY` (set once on `LiveTrackerCommand`), so a new tracker works
-  nowhere until a channel in the file adds it.
-- `LiveTrackerCommand` (`src/live_tracker_command.py`) is the shared engine
-  behind `LiigaCommand`, `PesisCommand`, and `NHLCommand` - identical
-  start/stop/next lifecycle, poll loop, early-start guard, and
-  already-finished guard. Look here first before touching any of their
-  lifecycle code; only the actual fetch/announce logic (`_poll_once`,
-  `_fetch_today_items`, `_build_initial_state`) is sport-specific. It also
-  owns `_fetch_concurrently()` - the one and only way to fetch N
-  independent per-item network calls in parallel here (see "Concurrent
-  fetching" below); never hand-roll `ThreadPoolExecutor`/`executor.map()`
-  again in a new subclass.
-- A tracker with `AUTO_START` (Liiga, NHL) is also started by `AutoStarter`
-  (`src/auto_start.py`) at the scheduled start of the day's first game, in
-  every channel that has it where nobody has started it by then, through the
-  same `start` path and its guards: once a day, and not after a `stop` that
-  day. Its decision is the plain function `due()`.
-- The one-shot `now`/`results` lookups (`!nhl`, `!liiga`) never touch
-  tracker state. Their sport-neutral part - dispatch, background thread,
-  the Live / Final / Upcoming board, the results line, line packing - is
-  `ScoreboardMixin` (`src/scoreboard.py`); each sport supplies the fetch,
-  the state classifiers and the labels: `NHLScoreboardMixin`
-  (`src/nhl_scoreboard.py`, reads `/score/{date}`, which carries period and
-  clock; the schedule the tracker polls doesn't) and `LiigaScoreboardMixin`
-  (`src/liiga_scoreboard.py`, reads the same games list the tracker polls).
-  A subcommand that isn't start/stop/next goes in `SUBCOMMANDS` (what
-  `!help` and the usage reply list) and an `execute()` ahead of
-  `LiveTrackerCommand`'s in the MRO.
-- `NHLCommand` is also built from two more mixins, split out of `nhl_command.py`
-  (it was 973 lines) as move-only commits (#10): `NHLGoalLedgerMixin`
-  (`src/nhl_goal_ledger.py`: what has been announced per game, how a feed's goal
-  list is compared with it, and the `NO GOAL:` retraction with the reason found
-  near it) and `NHLFinalMixin` (`src/nhl_final.py`: the FINAL line and the result
-  it states, the attendance lookups and retries, the end-of-slate list). Tests
-  follow the modules (`tests/test_nhl_goal_ledger.py`, `tests/test_nhl_final.py`);
-  the shared builders are in `tests/nhl_test_helpers.py` and the `nhl_command`
-  fixture is in `tests/conftest.py`. #47 is still open on this ledger. A game's
-  FINAL is posted by the *second* poll in which it is final (#70), so a test
-  that ends a game must poll twice or seed `"final_seen": ()` in the previous
-  state.
-- `LiigaCommand` is built from three mixins besides the engine (one is `LiigaScoreboardMixin`, above). `LiigaGoalLedgerMixin`
-  (`src/liiga_goal_ledger.py`, split out of `liiga_command.py` as a move-only
-  commit, then extended in its own commit for #22): every announced goal is kept
-  by all the identities it has had (event id; period, game time and scorer; scorer
-  and running score), how a feed's goal events are compared with them, the journal
-  lines about a goal that changed or left, and the `NO GOAL:` retraction of a goal
-  that stays out of the feed for four polls (no reason: the Liiga feed has none).
-  Its tests are still in `tests/test_liiga_command.py`. `TeamNextMixin`
-  (`src/team_next.py`, shared with `NHLCommand`) is `next <team> [count]`: the
-  argument parsing, the team matching and the reply packing; each sport supplies
-  where its season schedule comes from.
-- `PesisCommand` is built from three mixins: `PesisEventParsingMixin`
-  (turns the raw event feed into RUN:/JAKSO:/FINAL: text),
-  `PesisPlayerNamesMixin` (scorer/batter name resolution), and
-  `PesisDataFetchingMixin` (all pesistulokset.fi HTTP calls).
-  `SuperpesisCommand`/`YkkospesisCommand` are thin subclasses of it.
-- `tools/` holds read-only probes of the live feeds (`goal_probe.py`,
-  `state_watch.py` for the NHL, `liiga_sampler.py` for Liiga, shared
-  `probe_common.py`; see `tools/README.md`). They are not part of the bot:
-  nothing in `src/` imports them and they never talk to IRC. They reuse the
-  trackers' own fetch methods (`_fetch_scores`, `_fetch_play_by_play`,
-  `_current_season`), so renaming one of those means updating `tools/` too.
-  `tests/test_tools.py` covers their pure parts; the polling loops are
-  verified by running them. `journal_report.py` is the odd one out: it reads
-  no feed, it turns the bot's own journal (`journalctl -a` text) into a
-  per-game report and an anomalies list. It parses the bot's message
-  wording (GOAL:/NO GOAL:/FINAL: and the `NHL:`/`Liiga:` prints), so changing
-  one of those, or adding a new journal print, means updating it;
-  `tests/test_journal_report.py` round-trips the bot's own message builders to
-  catch that. `feed_contract.py` is the other non-probe: one pass, run twice a
-  day by `.github/workflows/feed-contract.yml`, that fails when a field the
-  NHL or Liiga trackers read has gone or changed type in the live feed. Its
-  field lists mirror what the code reads, so a tracker that starts reading a
-  new field adds it there. `start_extras.py` starts the goal probe and the
-  Liiga sampler by itself on big game days, from a daily timer on the server
-  (its decision is the plain function `plan()`), so the probes' command-line
-  arguments are its contract too. It reads each tracker's schedule through
-  `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY` and the trackers'
-  timezones, so those are part of that contract; its thresholds
-  (`LIIGA_MIN_GAMES`, `NHL_MIN_GAMES`) are repeated in `tools/README.md`, the
-  `/post-game` skill and `DEPLOY.md`, which change with them.
-- `liiga.fi`, `pesistulokset.fi`, and `api-web.nhle.com` are **unofficial,
-  reverse-engineered APIs** - not documented, can change shape without
-  notice. This is why the code leans defensive throughout (never crash on
-  an unexpected field, degrade to an error string instead) - keep that
-  posture in any new code touching these APIs, don't tighten assumptions
-  "for cleanliness." When integrating a *new* one of these, verify what
-  timezone it buckets/anchors its own dates by before assuming it matches
-  Helsinki - `NHLCommand` needed its own `EASTERN_TZ` for exactly this
-  reason (NHL schedule dates are bucketed by US Eastern time, confirmed
-  live), separate from `HELSINKI_TZ` used for every displayed time.
+## Commands
 
-## Adding a command
+    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+    .venv/bin/ruff check src tests tools          # lint; CI fails on any finding
+    .venv/bin/pytest -q                           # full suite
+    .venv/bin/pytest tests/test_whatever.py -q    # one file
+    .venv/bin/pytest --cov=src --cov-report=term-missing
 
-1. Subclass `BaseCommand` (or `LiveTrackerCommand` for a live tracker) and
-   add it to `COMMAND_CLASSES` in `src/command_handler.py` - the only
-   registration step. (`HelpCommand` is the one exception: it needs the
-   finished handler, so `CommandHandler.__init__` registers it directly.)
-2. Set `HELP` - the short usage string `!help` lists, e.g. `"!stock
-   <ticker>"`. There is no separate help file to update; a test fails if a
-   registered command has none.
-3. If it takes arguments, calling it bare must reply `Usage: ... (e.g.,
-   ...)`. A test enforces the `Usage:` prefix for every argument-taking
-   command.
-4. Add tests, plus a row in the README commands table and a paragraph if
-   the behavior isn't obvious. `tests/test_readme.py` fails if the commands
-   table or the README's Channels section disagrees with the code or
-   `channels.toml`; a new channel goes in `channels.toml` and in that table,
-   and channel names appear nowhere else in the README.
+- Python 3.14 everywhere (local venv, CI, production); keep them in sync if
+  the venv is rebuilt (`DEPLOY.md`, "rebuilding the venv", has the incident).
+- `ruff.toml` checks for real mistakes (unused or undefined names, bugbear),
+  not formatting. There is no auto-formatter on purpose, to keep `git blame`
+  meaningful.
+- Tests follow the `src/` modules under `tests/` (the Liiga goal ledger's are
+  still in `tests/test_liiga_command.py`). Shared builders: `tests/conftest.py`
+  (`make_json_response`, the `nhl_command` fixture), `tests/nhl_test_helpers.py`,
+  `tests/pesis_test_helpers.py`. No test touches the network.
 
-## How new code should look here
+## Architecture
 
-- **Use the existing seams before inventing one.** A command is a
-  `BaseCommand` registered in `COMMAND_CLASSES`; a live tracker overrides the
-  `LiveTrackerCommand` hooks; behaviour shared across sports goes in a mixin
-  (`TeamNextMixin` is the pattern). Flexibility here means a new feature fits
-  an existing seam, not that code carries options nobody asked for.
-- **One module, one responsibility.** When a file passes about 600 lines or a
-  pattern appears a third time, propose the split first (see the refactoring
-  rule below) and do it move-only.
-- **Keep decisions apart from input and output.** The rule that decides
-  (is this the same goal, which decimals, which team matched) is a plain
-  function that tests can call without a network; fetching and sending wrap
-  around it.
-- **The code explains itself.** Clear names and small functions; a comment
-  says why, never what.
+- **Commands.** `BaseCommand` (`src/base_command.py`) is the contract:
+  `ALIASES`, `ALLOW_ARGS`, `CHANNEL_ONLY`, `HELP`, `execute(args, irc_bot=,
+  channel=)`. `CommandHandler` dispatches on `ALIASES`, so a command without
+  them can't be reached.
+- **Channels.** `channels.toml` lists the channels and the commands each one
+  allows. `src/channel_config.py` checks it at startup, and a mistake in it
+  stops the bot with a message naming it. Each channel gets every command that
+  isn't `CHANNEL_ONLY` and can add, remove or replace that set.
+  `CommandHandler.is_allowed()` and `url_titles_allowed()` are the only places
+  that read it. The live trackers are `CHANNEL_ONLY`, so a new tracker works
+  nowhere until a channel adds it.
+- **Live trackers.** `LiveTrackerCommand` (`src/live_tracker_command.py`) is
+  the engine behind `LiigaCommand`, `PesisCommand` and `NHLCommand`. It owns
+  the start/stop/next lifecycle, the poll loop, and the early-start and
+  already-finished guards, so look there first. Each sport supplies
+  `_poll_once`, `_fetch_today_items` and `_build_initial_state`. Each sport
+  command is built from mixins, one module per job:
+  - NHL: `nhl_goal_ledger.py` (what has been announced, `NO GOAL:`
+    retractions with a reason) and `nhl_final.py` (the FINAL line, attendance,
+    the end-of-slate list). A game's FINAL is posted by the *second* poll in
+    which it is final (#70), so a test that ends a game must poll twice or
+    seed `"final_seen": ()` in the previous state.
+  - Liiga: `liiga_goal_ledger.py`. Every announced goal is kept under each
+    identity it has had: event id; period, game time and scorer; scorer and
+    running score. A goal that stays out of the feed for four polls is
+    retracted with `NO GOAL:`, without a reason, because the feed gives none.
+  - Pesis: event parsing, player names and data fetching mixins;
+    `SuperpesisCommand`/`YkkospesisCommand` are thin subclasses.
+  - Shared: `TeamNextMixin` (`src/team_next.py`), `next <team> [count]` for
+    NHL and Liiga.
+- **Auto start.** `AutoStarter` (`src/auto_start.py`) starts each `AUTO_START`
+  tracker (Liiga, NHL) at the scheduled start of the day's first game, in
+  every channel that has it and hasn't started it. It goes through the same
+  `start` path and guards, at most once a day, and never after a `stop` that
+  day. The decision is the plain function `due()`.
+- **Scoreboards.** The one-shot `now`/`results` lookups never touch tracker
+  state. The parts shared by both sports are in `ScoreboardMixin`
+  (`src/scoreboard.py`), and each sport supplies its own fetch and labels.
+  `nhl_scoreboard.py` reads `/score/{date}`, which has period and clock that
+  the schedule lacks. `liiga_scoreboard.py` reads the tracker's games list. A
+  subcommand other than start/stop/next goes in `SUBCOMMANDS`, and in an
+  `execute()` placed ahead of `LiveTrackerCommand`'s in the MRO.
+- **The feeds are unofficial, reverse-engineered APIs** (`liiga.fi`,
+  `pesistulokset.fi`, `api-web.nhle.com`) and can change shape without notice.
+  Stay defensive: never crash on an unexpected field, degrade to an error
+  string instead, and don't tighten assumptions "for cleanliness". For a new
+  feed, find out which timezone it buckets its dates by. NHL dates are US
+  Eastern (`EASTERN_TZ`, confirmed live), while every displayed time is
+  `HELSINKI_TZ`.
+- **`tools/`** holds read-only probes and reports, not the bot. Nothing in
+  `src/` imports them and they never talk to IRC (see `tools/README.md`). They
+  reuse tracker internals, so renaming one of the following means updating
+  `tools/`: `_fetch_scores`, `_fetch_play_by_play`, `_current_season`,
+  `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY`, the trackers'
+  timezones, the probes' command-line arguments.
+  - `journal_report.py` parses the bot's own message wording (GOAL:/NO
+    GOAL:/FINAL:, the `NHL:`/`Liiga:` prints). Changing that wording or adding
+    a journal print means updating it.
+  - `feed_contract.py`'s field lists mirror what the trackers read, so a
+    tracker that starts reading a new field adds it there.
 
 ## Concurrent fetching
 
-`LiveTrackerCommand._fetch_concurrently(items, fetch_fn)` runs `fetch_fn`
-across `items` in parallel and returns `{item: result_or_None}`. Use it for
-any "N independent per-item network calls" case (seeding a match/game's
-extra detail, polling several tracked items' own per-item state) instead
-of writing `ThreadPoolExecutor`/`executor.map()` directly. Confirmed live
-as a real, recurring bug shape: a bare `executor.map()`'s returned iterator
-raises the *first* failing future's exception as soon as it's reached,
-aborting collection for every other item's result too - both
-`NHLCommand`'s per-game play-by-play fetch and `PesisCommand`'s
-`_seed_match_extras` had this independently before `_fetch_concurrently()`
-existed. `_fetch_concurrently()` submits every future up front and
-retrieves each one's own result (or exception) individually, so one item's
-failure never affects any other's.
+Use `LiveTrackerCommand._fetch_concurrently(items, fetch_fn)`, which returns
+`{item: result_or_None}`, for any set of independent per-item network calls.
+Don't write `ThreadPoolExecutor`/`executor.map()` yourself. A bare `map()`
+raises the first failing future's exception as soon as it is reached and
+loses every other item's result. Both the NHL play-by-play fetch and Pesis
+`_seed_match_extras` had that bug live, independently. `_fetch_concurrently()`
+gets each future's result or exception separately.
 
-## Development workflow
+## Adding a command
 
-- Python 3.14 everywhere (local venv, CI, production) - keep these in sync
-  if the venv is ever rebuilt (see `DEPLOY.md`'s "rebuilding the venv" note
-  for a real incident this caused and how to avoid it).
-- `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r
-  requirements-dev.txt`
-- `ruff check src tests tools` for lint (CI runs it before the tests, and a
-  finding fails the build). Config is `ruff.toml`; it checks for real mistakes
-  (unused names, undefined names, bugbear), not formatting - there is no
-  auto-formatter on purpose, to keep `git blame` meaningful.
-- `pytest` for the suite; `pytest --cov=src --cov-report=term-missing` for
-  coverage. Tests mirror `src/` one-to-one under `tests/`. Shared test
-  builders/fixtures live in `tests/conftest.py` (e.g. `make_json_response`)
-  and `tests/pesis_test_helpers.py`. No test hits a real network call -
-  everything's mocked.
+1. Subclass `BaseCommand` (or `LiveTrackerCommand`) and add it to
+   `COMMAND_CLASSES` in `src/command_handler.py`. That is the only
+   registration step. The exception is `HelpCommand`, which needs the finished
+   handler and is registered in `CommandHandler.__init__`.
+2. Set `HELP`, the usage string `!help` lists (e.g. `"!stock <ticker>"`). A
+   test fails if it is missing.
+3. If the command takes arguments, calling it bare must reply `Usage: ...
+   (e.g., ...)`. A test enforces this.
+4. Add tests, plus a row in the README commands table (and a paragraph if the
+   behaviour isn't obvious). `tests/test_readme.py` checks that table and the
+   README's Channels section against the code and `channels.toml`. A new
+   channel goes in `channels.toml` and that table, and channel names appear
+   nowhere else in the README.
 
-## The methodology to follow on every change here
+## How new code should look here
 
-This project has been refactored and extended over many sessions under a
-consistent, deliberate discipline - keep following it:
+- **Use the existing seams before inventing one**: a `BaseCommand`, a
+  `LiveTrackerCommand` hook, or a mixin for behaviour shared across sports.
+  Flexibility means a feature fits a seam, not code carrying options nobody
+  asked for.
+- **One module, one responsibility.** Past about 600 lines, or at the third
+  copy of a pattern, propose a split (see Refactoring below).
+- **Keep decisions apart from input and output.** The rule that decides (same
+  goal? which team matched?) is a plain function tests can call without a
+  network. Fetching and sending wrap around it.
+- **The code explains itself.** A comment says why (a hidden constraint, a
+  workaround for a confirmed live incident), never what.
+- No features, refactors or abstractions beyond what the task needs.
+- Never silently change observable behaviour (a message's wording, a
+  command's output shape); call it out first.
 
-- After editing a file, run *that file's* tests immediately
-  (`pytest tests/test_whatever.py -q`), not just at the very end.
-- Checking that a test can fail by breaking the code, running the tests and
-  restoring the file: clear the `__pycache__` folders afterwards. Python
-  decides a compiled file is current from the source's modification time
-  (to the second) and size, so a restore made within the same second as the
-  edit, to text of the same length, leaves the stale compiled copy in use
-  and a correct change makes a test look broken (this hid a correct
-  `POLL_INTERVAL_SECONDS = 45` behind a failing test once).
-- A test that runs a loop on a fake clock or socket must have a call limit or
-  a deadline, so a regression fails instead of hanging the suite (two
-  mutation checks of the connection watchdog once did exactly that).
-- Before considering any task done: run the **full** suite, check coverage
-  hasn't regressed on touched modules, and - where feasible - verify the
-  actual behavior against the real live API/data, not just mocks (e.g. a
-  real `!stock`/`!liiga`/`!superpesis` call against the live service).
-  Several real bugs in this codebase were only caught this way, not by
-  mocked tests alone.
-- To check a live-tracker change against real games, start the matching
-  probe from `tools/` before the games, compare its log with the channel
-  log afterwards, and put what it showed (counts, short timelines) in the
-  relevant issue. The repo is public: probes and their output must carry no
-  identifying details (no names, local paths, hostnames, keys), and their
-  logs stay out of git (`*.log` is ignored; keep it that way).
-- Tests must not depend on a local `.env`: it's gitignored, so CI never
-  has it, and a test that only passes because of a key in it fails there
-  (this happened once). `tests/conftest.py` disables `.env` loading during
-  tests (`PYTHON_DOTENV_DISABLED`), so a test that needs a key must set it
-  itself with `monkeypatch.setenv`.
-- A change to code that handles untrusted input (a new command taking user
-  arguments that reach an outside service, link titles, IRC message
-  handling, `send_message`), to the deploy pipeline, or a major upgrade of
-  the HTTP libraries or Python, gets a scoped security audit: the
-  `security-audit` skill in quick profile, limited to the changed files,
-  capped at about 15 agents, on a day without tracked games. Its reports
-  stay outside the repository (they are not for GitHub), and a later run
-  builds on the previous ledger, so keep it. A confirmed problem is fixed
-  before any public issue describes it; leads that cannot be fixed now go
-  in issues without step-by-step detail.
-- Never silently change observable behavior (a message's wording, a
-  command's output shape) without calling it out first.
-- Don't add features, refactor, or add abstractions beyond what a task
-  actually needs. Comments only when the *why* is genuinely non-obvious
-  (a hidden constraint, a workaround for a confirmed live incident) - not
-  for what the code already says by being well-named.
-- Refactoring is triggered, not scheduled. Propose one (never fold it
-  into a feature or fix) when a third copy of a pattern appears or a
-  file passes about 600 lines. Keep it behavior-neutral, in its own
-  commit, and never right before a live-tracker change is verified
-  against real games.
-- Problems and ideas that aren't being fixed now (a known quirk, a
-  deferred option, a parked decision) go in GitHub Issues, not in code
-  comments, memory, or a TODO file. The repo is public, so nothing on
-  GitHub - an issue or its comments, a commit message, a PR, a tracked
-  file - ever holds server details: IP addresses, hostnames, login or user
-  names, paths, the service name, keys, or anything from `DEPLOY.md`.
-  Journal and log excerpts are quoted only after stripping host prefixes,
-  user addresses and chat. Creating or closing an issue is outward-facing:
-  confirm first.
-  Every new issue gets one `priority: high|medium|low` label (high = a
-  visible error in a channel that has already happened) and one area label
-  (`nhl`, `liiga`, `pesis`, `imdb`; when none fits, the priority label alone);
-  the pinned tracking issue holds the order of work, so update its checklist
-  when a priority changes.
-- An issue's description says where it stands now, not where it stood when
-  it was opened. Whenever its state changes (fixed, deployed, seen live,
-  parked, decided), rewrite its `## Status` section in the same session -
-  a comment alone is not enough, since the description is what gets read -
-  and update its line in the tracking issue (tick it when the issue closes,
-  and drop it from any waiting list there). Before starting work on an
-  issue, check `git log --grep="#N"` as well: a description that has
-  fallen behind once made finished work look undone.
-- Only commit when explicitly asked. Never push proactively either - see
-  below for why that's a bigger deal here than in most repos.
+## Methodology on every change
 
-## Deployment is not free - `git push` to `main` is a live production action
+- After editing a file, run *that file's* tests right away, not only at the end.
+- After a mutation check (break the code, run the tests, restore), clear the
+  `__pycache__` folders. Python judges a compiled file current by source mtime
+  (to the second) and size. A same-second, same-length restore keeps the stale
+  copy, and a correct change then looks broken. This once hid a correct
+  `POLL_INTERVAL_SECONDS = 45`.
+- A test that loops on a fake clock or socket needs a call limit or a
+  deadline, so a regression fails instead of hanging the suite.
+- Tests must not depend on `.env` (CI has none). `tests/conftest.py` sets
+  `PYTHON_DOTENV_DISABLED`, so a test that needs a key sets it with
+  `monkeypatch.setenv`.
+- **Before calling a task done:** run the full suite, check coverage on the
+  touched modules hasn't dropped, and where feasible verify against the live
+  service (a real `!stock`/`!liiga`/`!superpesis` call). Several real bugs
+  were only caught that way.
+- For a live-tracker change, start the matching probe from `tools/` before
+  the games, compare its log with the channel log afterwards, and put the
+  evidence (counts, short timelines) in the issue. Probes and their output
+  carry no identifying details, and `*.log` stays ignored.
+- **Security audit** for changes to code that handles untrusted input (user
+  arguments that reach an outside service, link titles, IRC message handling,
+  `send_message`), to the deploy pipeline, or for a major upgrade of the HTTP
+  libraries or Python. Use the `security-audit` skill in quick profile,
+  limited to the changed files, about 15 agents at most, on a day without
+  tracked games. Reports stay outside the repository; keep the ledger for the
+  next run. Fix a confirmed problem before any public issue describes it;
+  leads that can't be fixed now go in issues without step-by-step detail.
+- **Refactoring is triggered, not scheduled.** Propose it (never fold it into
+  a feature or fix) at a third copy of a pattern or a file past about 600
+  lines. It must not change behaviour, goes in its own move-only commit, and
+  never lands right before a live-tracker change is verified against real
+  games.
 
-Every push to `main` runs the test suite, then - if it passes - deploys
-over SSH to the production VPS and, when the push changes anything the bot
-runs (`src/`, `channels.toml`, `requirements.txt`, or any file not known to
-be safe), **restarts the live bot**, dropping and rejoining every IRC
-channel it's in and stopping every running tracker, with real users
-present. A push of only docs, tests or tools (`README.md`, `CLAUDE.md`,
-`tests/`, `tools/`, `.github/`, the lint and test settings) is pulled
-without a restart; `.github/needs-restart.sh` decides and the deploy log
-says which. Only add a path to its safe list if the bot never reads it.
-A push still goes out to production either way, so treat it the same way
-you'd treat any other production deploy, not a plain git operation:
+## GitHub issues
 
-- Confirm with Heikki before pushing, even if you were explicitly asked to
-  implement something - "implement this" is not the same as "push this."
-- For anything touching the live-tracker commands (`!liiga`/`!superpesis`/
-  `!ykkospesis`) specifically: avoid pushing while a game/match is actively
-  being tracked in production. Ask, or wait until today's games are over,
-  the same way this was handled for the Liiga fixes in this project's
-  history.
-- Merging a pull request to `main` (a Dependabot bump, say) is a push: it
-  deploys and restarts the bot the same way. The server's own automatic
-  security updates can also restart it, around 06:00-07:00 UTC; if a tracker
-  stops there with no other cause, that is the reason - start it again.
-- `DEPLOY.md` is gitignored on purpose - it holds real server access
-  details (paths, service names, SSH setup). Never `git add` it, never
-  suggest committing it, even if asked to "just add everything."
-- `DEPLOY.md` holds the from-scratch server runbook as well as the access
-  details. A change that adds or alters anything on the server - a systemd
-  unit or timer, a package, a sudoers rule, a script in a home directory, a
-  GitHub secret the workflow reads - updates that runbook in the same
-  session. Claude has no server access, so it drafts the steps and Heikki
-  runs them. Keep a copy of `DEPLOY.md` outside this Mac; it is in no
-  repository.
+The repo is public. Nothing on GitHub (issues, comments, commits, PRs,
+tracked files) ever holds server details: IP addresses, hostnames, logins,
+paths, the service name, keys, or anything from `DEPLOY.md`. Quote journal
+and log excerpts only after stripping host prefixes, user addresses and
+chat.
+
+- Anything not being fixed now (a quirk, a deferred option, a parked
+  decision) goes in an issue, not in code comments, memory or a TODO file.
+  Creating or closing an issue is outward-facing: confirm first.
+- Each new issue gets one `priority: high|medium|low` label (high = a visible
+  error that has already happened in a channel) and one area label (`nhl`,
+  `liiga`, `pesis`, `imdb`; none if nothing fits). The pinned tracking issue
+  holds the order of work; update its checklist when a priority changes.
+- A description says where the issue stands *now*. When its state changes
+  (fixed, deployed, seen live, parked, decided), rewrite its `## Status`
+  section in the same session. A comment is not enough. Also update its line
+  in the tracking issue: tick it on close and drop it from any waiting list.
+- Before starting on issue N, run `git log --grep="#N"`. A stale description
+  once made finished work look undone.
+
+## Deployment: `git push` to `main` is a production action
+
+Every push to `main` runs the tests, then deploys over SSH to the production
+server. If the push changes anything the bot runs (`src/`, `channels.toml`,
+`requirements.txt`, or any file not known to be safe), **the live bot
+restarts**: it leaves and rejoins every channel and stops every running
+tracker, with real users present. A push of only docs, tests, tools,
+`.github/` or the lint and test settings is pulled without a restart.
+`.github/needs-restart.sh` decides, and the deploy log says which happened.
+Only add a path to its safe list if the bot never reads it.
+
+- Confirm with Heikki before every push. "Implement this" is not "push this."
+- Don't push a live-tracker change (`!liiga`/`!nhl`/`!superpesis`/
+  `!ykkospesis`) while a game is being tracked. Ask, or wait until the day's
+  games are over.
+- Merging a PR (a Dependabot bump, say) is a push. The server's automatic
+  security updates can also restart the bot around 06:00-07:00 UTC; a tracker
+  that stops then with no other cause just needs starting again.
+- Never `git add` `DEPLOY.md` or suggest committing it, even when asked to
+  "just add everything".
+- A change that adds or alters anything on the server (a systemd unit or
+  timer, a package, a sudoers rule, a script in a home directory, a GitHub
+  secret the workflow reads) updates `DEPLOY.md`'s runbook in the same
+  session. Claude has no server access, so it drafts the steps and Heikki runs
+  them. Keep a copy of `DEPLOY.md` off this Mac.
 
 ## Commit conventions
 
-Commit messages in this repo explain the *why*, not just the *what* -
-especially for bug fixes: what the real symptom was, what the root cause
-turned out to be (often confirmed against the live API), and why the fix
-addresses that root cause rather than just the symptom. Look at recent
-`git log` output here for the tone/length to match before writing one from
-scratch.
+Messages explain the *why*. For a bug fix, give the real symptom, the root
+cause (often confirmed against the live API) and why the fix addresses that
+cause rather than the symptom. Match the tone and length of recent `git log`.
 
 ## Keeping this file current
 
-When a new standing rule gets established (a correction meant to
-generalize beyond the one task it came up in) or the architecture changes
-in a way that makes a section above stale, propose adding it here - don't
-wait to be asked to consider it. But never edit this file without explicit
-confirmation first, same as any other commit in this repo. Don't use it as
-a changelog - individual bug fixes and features belong in commit messages
-and `git log`, not here.
+When a standing rule is established (a correction meant to apply beyond its
+task) or the architecture changes so a section here goes stale, propose the
+update without waiting to be asked. Never edit this file without explicit
+confirmation. It is not a changelog.
 
-Refer to modules and behaviours here, not to issue numbers that will close:
-a number goes stale the day its issue does (a sentence naming two open
-issues once outlived one of them). An issue number is fine only where it
-explains a why that stays true.
+Refer to modules and behaviours, not to issue numbers that will close. A
+number goes stale the day its issue closes. An issue number is fine only
+where it explains a why that stays true.
