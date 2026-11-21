@@ -11,6 +11,7 @@ if TOOLS_DIR not in sys.path:
 
 import goal_probe  # noqa: E402
 import liiga_sampler  # noqa: E402
+import pre_push  # noqa: E402
 import probe_common  # noqa: E402
 import start_extras  # noqa: E402
 
@@ -598,3 +599,65 @@ class TestStartExtras:
                             lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 1})())
         assert start_extras.already_running("goal_probe.py") is False
         assert calls == [["pgrep", "-f", "tools/goal_probe.py"]]
+
+
+class TestPrePush:
+    UTC = pre_push.UTC
+
+    def at(self, hour, minute=0):
+        return pre_push.datetime.datetime(2026, 11, 21, hour, minute, tzinfo=self.UTC)
+
+    def test_the_bot_runs_the_commit_a_no_restart_deploy_names(self):
+        log = ("Deploy\tDeploy over SSH\techo \"restart: changed since ...\"\n"
+               "Deploy\tDeploy over SSH\t2026-11-21T21:52:16.6793966Z no restart needed: nothing the bot runs "
+               "changed since it started from 6b946bd28f90b9969f8d5e5882ed7bb9df708d0e\n")
+        assert pre_push.started_from(log, "3aed7d4") == "6b946bd28f90b9969f8d5e5882ed7bb9df708d0e"
+
+    def test_after_a_restart_the_bot_runs_the_deployed_commit(self):
+        log = "Deploy\tDeploy over SSH\t2026-11-19T10:00:01.1Z restart: changed since the running bot started: src/x.py\n"
+        assert pre_push.started_from(log, "abc1234") == "abc1234"
+
+    def test_the_scripts_own_source_lines_are_not_a_decision(self):
+        log = ('Deploy\tDeploy over SSH\techo "restart: the commit the running bot was started from is not known"\n'
+               "Deploy\tDeploy over SSH\tsudo -n systemctl restart \"***\"\n")
+        assert pre_push.started_from(log, "abc1234") is None
+
+    @pytest.mark.parametrize("start, expected", [
+        ((20, 30), "live"),   # started 1 h 43 min ago, within the NHL's 4 h
+        ((22, 13), "live"),   # starting this minute
+        ((23, 0), "soon"),    # within SOON_HOURS
+        ((23, 30), "later"),
+        ((18, 0), "over"),    # 4 h 13 min ago, past the NHL's 4 h
+    ])
+    def test_game_status(self, start, expected):
+        assert pre_push.game_status(self.at(22, 13), self.at(*start), 4) == expected
+
+    def test_added_lines_carry_their_file_and_new_line_number(self):
+        diff = ("diff --git a/CLAUDE.md b/CLAUDE.md\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n"
+                "@@ -10,2 +10,3 @@\n-old\n+new one\n+new two\n"
+                "diff --git a/gone.py b/gone.py\n--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n")
+        assert pre_push.added_lines(diff) == [("CLAUDE.md", 10, "new one"), ("CLAUDE.md", 11, "new two")]
+
+    def test_a_pure_move_has_no_differences(self):
+        diff = ("--- a/a.py\n+++ b/a.py\n@@ -1,2 +0,0 @@\n-def f():\n-    return 1\n"
+                "--- /dev/null\n+++ b/b.py\n@@ -0,0 +1,3 @@\n+def f():\n+\n+    return 1\n")
+        assert pre_push.move_differences(diff) == ([], [])
+
+    def test_an_edited_line_in_a_move_shows_on_both_sides(self):
+        diff = "--- a/a.py\n+++ b/b.py\n@@ -1 +1 @@\n-    return 1\n+    return 2\n"
+        assert pre_push.move_differences(diff) == (["    return 1"], ["    return 2"])
+
+    def test_server_values_split_the_login_from_the_host_and_skip_placeholders(self):
+        conf = ('# comment\nSERVER="someone@203.0.113.7"\nSERVICE="botunit"\nBOT_DIR="<the checkout>"\n')
+        assert pre_push.server_values(conf) == {"login": "someone", "host": "203.0.113.7", "service": "botunit"}
+
+    def test_server_hits_name_what_matched_but_not_the_value(self):
+        lines = [("a.md", 3, "restart botunit by hand"), ("b.md", 9, "seen from 198.51.100.4"),
+                 ("c.py", 1, "version 3.14.0 is fine")]
+        assert pre_push.server_hits(lines, {"service": "botunit"}) == [
+            ("a.md", 3, "service"), ("b.md", 9, "an IP address")]
+
+    def test_issue_numbers_are_only_reported_in_claude_md(self):
+        lines = [("CLAUDE.md", 5, "posted by the second poll (#70), so"), ("CLAUDE.md", 6, "colour &#39; or C#9"),
+                 ("README.md", 2, "see #70")]
+        assert pre_push.issue_refs(lines) == [(5, "posted by the second poll (#70), so")]
