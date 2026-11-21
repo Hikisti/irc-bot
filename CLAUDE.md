@@ -46,8 +46,9 @@ Heikki for it) holds the server access details and runbook.
   `_poll_once`, `_fetch_today_items` and `_build_initial_state`. Each sport
   command is built from mixins, one module per job:
   - NHL: `nhl_goal_ledger.py` (what has been announced, `NO GOAL:`
-    retractions with a reason) and `nhl_final.py` (the FINAL line, attendance,
-    the end-of-slate list). A game's FINAL is posted by the *second* poll in
+    retractions with a reason), `nhl_goal_format.py` (the GOAL line, its
+    PP/SH/EN tags, the shootout tally, names) and `nhl_final.py` (the FINAL
+    line, attendance, the end-of-slate list). A game's FINAL is posted by the *second* poll in
     which it is final (#70), so a test that ends a game must poll twice or
     seed `"final_seen": ()` in the previous state.
   - Liiga: `liiga_goal_ledger.py`. Every announced goal is kept under each
