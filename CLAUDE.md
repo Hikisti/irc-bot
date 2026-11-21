@@ -201,7 +201,8 @@ tracker, with real users present. A push of only docs, tests, tools,
 `.github/needs-restart.sh` decides, and the deploy log says which happened.
 Only add a path to its safe list if the bot never reads it.
 
-- Confirm with Heikki before every push. "Implement this" is not "push this."
+- Before any push, run `/pre-push`; its verdict is what Heikki confirms.
+  "Implement this" is not "push this."
 - Don't push a live-tracker change (`!liiga`/`!nhl`/`!superpesis`/
   `!ykkospesis`) while a game is being tracked. Ask, or wait until the day's
   games are over.
