@@ -652,10 +652,15 @@ class TestPrePush:
         assert pre_push.server_values(conf) == {"login": "someone", "host": "203.0.113.7", "service": "botunit"}
 
     def test_server_hits_name_what_matched_but_not_the_value(self):
-        lines = [("a.md", 3, "restart botunit by hand"), ("b.md", 9, "seen from 198.51.100.4"),
+        address = ".".join(("10", "1", "2", "3"))  # built here so this file holds no address the scan flags
+        lines = [("a.md", 3, "restart botunit by hand"), ("b.md", 9, f"seen from {address}"),
                  ("c.py", 1, "version 3.14.0 is fine")]
         assert pre_push.server_hits(lines, {"service": "botunit"}) == [
             ("a.md", 3, "service"), ("b.md", 9, "an IP address")]
+
+    def test_documentation_addresses_are_not_flagged(self):
+        lines = [("t.py", n, f"host {ip}") for n, ip in enumerate(("192.0.2.1", "198.51.100.4", "203.0.113.7"))]
+        assert pre_push.server_hits(lines, {}) == []
 
     def test_issue_numbers_are_only_reported_in_claude_md(self):
         lines = [("CLAUDE.md", 5, "posted by the second poll (#70), so"), ("CLAUDE.md", 6, "colour &#39; or C#9"),

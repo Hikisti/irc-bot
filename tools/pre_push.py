@@ -39,6 +39,8 @@ TRACKERS = (
 
 DECISION_RE = re.compile(r"\dZ (no restart needed: .*started from ([0-9a-f]{7,40})|restart: .*)$")
 IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+# The ranges reserved for documentation (RFC 5737): what tests and examples use instead of a real address.
+DOCUMENTATION_NETS = ("192.0.2.", "198.51.100.", "203.0.113.")
 ISSUE_RE = re.compile(r"(?<![\w&])#\d+\b")
 MOVE_ONLY_RE = re.compile(r"move[ -]only", re.I)
 
@@ -120,7 +122,7 @@ def server_hits(lines, values):
         for name, value in values.items():
             if len(value) >= 3 and value in text:
                 hits.append((path, number, name))
-        if IPV4_RE.search(text):
+        if any(not ip.startswith(DOCUMENTATION_NETS) for ip in IPV4_RE.findall(text)):
             hits.append((path, number, "an IP address"))
     return hits
 
