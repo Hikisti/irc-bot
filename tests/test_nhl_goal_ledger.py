@@ -701,3 +701,75 @@ class TestRenumberedGoals:
         record = {("score", self.HOME, 1, 0): seeded(1)}
         lines = self._run(nhl_command, [self._pbp(first, second)] + [self._pbp(renumbered)] * 8, seeded_record=record)
         assert len(self._goals(lines)) == 1 and self._retractions(lines) == []
+
+
+class TestSecondListingAtAnotherScore:
+    """Issue #92 (2026-11-21, Detroit - Islanders): the feed listed an announced goal a second time, under a new
+    event id at the next running score (1-3 next to the real 1-2), then dropped the first entry and moved the
+    second down to 1-2. The bot announced the 1-3 copy and then retracted the goal, which stood."""
+
+    HOME, AWAY = TestRetraction.HOME, TestRetraction.AWAY
+    _pbp, _goal, _run = TestRetraction._pbp, TestRetraction._goal, TestRetraction._run
+    _retractions, _goals = TestRetraction._retractions, TestRetraction._goals
+
+    def _night(self):
+        earlier = [self._goal(181, team=self.HOME, home=1, away=0, scorer=3, period_number=1, time_in_period="08:39"),
+                   self._goal(632, team=self.AWAY, home=1, away=1, scorer=4, period_number=2, time_in_period="09:10")]
+        first = self._goal(870, home=1, away=2, scorer=1, assist1=5, assist2=6, time_in_period="03:26")
+        copy = self._goal(880, home=1, away=3, scorer=1, time_in_period="03:26")
+        moved = self._goal(880, home=1, away=2, scorer=1, assist1=5, assist2=6, time_in_period="03:26")
+        return earlier, first, copy, moved
+
+    def test_the_night_as_it_happened_gives_one_line_and_no_retraction(self, nhl_command):
+        earlier, first, copy, moved = self._night()
+        feeds = ([self._pbp(*earlier, first), self._pbp(*earlier, first, copy)] + [self._pbp(*earlier, copy)] * 3
+                 + [self._pbp(*earlier, moved)] * 8)
+        lines = self._run(nhl_command, feeds)
+        assert len(self._goals(lines)) == 3 and self._retractions(lines) == []
+        assert not any("1-3" in line for line in lines)
+
+    def test_the_copy_listed_before_the_first_entry_is_held_the_same(self, nhl_command):
+        earlier, first, copy, moved = self._night()
+        feeds = [self._pbp(*earlier, first), self._pbp(*earlier, copy, first)] + [self._pbp(*earlier, moved)] * 8
+        lines = self._run(nhl_command, feeds)
+        assert len(self._goals(lines)) == 3 and self._retractions(lines) == []
+
+    def test_a_copy_that_goes_straight_to_the_real_score_is_the_same_goal(self, nhl_command):
+        earlier, first, copy, moved = self._night()
+        feeds = [self._pbp(*earlier, first), self._pbp(*earlier, first, copy)] + [self._pbp(*earlier, moved)] * 8
+        lines = self._run(nhl_command, feeds)
+        assert len(self._goals(lines)) == 3 and self._retractions(lines) == []
+
+    def test_a_copy_a_second_off_on_the_clock_is_still_the_same_goal(self, nhl_command):
+        earlier, first, _, moved = self._night()
+        copy = self._goal(880, home=1, away=3, scorer=1, time_in_period="03:25")
+        feeds = [self._pbp(*earlier, first), self._pbp(*earlier, first, copy)] + [self._pbp(*earlier, moved)] * 8
+        lines = self._run(nhl_command, feeds)
+        assert len(self._goals(lines)) == 3 and self._retractions(lines) == []
+
+    def test_a_real_second_goal_by_the_same_player_in_the_period_is_announced(self, nhl_command):
+        earlier, first, _, _ = self._night()
+        second = self._goal(900, home=1, away=3, scorer=1, time_in_period="11:02")
+        lines = self._run(nhl_command, [self._pbp(*earlier, first), self._pbp(*earlier, first, second)])
+        assert len(self._goals(lines)) == 4 and "1-3" in self._goals(lines)[-1]
+
+    def test_a_goal_by_another_player_at_the_next_score_is_announced(self, nhl_command):
+        earlier, first, _, _ = self._night()
+        other = self._goal(890, home=1, away=3, scorer=2, time_in_period="03:26")
+        lines = self._run(nhl_command, [self._pbp(*earlier, first), self._pbp(*earlier, first, other)])
+        assert len(self._goals(lines)) == 4
+
+    def test_a_disallowed_goal_with_no_copy_is_still_retracted(self, nhl_command):
+        earlier, first, _, _ = self._night()
+        lines = self._run(nhl_command, [self._pbp(*earlier, first)] + [self._pbp(*earlier)] * 8)
+        assert len(self._retractions(lines)) == 1
+
+    def test_both_steps_are_journaled(self, nhl_command, capsys):
+        earlier, first, copy, moved = self._night()
+        self._run(nhl_command, [self._pbp(*earlier, first), self._pbp(*earlier, first, copy),
+                                self._pbp(*earlier, copy), self._pbp(*earlier, moved)])
+        out = capsys.readouterr().out
+        assert ("NHL: game 1: goal (team 20, 1-3) as event [880] has the scorer, period and clock of goal "
+                "(team 20, 1-2), which is still listed, not announcing it") in out
+        assert ("NHL: game 1: goal (team 20, 1-2) is now (team 20, 1-3) as event [880], same scorer, period and "
+                "clock, not announced again") in out

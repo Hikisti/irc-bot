@@ -24,6 +24,8 @@ class NHLGoalLedgerMixin:
     # A retraction that would go out without a reason waits up to this many more polls for one: a challenge
     # stoppage has reached the feed after the goal left it (2 of 9 retractions to 2026-11-11, issue #64).
     REASON_WAIT_POLLS = 3
+    # A goal re-listed by the feed has come back with its clock a second off (#60).
+    SAME_GOAL_CLOCK_SECONDS = 2
 
     # How far before/after a removed goal's clock a challenge stoppage may
     # sit and still be taken as its explanation (seen: from 31 s before the
@@ -165,6 +167,21 @@ class NHLGoalLedgerMixin:
                 print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} also listed as event {ids} while "
                       f"event {before['ids']} is listed under another score, not announcing it yet")
                 continue
+            twin = None if rec is not None else self._announced_twin(record, key, plays[0])
+            if twin is not None:
+                # The feed listed an announced goal again under a new id at another running score (2026-11-21: a
+                # 1-3 copy next to the real 1-2, which then left while the copy moved down to 1-2, #92). While the
+                # first entry is listed the copy is held; once it is gone the copy is that goal under a new key.
+                if any(i in listed_ids for i in record[twin]["ids"]):
+                    print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} as event {ids} has the scorer, "
+                          f"period and clock of goal {self._key_text(twin)}, which is still listed, not announcing it")
+                    continue
+                print(f"NHL: game {pbp.get('id')}: goal {self._key_text(twin)} is now {self._key_text(key)} as event "
+                      f"{ids}, same scorer, period and clock, not announced again")
+                record[key] = record.pop(twin)
+                record[key]["ids"] += [i for i in ids if i not in record[key]["ids"]]
+                record[key]["missing"] = 0
+                continue
             posted = rec["posted"] if rec is not None else None
             if posted is not None and ids and self._same_goal_rekeyed(plays[0], posted):
                 print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} is now event {ids}, "
@@ -210,6 +227,26 @@ class NHLGoalLedgerMixin:
         scorer = (goal.get("details") or {}).get("scoringPlayerId")
         period = (goal.get("periodDescriptor") or {}).get("number")
         return scorer is not None and scorer == posted["scorer"] and period == posted["period"]
+
+    def _announced_twin(self, record, key, goal):
+        """The key of a posted goal of the same team at another running score with this goal's scorer, period and
+        clock (within SAME_GOAL_CLOCK_SECONDS), or None: the same goal listed again, since one player cannot score
+        twice within seconds (a faceoff follows every goal)."""
+        details = goal.get("details") or {}
+        scorer = details.get("scoringPlayerId")
+        period = (goal.get("periodDescriptor") or {}).get("number")
+        clock = self._clock_seconds(goal.get("timeInPeriod"))
+        if scorer is None or clock is None or key[0] != "score":
+            return None
+        for other, rec in record.items():
+            posted = rec["posted"]
+            if other == key or other[0] != "score" or other[1] != key[1] or rec["retracted"] or posted is None:
+                continue
+            posted_clock = self._clock_seconds(posted.get("clock"))
+            if (posted["scorer"] == scorer and posted["period"] == period and posted_clock is not None
+                    and abs(posted_clock - clock) <= self.SAME_GOAL_CLOCK_SECONDS):
+                return other
+        return None
 
     def _key_text(self, key) -> str:
         if key[0] == "score":

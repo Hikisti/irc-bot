@@ -507,6 +507,26 @@ class TestLevelFinal:
         assert "held back while the announced one was still listed (#68): 1 time(s)" in text
         assert "game 2026020205: goal (team 68, 3-4)" in text
 
+    def test_the_bots_own_92_lines_round_trip_and_are_reported(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.nhl_test_helpers import goal_play, make_pbp, roster_spot
+        nhl = NHLCommand()
+        first = goal_play(event_id=870, event_owner_team_id=20, scoring_player_id=1, home_score=1, away_score=2,
+                          time_in_period="03:26", period_number=3)
+        copy = goal_play(event_id=880, event_owner_team_id=20, scoring_player_id=1, home_score=1, away_score=3,
+                         time_in_period="03:26", period_number=3)
+        record = {}
+        for plays in ([first], [first, copy], [copy]):
+            pbp = make_pbp(game_id=7, home_id=10, away_id=20, plays=plays, roster=[roster_spot(1, "Simon", "Holmstrom")])
+            _, _, record = nhl._resolve_goals(pbp, record)
+        lines = [line("02:00:33", text) for text in capsys.readouterr().out.splitlines()]
+        kinds = [e["kind"] for e in (jr.parse_line(text, YEAR) for text in lines) if e]
+        assert kinds == ["twin_held", "twin_moved"]
+        text = jr.render(report(*lines))
+        assert "an announced goal listed again at another running score (#92): held 1 time(s), taken as that goal 1 time(s)" in text
+        assert "game 7: goal (team 20, 1-3) held, same as (team 20, 1-2)" in text
+        assert "game 7: goal (team 20, 1-2) is now (team 20, 1-3)" in text
+
     def test_the_overtime_mark_line_is_parsed_counted_and_listed(self):
         e = jr.parse_line(line("02:48:34", "NHL: game 2026020161: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark"), YEAR)
         assert (e["kind"], e["gid"], e["plays"]) == ("mark_from_plays", "2026020161", "3-2 OT")

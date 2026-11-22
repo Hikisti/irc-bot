@@ -61,6 +61,10 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                                r"no reason in the feed yet, waiting up to (?P<n>\d+) more poll\(s\)$")),
     ("held_conflict", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) also listed as event .*, "
                                  r"not announcing it yet$")),
+    ("twin_held", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) as event .* has the scorer, period and "
+                             r"clock of goal \((?P<twin>.*?)\), which is still listed, not announcing it$")),
+    ("twin_moved", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<old>.*?)\) is now \((?P<new>.*?)\) as event .*, "
+                              r"same scorer, period and clock, not announced again$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
                          r"not counting this poll as a miss$")),
     ("found", re.compile(r"^NHL: game (?P<gid>\d+): attendance (?P<att>\d+) found (?P<s>\d+) s after the FINAL line$")),
@@ -374,6 +378,13 @@ def render(report):
                    f"listed (#68): {len(ev['held_conflict'])} time(s)")
         for e in ev["held_conflict"]:
             out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']})")
+    if ev["twin_held"] or ev["twin_moved"]:
+        out.append(f"  an announced goal listed again at another running score (#92): held {len(ev['twin_held'])} "
+                   f"time(s), taken as that goal {len(ev['twin_moved'])} time(s)")
+        for e in ev["twin_held"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']}) held, same as ({e['twin']})")
+        for e in ev["twin_moved"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['old']}) is now ({e['new']})")
     if ev["mark_from_plays"]:
         out.append(f"  FINAL given its overtime mark from the plays (header and endpoint had none): "
                    f"{len(ev['mark_from_plays'])}")
