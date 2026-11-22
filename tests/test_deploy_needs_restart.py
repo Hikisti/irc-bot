@@ -54,7 +54,7 @@ def decide(cwd, started_from):
 
 @pytest.mark.parametrize("paths", [
     ("README.md",), ("CLAUDE.md",), ("tests/test_x.py",), ("tools/goal_probe.py",),
-    (".github/workflows/ci-cd.yml",), ("ruff.toml", "pytest.ini", "requirements-dev.txt", ".gitignore"),
+    (".github/workflows/ci-cd.yml",), (".claude/skills/pre-push/SKILL.md",), ("ruff.toml", "pytest.ini", "requirements-dev.txt", ".gitignore"),
 ])
 def test_a_push_of_files_the_bot_never_runs_does_not_restart(repo, paths):
     cwd, commit, started = repo

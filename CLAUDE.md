@@ -197,7 +197,8 @@ server. If the push changes anything the bot runs (`src/`, `channels.toml`,
 `requirements.txt`, or any file not known to be safe), **the live bot
 restarts**: it leaves and rejoins every channel and stops every running
 tracker, with real users present. A push of only docs, tests, tools,
-`.github/` or the lint and test settings is pulled without a restart.
+`.github/`, `.claude/` or the lint and test settings is pulled without a
+restart.
 `.github/needs-restart.sh` decides, and the deploy log says which happened.
 Only add a path to its safe list if the bot never reads it.
 

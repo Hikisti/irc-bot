@@ -24,7 +24,7 @@ fi
 
 runtime=$(printf '%s\n' "$changed" | grep -v '^$' \
     | grep -Ev '^(README\.md|CLAUDE\.md|\.gitignore|ruff\.toml|pytest\.ini|requirements-dev\.txt)$' \
-    | grep -Ev '^(tests|tools|\.github)/')
+    | grep -Ev '^(tests|tools|\.github|\.claude)/')
 
 if [ -n "$runtime" ]; then
     echo "restart: changed since the running bot started: $(printf '%s' "$runtime" | tr '\n' ' ')"
