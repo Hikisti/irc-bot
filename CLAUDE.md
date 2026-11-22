@@ -224,7 +224,12 @@ Only add a path to its safe list if the bot never reads it.
   timer, a package, a sudoers rule, a script in a home directory, a GitHub
   secret the workflow reads) updates `DEPLOY.md`'s runbook in the same
   session. Claude has no server access, so it drafts the steps and Heikki runs
-  them. Keep a copy of `DEPLOY.md` off this Mac.
+  them.
+- `DEPLOY.md` in the checkout is a symlink to the real file in iCloud Drive,
+  so the copy off this Mac stays current. The edit tools refuse to write
+  through a symlink, so edit the target path. Afterwards `ls -l DEPLOY.md`
+  must still show `->`; a plain file there means iCloud no longer gets the
+  changes.
 
 ## Commit conventions
 
