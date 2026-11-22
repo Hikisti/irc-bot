@@ -666,3 +666,25 @@ class TestPrePush:
         lines = [("CLAUDE.md", 5, "posted by the second poll (#70), so"), ("CLAUDE.md", 6, "colour &#39; or C#9"),
                  ("README.md", 2, "see #70")]
         assert pre_push.issue_refs(lines) == [(5, "posted by the second poll (#70), so")]
+
+    def test_open_pull_requests_are_listed_oldest_first_with_their_age(self):
+        prs = [{"number": 93, "title": "Bump requests", "author": {"login": "app/dependabot"},
+                "createdAt": "2026-11-21T09:00:00Z"},
+               {"number": 91, "title": "Bump ruff from 0.17.4 to 0.17.5", "author": {"login": "app/dependabot"},
+                "createdAt": "2026-11-20T08:00:00Z"}]
+        assert pre_push.pr_lines(prs, self.at(22, 13)) == [
+            "  #91 Bump ruff from 0.17.4 to 0.17.5 (app/dependabot, 1 d old)",
+            "  #93 Bump requests (app/dependabot, 0 d old)"]
+
+    def test_a_pull_request_with_an_odd_shape_is_still_listed(self):
+        assert pre_push.pr_lines([{"number": 5, "title": "x"}], self.at(22, 13)) == ["  #5 x (?, age unknown)"]
+
+    def test_a_failing_gh_means_the_list_is_unknown_not_empty(self, monkeypatch):
+        failed = type("R", (), {"returncode": 1, "stdout": ""})()
+        monkeypatch.setattr(pre_push.subprocess, "run", lambda *a, **kw: failed)
+        assert pre_push.open_prs() is None
+
+    def test_gh_output_is_read_as_json(self, monkeypatch):
+        ok = type("R", (), {"returncode": 0, "stdout": '[{"number": 91, "title": "t"}]'})()
+        monkeypatch.setattr(pre_push.subprocess, "run", lambda *a, **kw: ok)
+        assert pre_push.open_prs() == [{"number": 91, "title": "t"}]

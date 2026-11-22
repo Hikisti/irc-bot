@@ -11,6 +11,7 @@ address) or an issue number in CLAUDE.md. Exit 0 = nothing to look at, 1 = somet
 """
 import collections
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -133,6 +134,30 @@ def issue_refs(lines):
             if path == "CLAUDE.md" and ISSUE_RE.search(text)]
 
 
+def pr_lines(prs, now):
+    """One line per open pull request: number, title, author and age in days, oldest first."""
+    lines = []
+    for pr in sorted(prs, key=lambda p: p.get("createdAt") or ""):
+        try:
+            opened = datetime.datetime.fromisoformat(pr["createdAt"].replace("Z", "+00:00"))
+            age = f"{(now - opened).days} d old"
+        except (KeyError, TypeError, ValueError, AttributeError):
+            age = "age unknown"
+        author = (pr.get("author") or {}).get("login") or "?"
+        lines.append(f"  #{pr.get('number')} {pr.get('title')} ({author}, {age})")
+    return lines
+
+
+def open_prs():
+    """The open pull requests as gh lists them, or None when gh could not list them."""
+    try:
+        result = subprocess.run(["gh", "pr", "list", "--state", "open", "--json", "number,title,author,createdAt"],
+                                cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
 def git(*args):
     return subprocess.run(["git", *args], cwd=REPO_DIR, capture_output=True, text=True).stdout
 
@@ -186,6 +211,14 @@ def main(now=None):
     now = now or datetime.datetime.now(UTC)
     attention = []
     print(f"pre-push: {now:%Y-%m-%d %H:%M} UTC")
+
+    prs = open_prs()
+    if prs is None:
+        print("\nOpen pull requests: could not be listed (gh failed); check with `gh pr list`")
+    else:
+        print(f"\nOpen pull requests: {len(prs) or 'none'}{' (merging one is a push too)' if prs else ''}")
+        for line in pr_lines(prs, now):
+            print(line)
 
     git("fetch", "-q", "origin", "main")
     commits = git("log", "--reverse", "--format=%h %s", "origin/main..HEAD").strip().splitlines()

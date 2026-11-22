@@ -119,7 +119,8 @@ holds three lines: `SERVER="<login>@<host>"`, `SERVICE="<the bot's unit>"` and
 ### `pre_push.py` - the checks before a push to main
 
 Run on the Mac by the `/pre-push` skill (`.claude/skills/pre-push/`) before every push, since a push
-deploys and may restart the bot. It changes nothing: it lists the outgoing commits, asks
+deploys and may restart the bot. It changes nothing: it lists the open pull requests (merging one is
+a push too) and the outgoing commits, asks
 `.github/needs-restart.sh` whether the deploy would restart the bot (against the commit the last
 successful deploy's log names, read with `gh`), lists today's games of every tracker as live / soon /
 later / over (each tracker's own `_fetch_today_items`), checks that a commit whose subject says "move

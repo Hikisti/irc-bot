@@ -14,8 +14,9 @@ confirms it in his reply to that verdict - an earlier "push it" does not cover a
 
     .venv/bin/python tools/pre_push.py
 
-It fetches `origin/main` and only reads: the outgoing commits, the restart decision (the repo's own
-`.github/needs-restart.sh`, against the commit the last successful deploy's log says the bot runs),
+It fetches `origin/main` and only reads: the open pull requests (`gh pr list`), the outgoing
+commits, the restart decision (the repo's own `.github/needs-restart.sh`, against the commit the
+last successful deploy's log says the bot runs),
 today's games for every tracker (each tracker's own `_fetch_today_items`), a move check for every
 commit whose subject says "move only", and the added lines scanned for server details (values from
 the gitignored `tools/fetch_night.conf`, plus IP addresses) and for issue numbers in CLAUDE.md.
@@ -29,7 +30,9 @@ only after the push has been made):
 
 ## 2. Read the results
 
-- **Nothing to push** - say so and stop.
+- **Open pull requests** - always mention each one, even when there is nothing to push (CLAUDE.md:
+  merging one is a push). "could not be listed" means check `gh pr list` by hand.
+- **Nothing to push** - say so (and any open pull requests) and stop.
 - **Restart: no** - games do not matter: the server only pulls the files. Still a production
   action, so still ask.
 - **Restart: YES** with a game `live` or `soon` - **no-go**. Say when the slate is over (the last
@@ -54,6 +57,7 @@ only after the push has been made):
 
 A few lines, then wait:
 
+    Open pull requests: #91 Bump ruff (Dependabot, 2 d old).
     Push: 2 commits (137a1cf split of the NHL GOAL line, 6db924a CLAUDE.md).
     Restart: YES (src/nhl_command.py, src/nhl_goal_format.py).
     Games: NHL live now (20:30 UTC), 2 at 23:00, last at 03:00 -> clear from about 07:00 UTC.
