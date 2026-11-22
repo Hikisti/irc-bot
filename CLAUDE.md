@@ -189,6 +189,14 @@ chat.
   in the tracking issue: tick it on close and drop it from any waiting list.
 - Before starting on issue N, run `git log --grep="#N"`. A stale description
   once made finished work look undone.
+- Notes worked out in a session about an issue (an analysis, research, a
+  plan, measured data, a decision's reasons) go into that issue in the same
+  session, as a comment or in its description, without waiting to be asked.
+  Say in the reply what was posted. Notes left only in the chat are lost when
+  the session ends.
+- At the start of a session, and before any push, run `gh pr list` and
+  mention every open pull request (most are Dependabot bumps). Merging one is
+  a push: it deploys and can restart the bot.
 
 ## Deployment: `git push` to `main` is a production action
 
