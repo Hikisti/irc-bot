@@ -1,0 +1,74 @@
+name: IRC reach test
+
+# A one-off test for the bot watcher planned in #55: does the IRC network accept a connection from GitHub's
+# cloud addresses, and does ISON see the bot? If it does not, the watcher has to be designed differently. The
+# test connects under a throwaway nick, registers, asks ISON for the bot's nick, prints what it saw and quits.
+# It sends no message to anyone. Started by hand only; to be replaced by the watcher itself.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  reach:
+    name: Reach IRC and ask ISON
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Connect, register, ISON
+        run: |
+          python3 - <<'EOF'
+          import random, socket, sys, time
+
+          SERVER, PORT, BOT = "irc.quakenet.org", 6667, "KukistiBot"
+          nick = f"kbwatch{random.randint(10000, 99999)}"
+          deadline = time.monotonic() + 120
+
+          def send(line):
+              print(f">>> {line}")
+              sock.sendall((line + "\r\n").encode())
+
+          try:
+              sock = socket.create_connection((SERVER, PORT), timeout=30)
+          except OSError as e:
+              sys.exit(f"RESULT: could not connect to {SERVER}:{PORT}: {e}")
+          print(f"connected to {SERVER}:{PORT} as {nick}")
+          send(f"NICK {nick}")
+          send(f"USER {nick} 0 * :{nick}")
+
+          buf, registered, ison = b"", False, None
+          while time.monotonic() < deadline and ison is None:
+              try:
+                  data = sock.recv(4096)
+              except socket.timeout:
+                  continue
+              if not data:
+                  break
+              buf += data
+              *lines, buf = buf.split(b"\r\n")
+              for raw in lines:
+                  line = raw.decode("utf-8", "replace")
+                  parts = line.split()
+                  if parts and parts[0] == "PING":
+                      send("PONG " + line[5:])
+                      continue
+                  cmd = parts[1] if len(parts) > 1 else ""
+                  if cmd not in ("372", "375"):  # the MOTD body says nothing about reachability
+                      print(f"<<< {line}")
+                  if cmd == "001":
+                      registered = True
+                      send(f"ISON {BOT}")
+                  elif cmd == "303":
+                      ison = line.split(":", 2)[2].split() if line.count(":") >= 2 else []
+                  elif parts and parts[0] == "ERROR":
+                      sys.exit(f"RESULT: the server closed the connection: {line}")
+
+          if registered:
+              send("QUIT :reach test done")
+          sock.close()
+          if not registered:
+              sys.exit("RESULT: connected but never registered (no 001 before the deadline)")
+          if ison is None:
+              sys.exit("RESULT: registered, but no ISON reply before the deadline")
+          print(f"RESULT: reachable; {BOT} is {'ONLINE' if BOT.lower() in (n.lower() for n in ison) else 'NOT online'}")
+          EOF
