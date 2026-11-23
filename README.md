@@ -159,6 +159,13 @@ get more decimals as the price gets smaller (four under 1, six under a cent) and
 by size. The range comes in the same response, so it costs no extra request, and is left out when Yahoo has no
 usable low and high for the symbol. It works for stocks, ETFs, indexes and crypto pairs (`!stock btc-usd`).
 
+`!crypto <coin>` takes a CoinGecko coin id (`bitcoin`, `shiba-inu`) and answers with the price in USD, the
+24-hour change and volume, and the 52-week range, e.g. `Bitcoin USD: 61540.00 USD, today +954.45 (+1.55%).
+Volume 37.52B. 52W: 58566.09 - 96898.76.` CoinGecko has no 52-week field, so the range is the lowest and highest
+of a year of daily prices, from a second request: it can differ a little from a range of intraday highs and lows
+(`!stock btc-usd`). That request has a 10-second budget, and when it fails or has no usable prices the range is
+left out and the rest of the reply is unchanged.
+
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
 unless both are a single word, in which case a space works too (`!distance Kokkola Vimpeli`) —
