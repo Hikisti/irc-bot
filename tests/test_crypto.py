@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from crypto import HISTORY_TIMEOUT_SECONDS, PRICE_RETRIES, PRICE_TIMEOUT_SECONDS, CryptoCommand, year_range
+from crypto import HISTORY_TIMEOUT_SECONDS, PRICE_RETRIES, PRICE_TIMEOUT_SECONDS, CryptoCommand, price_decimals, year_range
 from tests.conftest import make_json_response
 
 YEAR = {"prices": [[1, 41000.5], [2, 69000.25], [3, 50000.0]], "market_caps": [], "total_volumes": []}
@@ -136,9 +136,29 @@ class TestYearRange:
     def test_unusable_points_are_skipped(self):
         assert year_range({"prices": [[1, 3.5], [2, None], [3, 1], [4, float("nan")], (5, 7.25)]}) == (1, 7.25)
 
-    def test_a_tiny_price_shows_like_the_price_line(self, crypto_command):
-        crypto_command.history.return_value = {"prices": [[1, 0.0000035], [2, 0.0000092]]}
-        price = {"shiba-inu": {"usd": 0.0000051, "usd_24h_change": 1.0, "usd_24h_vol": 0}}
+
+
+class TestDecimals:
+    @pytest.mark.parametrize("price, decimals", [
+        (61316.0, 2), (1.0, 2), (0.9999, 4), (0.5, 4), (0.1, 4), (0.057147, 5), (0.01, 5), (0.0099, 6),
+        (0.00000367, 9), (1e-11, 12), (1e-300, 12), (0, 2), (float("inf"), 2), (float("nan"), 2),
+    ])
+    def test_price_decimals(self, price, decimals):
+        assert price_decimals(price) == decimals
+
+    def test_a_coin_under_a_cent_shows_four_significant_digits(self, crypto_command):
+        crypto_command.history.return_value = {"prices": [[1, 0.0000035805887], [2, 0.0000092500557]]}
+        price = {"shiba-inu": {"usd": 0.00000367, "usd_24h_change": 2.1928684932455984, "usd_24h_vol": 0}}
         with patch.object(crypto_command.cg, "get_price", return_value=price):
             result = crypto_command.execute("shiba-inu")
-        assert "0.00 USD" in result and result.endswith("52W: 0.00 - 0.00.")
+        assert "0.000003670 USD, today " in result
+        assert "+0.000000080 (+2.19%)" in result
+        assert result.endswith("52W: 0.000003581 - 0.000009250.")
+
+    def test_a_coin_under_a_dollar(self, crypto_command):
+        crypto_command.history.return_value = {"prices": [[1, 0.054290546], [2, 0.154776947]]}
+        price = {"dogecoin": {"usd": 0.057147, "usd_24h_change": 3.638356151658611, "usd_24h_vol": 0}}
+        with patch.object(crypto_command.cg, "get_price", return_value=price):
+            result = crypto_command.execute("dogecoin")
+        assert "0.05715 USD, today " in result and "+0.00208 (+3.64%)" in result
+        assert result.endswith("52W: 0.05429 - 0.15478.")

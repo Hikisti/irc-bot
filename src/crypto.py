@@ -16,6 +16,16 @@ HISTORY_TIMEOUT_SECONDS = 10
 # The history request puts the coin into the URL path as it stands (the price request sends it as a query
 # parameter), so only a name in CoinGecko's id format goes there; anything else gets no range.
 COIN_ID = re.compile(r"[a-z0-9-]+")
+MAX_DECIMALS = 12
+
+
+def price_decimals(price):
+    """Two decimals from 1 up; below 1, enough for four significant digits, since many coins trade at a
+    fraction of a cent (0.00000367 would show as 0.00). Capped, so a broken price cannot make a huge line."""
+    price = abs(price)
+    if price >= 1 or price == 0 or not math.isfinite(price):
+        return 2
+    return min(3 - math.floor(math.log10(price)), MAX_DECIMALS)
 
 
 def year_range(chart):
@@ -46,8 +56,8 @@ class CryptoCommand(BaseCommand):
         self.cg = _client(PRICE_TIMEOUT_SECONDS, PRICE_RETRIES)
         self.history_cg = _client(HISTORY_TIMEOUT_SECONDS, 0)
 
-    def _year_range_text(self, crypto_name, currency):
-        """' 52W: low - high.' in the price's format, or '' when the history cannot be had."""
+    def _year_range_text(self, crypto_name, currency, decimals):
+        """' 52W: low - high.' with the price's decimals, or '' when the history cannot be had."""
         if not COIN_ID.fullmatch(crypto_name):
             return ""
         try:
@@ -57,7 +67,7 @@ class CryptoCommand(BaseCommand):
             print(f"!crypto: no 52-week range for {crypto_name}: {type(e).__name__}")
             return ""
         found = year_range(chart)
-        return f" 52W: {found[0]:.2f} - {found[1]:.2f}." if found else ""
+        return f" 52W: {found[0]:.{decimals}f} - {found[1]:.{decimals}f}." if found else ""
 
     def execute(self, args):
         """Handles user request for cryptocurrency price."""
@@ -93,11 +103,12 @@ class CryptoCommand(BaseCommand):
 
             # Choose IRC color formatting
             color = signed_change_color(change_currency)
+            decimals = price_decimals(price)
 
             return (
-                f"{BOLD}{crypto_name.capitalize()} {currency.upper()}:{BOLD} {price:.2f} {currency.upper()}, "
-                f"today {color}{change_currency:+.2f} ({change_percent:+.2f}%){RESET}. Volume {volume:.2f}B."
-                f"{self._year_range_text(crypto_name, currency)}"
+                f"{BOLD}{crypto_name.capitalize()} {currency.upper()}:{BOLD} {price:.{decimals}f} {currency.upper()}, "
+                f"today {color}{change_currency:+.{decimals}f} ({change_percent:+.2f}%){RESET}. Volume {volume:.2f}B."
+                f"{self._year_range_text(crypto_name, currency, decimals)}"
             )
 
         except Exception as e:

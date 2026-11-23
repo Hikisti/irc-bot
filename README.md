@@ -164,7 +164,9 @@ usable low and high for the symbol. It works for stocks, ETFs, indexes and crypt
 Volume 37.52B. 52W: 58566.09 - 96898.76.` CoinGecko has no 52-week field, so the range is the lowest and highest
 of a year of daily prices, from a second request: it can differ a little from a range of intraday highs and lows
 (`!stock btc-usd`). That request has a 10-second budget, and when it fails or has no usable prices the range is
-left out and the rest of the reply is unchanged.
+left out and the rest of the reply is unchanged. A coin from 1 USD up gets two decimals; a cheaper one gets enough
+for four significant digits, and its change and range get the same (`Shiba-inu USD: 0.000003670 USD, today
++0.000000080 (+2.19%). Volume 0.05B. 52W: 0.000003581 - 0.000009250.`).
 
 `!distance` looks up driving distance and drive time between two cities anywhere in the world,
 via OpenRouteService. City names need a comma between them (`!distance New York, Los Angeles`)
