@@ -79,7 +79,8 @@ Heikki for it) holds the server access details and runbook.
   Eastern (`EASTERN_TZ`, confirmed live), while every displayed time is
   `HELSINKI_TZ`.
 - **`tools/`** holds read-only probes and reports, not the bot. Nothing in
-  `src/` imports them and they never talk to IRC (see `tools/README.md`). They
+  `src/` imports them, and only `bot_watch.py` talks to IRC: to the network,
+  never to a channel (see `tools/README.md`). They
   reuse tracker internals, so renaming one of the following means updating
   `tools/`: `_fetch_scores`, `_fetch_play_by_play`, `_current_season`,
   `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY`, the trackers'
