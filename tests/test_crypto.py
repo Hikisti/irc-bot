@@ -126,6 +126,14 @@ class TestYearRange:
         assert crypto_command.cg.session.get_adapter("https://").max_retries.total == PRICE_RETRIES == 1
         assert crypto_command.history_cg.session.get_adapter("https://").max_retries.total == 0
 
+    @pytest.mark.parametrize("client", ["cg", "history_cg"])
+    def test_a_rate_limit_is_never_slept_through(self, crypto_command, client):
+        # CoinGecko's 429 carries a Retry-After of about a minute; obeying it would leave the bot deaf.
+        retry = getattr(crypto_command, client).session.get_adapter("https://").max_retries
+        assert not retry.respect_retry_after_header
+        assert not retry.is_retry("GET", 429, has_retry_after=True)
+        assert retry.is_retry("GET", 502)  # a passing gateway error stays retryable (the price has one retry left)
+
     @pytest.mark.parametrize("chart", [
         None, [], "x", {}, {"prices": None}, {"prices": []}, {"prices": [[1], "x", None]},
         {"prices": [[1, None], [2, "5"], [3, True], [4, float("nan")], [5, float("inf")]]},

@@ -2,6 +2,8 @@ import math
 import re
 
 from pycoingecko import CoinGeckoAPI
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from base_command import BaseCommand
 from irc_format import BOLD, RESET, signed_change_color
@@ -43,6 +45,11 @@ def year_range(chart):
 def _client(timeout, retries):
     client = CoinGeckoAPI(retries=retries)
     client.request_timeout = timeout
+    # pycoingecko's own retry policy, except for one thing: urllib3 also obeys a Retry-After header, on a 429
+    # too, and CoinGecko's rate limit sends one of about a minute, which a request with any retry left would
+    # sleep through, deaf. A 429 now fails at once with the error reply.
+    client.session.mount("https://", HTTPAdapter(max_retries=Retry(
+        total=retries, backoff_factor=0.5, status_forcelist=[502, 503, 504], respect_retry_after_header=False)))
     return client
 
 
