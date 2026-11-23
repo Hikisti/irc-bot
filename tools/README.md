@@ -3,7 +3,8 @@
 Small scripts for watching the NHL and Liiga feeds while real games are on, so a change to a
 tracker can be checked against what the feed actually does, not only against mocks. They are **not
 part of the bot**: nothing in `src/` imports them and they never send anything to IRC or to the
-bot. They only read the same public feeds the trackers read, and reuse the trackers' fetch code
+bot, except the bot watcher (`bot_watch.py`, below), which asks the network whether the bot is there.
+The probes only read the same public feeds the trackers read, and reuse the trackers' fetch code
 (`NHLCommand._fetch_scores` / `_fetch_play_by_play`, `LiigaCommand`), so a change to those needs
 the matching change here (`tests/test_tools.py` covers the pure parts).
 
@@ -129,3 +130,17 @@ for server details: an IP address, or a value from `fetch_night.conf` (named, ne
 means something to look at.
 
     .venv/bin/python tools/pre_push.py
+
+### `bot_watch.py` - is the bot on IRC?
+
+Run every 30 minutes on GitHub by the Bot watch workflow (`.github/workflows/bot-watch.yml`), not on
+the server: nothing there watches the bot after a deploy, and the server cannot report itself down.
+It connects to the network under a throwaway nick, asks `ISON` for the bot and, if it is gone, asks
+again three minutes later, so a deploy restart or the morning update restart raises no alarm. Still
+gone: one private message to the owner (the nick is the `WATCH_NOTIFY_NICK` repository secret, so it
+is masked in the public logs) and a failed run, so GitHub's failed-run notification arrives as well.
+Once per outage: a state file, kept between runs as an artifact, says it was already reported, and
+later runs only warn until the bot has been seen again. A watcher that cannot reach the network
+fails with that, not with "the bot is missing". It joins no channel. Standard library only.
+
+    python tools/bot_watch.py --state bot_watch_state.json [--wait SECONDS]

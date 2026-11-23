@@ -1,0 +1,56 @@
+name: Bot watch
+
+# Looks for the bot on IRC every 30 minutes and tells the owner once per outage when it is gone
+# (tools/bot_watch.py): a private message on IRC (nick in the WATCH_NOTIFY_NICK secret) and a failed run,
+# so GitHub's usual failed-run notification arrives too. Later runs of the same outage only warn. The
+# "already reported" state goes from run to run as an artifact; a lost one means one extra alert, never
+# silence. No deploy, nothing on the server. GitHub starts scheduled runs late at busy times and disables
+# them in a repository with no activity for 60 days.
+on:
+  schedule:
+    - cron: "7,37 * * * *"  # off the top of the hour, when GitHub's scheduler is busiest
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read  # the previous run's state artifact
+
+concurrency:
+  group: bot-watch  # queued, never cancelled: a cancelled run leaves no state
+
+jobs:
+  watch:
+    name: Look for the bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Fetch the previous run's state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p state
+          prev=$(gh run list --workflow bot-watch.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$prev" ]; then
+            gh run download "$prev" --name bot-watch-state --dir state || echo "no state from run $prev"
+          fi
+
+      - name: Look for the bot
+        env:
+          WATCH_NOTIFY_NICK: ${{ secrets.WATCH_NOTIFY_NICK }}
+        run: python tools/bot_watch.py --state state/bot_watch_state.json
+
+      - name: Keep the state for the next run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: bot-watch-state
+          path: state/bot_watch_state.json
+          retention-days: 3
+          if-no-files-found: ignore
