@@ -7,8 +7,11 @@ from base_command import BaseCommand
 from irc_format import BOLD, RESET, signed_change_color
 from request_errors import format_request_error
 
-# Commands run on the bot's network thread, and pycoingecko waits up to 120 s with 5 retries. The range is
-# an extra the reply can do without, so its request gets a short budget and no retries.
+# Commands run on the bot's network thread, so while a request waits the bot reads nothing, and pycoingecko's
+# defaults (120 s, 5 retries on 502/503/504) could stall it for minutes. The price gets one retry for a passing
+# gateway error; the range is an extra the reply can do without, so its request gets none.
+PRICE_TIMEOUT_SECONDS = 10
+PRICE_RETRIES = 1
 HISTORY_TIMEOUT_SECONDS = 10
 # The history request puts the coin into the URL path as it stands (the price request sends it as a query
 # parameter), so only a name in CoinGecko's id format goes there; anything else gets no range.
@@ -27,6 +30,12 @@ def year_range(chart):
     return (min(prices), max(prices)) if prices else None
 
 
+def _client(timeout, retries):
+    client = CoinGeckoAPI(retries=retries)
+    client.request_timeout = timeout
+    return client
+
+
 class CryptoCommand(BaseCommand):
     """Handles cryptocurrency price queries using CoinGecko API."""
 
@@ -34,9 +43,8 @@ class CryptoCommand(BaseCommand):
     HELP = "!crypto <coin>"
 
     def __init__(self):
-        self.cg = CoinGeckoAPI()
-        self.history_cg = CoinGeckoAPI(retries=0)
-        self.history_cg.request_timeout = HISTORY_TIMEOUT_SECONDS
+        self.cg = _client(PRICE_TIMEOUT_SECONDS, PRICE_RETRIES)
+        self.history_cg = _client(HISTORY_TIMEOUT_SECONDS, 0)
 
     def _year_range_text(self, crypto_name, currency):
         """' 52W: low - high.' in the price's format, or '' when the history cannot be had."""

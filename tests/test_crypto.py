@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from crypto import HISTORY_TIMEOUT_SECONDS, CryptoCommand, year_range
+from crypto import HISTORY_TIMEOUT_SECONDS, PRICE_RETRIES, PRICE_TIMEOUT_SECONDS, CryptoCommand, year_range
 from tests.conftest import make_json_response
 
 YEAR = {"prices": [[1, 41000.5], [2, 69000.25], [3, 50000.0]], "market_caps": [], "total_volumes": []}
@@ -119,9 +119,12 @@ class TestYearRange:
         crypto_command.history.assert_not_called()
         assert result.endswith("Volume 30.00B.")
 
-    def test_the_history_client_has_a_short_budget(self, crypto_command):
-        assert crypto_command.history_cg.request_timeout == HISTORY_TIMEOUT_SECONDS
-        assert crypto_command.cg.request_timeout == 120  # the price request is unchanged
+    def test_both_requests_have_a_short_budget(self, crypto_command):
+        # Commands run on the network thread: pycoingecko's 120 s and 5 retries could stall the bot for minutes.
+        assert crypto_command.cg.request_timeout == PRICE_TIMEOUT_SECONDS <= 10
+        assert crypto_command.history_cg.request_timeout == HISTORY_TIMEOUT_SECONDS <= 10
+        assert crypto_command.cg.session.get_adapter("https://").max_retries.total == PRICE_RETRIES == 1
+        assert crypto_command.history_cg.session.get_adapter("https://").max_retries.total == 0
 
     @pytest.mark.parametrize("chart", [
         None, [], "x", {}, {"prices": None}, {"prices": []}, {"prices": [[1], "x", None]},
