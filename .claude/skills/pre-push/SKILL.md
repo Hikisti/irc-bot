@@ -18,8 +18,9 @@ It fetches `origin/main` and only reads: the open pull requests (`gh pr list`), 
 commits, the restart decision (the repo's own `.github/needs-restart.sh`, against the commit the
 last successful deploy's log says the bot runs),
 today's games for every tracker (each tracker's own `_fetch_today_items`), a move check for every
-commit whose subject says "move only", and the added lines scanned for server details (values from
-the gitignored `tools/fetch_night.conf`, plus IP addresses) and for issue numbers in CLAUDE.md.
+commit whose subject says "move only", everything that goes out (added lines, the commits' full
+messages, the changed file paths) scanned for server details (values from the gitignored
+`tools/fetch_night.conf`, plus IP addresses), and the added lines scanned for issue numbers in CLAUDE.md.
 Exit 1 means it found something to look at; read the whole output either way.
 
 Then run lint and the full suite on what is about to go out (CI would refuse a failing push, but
@@ -47,8 +48,9 @@ only after the push has been made):
 - **Move check** - a commit that claims to be move-only may differ only in module docstrings,
   imports and class lines. Any other changed line (a method body, a message) means it is not
   move-only: report the lines and do not push it under that subject.
-- **Server details** - no-go. Name the file and line (the script does not print the value), fix the
-  commit, never push it "to clean up later": the repo is public and a push is permanent.
+- **Server details** - no-go. Name the file and line, or the commit whose message carries it (the
+  script does not print the value); fix the commit (`git commit --amend`, or reword it before the
+  push), never push it "to clean up later": the repo is public and a push is permanent.
 - **Issue numbers in CLAUDE.md** - fine only where they explain a why that stays true; otherwise
   rewrite in terms of modules and behaviours before pushing.
 - **Lint or tests failing** - no-go; fix first.

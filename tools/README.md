@@ -158,8 +158,9 @@ a push too) and the outgoing commits, asks
 `.github/needs-restart.sh` whether the deploy would restart the bot (against the commit the last
 successful deploy's log names, read with `gh`), lists today's games of every tracker as live / soon /
 later / over (each tracker's own `_fetch_today_items`), checks that a commit whose subject says "move
-only" removes and adds the same lines, and scans the added lines for issue numbers in CLAUDE.md and
-for server details: an IP address, or a value from `fetch_night.conf` (named, never printed). Exit 1
+only" removes and adds the same lines, scans the added lines for issue numbers in CLAUDE.md, and
+scans everything that goes out (added lines, the commits' full messages, the changed file paths) for
+server details: an IP address, or a value from `fetch_night.conf` (named, never printed). Exit 1
 means something to look at.
 
     .venv/bin/python tools/pre_push.py

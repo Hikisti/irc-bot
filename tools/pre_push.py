@@ -5,9 +5,10 @@
 
 It says what would go out, whether the deploy would restart the bot (asking the repository's own
 .github/needs-restart.sh, against the commit the last deploy's log says the bot runs), which games
-are on or about to start, whether a "move only" commit moved its lines unchanged, and whether an
-added line carries a server detail (the values in the gitignored tools/fetch_night.conf, or an IP
-address) or an issue number in CLAUDE.md. Exit 0 = nothing to look at, 1 = something to look at.
+are on or about to start, whether a "move only" commit moved its lines unchanged, whether an added
+line, an outgoing commit message or a changed file path carries a server detail (the values in the
+gitignored tools/fetch_night.conf, or an IP address), and whether an added line puts an issue number
+in CLAUDE.md. Exit 0 = nothing to look at, 1 = something to look at.
 """
 import collections
 import datetime
@@ -83,6 +84,33 @@ def added_lines(diff_text):
         elif not line.startswith("-"):
             number += 1
     return added
+
+
+def commit_message_lines(log_text):
+    """[(where, line_number, text)] for every line of the outgoing commits' full messages, from
+    `git log --format=%x1e%h%n%B`. A message goes public with its commit as much as the diff does
+    (one in 2026-08 named server logins and paths)."""
+    lines = []
+    for entry in log_text.split("\x1e"):
+        if not entry.strip():
+            continue
+        short, _, body = entry.partition("\n")
+        lines += [(f"commit {short.strip()} message", n, text) for n, text in enumerate(body.splitlines(), 1)]
+    return lines
+
+
+def changed_path_lines(names_text):
+    """[(where, 0, path)] for every path `git diff --name-only` lists: a file's name is public too."""
+    return [("file path", 0, name) for name in names_text.splitlines() if name.strip()]
+
+
+def outgoing_lines(git_fn, base="origin/main"):
+    """Everything a push makes public, as server_hits() reads it: the added lines, every line of the
+    outgoing commits' messages and every changed file path. `git_fn(*args)` returns git's output."""
+    span = f"{base}..HEAD"
+    return (added_lines(git_fn("diff", "-U0", span))
+            + commit_message_lines(git_fn("log", "--format=%x1e%h%n%B", span))
+            + changed_path_lines(git_fn("diff", "--name-only", span)))
 
 
 def move_differences(diff_text):
@@ -265,14 +293,14 @@ def main(now=None):
 
     lines = added_lines(git("diff", "-U0", "origin/main..HEAD"))
     conf = open(CONF_PATH, encoding="utf-8").read() if os.path.exists(CONF_PATH) else ""
-    hits = server_hits(lines, server_values(conf))
-    print(f"\nServer details in added lines: {'none' if not hits else ''}")
+    hits = server_hits(outgoing_lines(git), server_values(conf))
+    print(f"\nServer details in what goes out (added lines, commit messages, file paths): {'none' if not hits else ''}")
     for path, number, what in hits:
         print(f"  {path}:{number}: {what}")
     if not conf:
         print("  (tools/fetch_night.conf missing: only IP addresses were looked for)")
     if hits:
-        attention.append("server details in the outgoing diff")
+        attention.append("server details in what goes out")
     refs = issue_refs(lines)
     if refs:
         print("\nIssue numbers added to CLAUDE.md (fine only where they explain a lasting why):")

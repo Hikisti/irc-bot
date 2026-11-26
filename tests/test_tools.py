@@ -664,6 +664,33 @@ class TestPrePush:
         assert pre_push.server_hits(lines, {"service": "botunit"}) == [
             ("a.md", 3, "service"), ("b.md", 9, "an IP address")]
 
+    def test_every_line_of_every_outgoing_commit_message_is_scanned(self):
+        log = "\x1eabc1234\nFix the deploy\n\nRestarted botunit by hand.\n\n\x1edef5678\nDocs only\n"
+        lines = pre_push.commit_message_lines(log)
+        assert lines[0] == ("commit abc1234 message", 1, "Fix the deploy")
+        assert pre_push.server_hits(lines, {"service": "botunit"}) == [("commit abc1234 message", 3, "service")]
+        assert ("commit def5678 message", 1, "Docs only") in lines
+
+    def test_changed_file_paths_are_scanned(self):
+        lines = pre_push.changed_path_lines("src/a.py\nnotes/botunit-restart.md\n")
+        assert pre_push.server_hits(lines, {"service": "botunit"}) == [("file path", 0, "service")]
+
+    def test_a_commit_message_from_real_git_output_is_flagged(self, tmp_path):
+        import subprocess
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@example.invalid", "HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+        run = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, env=env, capture_output=True,  # noqa: E731
+                                        text=True, check=True, timeout=20).stdout
+        run("init", "-q", "-b", "main")
+        (tmp_path / "a.txt").write_text("one\n")
+        run("add", "a.txt")
+        run("commit", "-q", "-m", "base")
+        base = run("rev-parse", "HEAD").strip()
+        (tmp_path / "a.txt").write_text("one\ntwo\n")
+        run("commit", "-q", "-am", "Tidy up\n\nLogged in as botuser to check.")
+        hits = pre_push.server_hits(pre_push.outgoing_lines(run, base), {"bot_user": "botuser"})
+        assert len(hits) == 1 and hits[0][0].endswith(" message") and hits[0][1:] == (3, "bot_user")
+
     def test_documentation_addresses_are_not_flagged(self):
         lines = [("t.py", n, f"host {ip}") for n, ip in enumerate(("192.0.2.1", "198.51.100.4", "203.0.113.7"))]
         assert pre_push.server_hits(lines, {}) == []
