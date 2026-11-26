@@ -101,10 +101,10 @@ def move_differences(diff_text):
 
 def server_values(conf_text):
     """{name: value} of the server details in fetch_night.conf: the login and host of SERVER
-    separately, SERVICE and BOT_DIR. Placeholders and empty values are left out."""
+    separately, SERVICE, BOT_DIR and BOT_USER. Placeholders and empty values are left out."""
     values = {}
     for line in conf_text.splitlines():
-        match = re.match(r'\s*(SERVER|SERVICE|BOT_DIR)="?([^"]*)"?\s*$', line)
+        match = re.match(r'\s*(SERVER|SERVICE|BOT_DIR|BOT_USER)="?([^"]*)"?\s*$', line)
         if not match or not match.group(2) or "<" in match.group(2):
             continue
         name, value = match.groups()

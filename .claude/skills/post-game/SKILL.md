@@ -5,7 +5,7 @@ description: The morning check after a game night (NHL and/or Liiga) - read the 
 
 # Post-game check
 
-The files come from `tools/fetch_night.sh NAME FROM TO [--probe] [--sampler]`, run by Heikki on the
+The files come from `tools/fetch_night.sh NAME FROM TO [NAME FROM TO ...] [--probe] [--sampler]`, run by Heikki on the
 Mac (Claude has no server access, by his choice). They are in `tools/logs/`:
 `journal_NAME.log`, `nightcheck_NAME.log`, and when the extras ran `goal_probe_server.log` /
 `liiga_sampler_server.log` (these two append across nights).
@@ -22,12 +22,10 @@ ends, ending before 06:00 UTC when possible (an automatic update can restart the
 UTC). Add `--probe` on slates of 10+ NHL games and `--sampler` on days of 5+ Liiga games: the
 server's daily timer (`tools/start_extras.py`) starts them by itself on those days. Then stop and wait.
 
-When several nights are unfetched, give **one** command (each run is a login and a sudo password):
-one window from the first night's start to the last night's end, NAME `<first date>_<last day>`
-(e.g. `2026-11-23_25`), with `--probe`/`--sampler` if any of the nights needs it. After fetching,
-split the journal per night into the scratchpad by its UTC timestamps (each night's own window) and
-run steps 1-6 on each slice; the report would otherwise add the nights together. The nightcheck
-output covers the whole window, so attribute its lines by their times.
+When several nights are unfetched, give **one** command with a NAME and window per night (one login,
+one file pair per night), with `--probe`/`--sampler` if any of the nights needs it:
+`tools/fetch_night.sh 2026-11-23_nhl "2026-11-23 23:00" "2026-11-24 06:00" 2026-11-24 "..." "..." --probe`.
+Then check each night in turn.
 
 ## The check, in this order
 

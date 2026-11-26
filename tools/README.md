@@ -113,9 +113,20 @@ morning check (`.claude/skills/post-game/`).
 
     tools/fetch_night.sh 2026-11-19_nhl "2026-11-18 23:30" "2026-11-19 07:30" --probe
 
-The window is UTC. The server's details come from `tools/fetch_night.conf`, which is gitignored and
-holds three lines: `SERVER="<login>@<host>"`, `SERVICE="<the bot's unit>"` and
-`BOT_DIR="<the bot's checkout on the server>"`. `--dry-run` prints the commands without running them.
+Several nights go in one run, each with its own NAME and window and its own pair of files, still
+with one login (`--probe` / `--sampler` copy the log once, as it holds every night):
+
+    tools/fetch_night.sh 2026-11-23_nhl "2026-11-23 23:00" "2026-11-24 06:00" \
+                         2026-11-24 "2026-11-24 15:30" "2026-11-25 05:30" --probe
+
+The windows are UTC. The server's details come from `tools/fetch_night.conf`, which is gitignored and
+holds `SERVER="<login>@<host>"`, `SERVICE="<the bot's unit>"`, `BOT_DIR="<the bot's checkout on the
+server>"` and, optionally, `BOT_USER="<the user the bot runs as>"`. `--dry-run` prints the commands
+without running them.
+
+No password is asked where the server allows it: the journal is read without sudo when the login is
+in a group that may read it, and with `BOT_USER` set the probe logs are read through a sudo rule for
+exactly that read (the private deploy notes have the steps). Otherwise sudo asks, once per run.
 
 ### `pre_push.py` - the checks before a push to main
 

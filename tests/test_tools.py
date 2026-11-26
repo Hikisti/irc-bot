@@ -651,6 +651,10 @@ class TestPrePush:
         conf = ('# comment\nSERVER="someone@203.0.113.7"\nSERVICE="botunit"\nBOT_DIR="<the checkout>"\n')
         assert pre_push.server_values(conf) == {"login": "someone", "host": "203.0.113.7", "service": "botunit"}
 
+    def test_server_values_include_the_bot_user(self):
+        assert pre_push.server_values('SERVICE="botunit"\nBOT_USER="botuser"\n') == {"service": "botunit",
+                                                                                   "bot_user": "botuser"}
+
     def test_server_hits_name_what_matched_but_not_the_value(self):
         address = ".".join(("10", "1", "2", "3"))  # built here so this file holds no address the scan flags
         lines = [("a.md", 3, "restart botunit by hand"), ("b.md", 9, f"seen from {address}"),
@@ -688,3 +692,70 @@ class TestPrePush:
         ok = type("R", (), {"returncode": 0, "stdout": '[{"number": 91, "title": "t"}]'})()
         monkeypatch.setattr(pre_push.subprocess, "run", lambda *a, **kw: ok)
         assert pre_push.open_prs() == [{"number": 91, "title": "t"}]
+
+
+class TestFetchNight:
+    """tools/fetch_night.sh, run with --dry-run from a copy beside a made-up conf: it prints the one login's
+    command line and the files it would copy, and touches no network."""
+
+    SCRIPT = os.path.join(os.path.dirname(__file__), "..", "tools", "fetch_night.sh")
+
+    def _run(self, tmp_path, *args, bot_user=None):
+        import shutil
+        import subprocess
+        (tmp_path / "tools").mkdir(exist_ok=True)
+        shutil.copy(self.SCRIPT, tmp_path / "tools" / "fetch_night.sh")
+        conf = 'SERVER="someone@host.invalid"\nSERVICE="botunit"\nBOT_DIR="/srv/bot"\n'
+        if bot_user:
+            conf += f'BOT_USER="{bot_user}"\n'
+        (tmp_path / "tools" / "fetch_night.conf").write_text(conf)
+        return subprocess.run(["bash", str(tmp_path / "tools" / "fetch_night.sh"), *args, "--dry-run"],
+                              capture_output=True, text=True, timeout=20)
+
+    def test_one_night_reads_its_window(self, tmp_path):
+        result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00")
+        assert result.returncode == 0
+        command, copies = result.stdout.splitlines()
+        assert "~/nightcheck.sh '2026-11-23 23:00' '2026-11-24 06:00' > ~/nightcheck_n1.txt" in command
+        assert "$J -u 'botunit' -a --since '2026-11-23 23:00' --until '2026-11-24 06:00' > ~/journal_n1.txt" in command
+        assert copies == "scp <server>:nightcheck_n1.txt <server>:journal_n1.txt into tools/logs/, renamed to .log"
+
+    def test_several_nights_go_in_one_login_with_a_file_pair_each(self, tmp_path):
+        result = self._run(tmp_path, "a", "2026-11-23 23:00", "2026-11-24 06:00", "--probe",
+                           "b", "2026-11-24 15:30", "2026-11-25 05:30")
+        assert result.returncode == 0
+        command, copies = result.stdout.splitlines()
+        assert command.count("~/nightcheck.sh") == 2 and command.count("$J -u") == 2
+        assert "--since '2026-11-24 15:30' --until '2026-11-25 05:30' > ~/journal_b.txt" in command
+        for name in ("nightcheck_a", "journal_a", "nightcheck_b", "journal_b", "goal_probe_server"):
+            assert f"<server>:{name}.txt" in copies
+
+    def test_the_journal_is_read_without_sudo_only_by_a_login_that_may(self, tmp_path):
+        command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00").stdout
+        assert "if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi" in command
+
+    def test_probe_log_without_a_bot_user_is_copied_with_sudo(self, tmp_path):
+        command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--probe").stdout
+        assert "sudo cp '/srv/bot/tools/logs/goal_probe.log' ~/goal_probe_server.txt" in command
+        assert "sudo -n" not in command
+
+    def test_probe_log_with_a_bot_user_tries_the_passwordless_read_first(self, tmp_path):
+        command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--sampler",
+                            bot_user="botuser").stdout
+        assert ("sudo -n -u 'botuser' cat '/srv/bot/tools/logs/liiga_sampler.log' > ~/liiga_sampler_server.txt "
+                "2>/dev/null || { sudo cp") in command
+
+    @pytest.mark.parametrize("args", [
+        ("n1", "2026-11-23 23:00"),                                   # not a whole window
+        ("n1", "2026-11-23 23:00", "2026-11-24 06:00", "n2"),         # a second window cut short
+        ("n;1", "2026-11-23 23:00", "2026-11-24 06:00"),              # a name that is not a plain word
+        ("n1", "2026-11-23 23:00'", "2026-11-24 06:00"),              # a time with a quote in it
+        ("n1", "2026-11-23 23:00", "2026-11-24 06:00", "--bogus"),
+    ])
+    def test_malformed_arguments_are_refused(self, tmp_path, args):
+        result = self._run(tmp_path, *args)
+        assert result.returncode == 2 and result.stdout == ""
+
+    def test_a_bot_user_that_is_not_a_user_name_is_refused(self, tmp_path):
+        result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", bot_user="x'; rm")
+        assert result.returncode == 2 and "BOT_USER" in result.stderr
