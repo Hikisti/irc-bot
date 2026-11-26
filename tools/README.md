@@ -121,12 +121,15 @@ with one login (`--probe` / `--sampler` copy the log once, as it holds every nig
 
 The windows are UTC. The server's details come from `tools/fetch_night.conf`, which is gitignored and
 holds `SERVER="<login>@<host>"`, `SERVICE="<the bot's unit>"`, `BOT_DIR="<the bot's checkout on the
-server>"` and, optionally, `BOT_USER="<the user the bot runs as>"`. `--dry-run` prints the commands
+server>"` and `BOT_USER="<the user the bot runs as>"` (needed for `--probe` / `--sampler`). `--dry-run` prints the commands
 without running them.
 
 No password is asked where the server allows it: the journal is read without sudo when the login is
-in a group that may read it, and with `BOT_USER` set the probe logs are read through a sudo rule for
-exactly that read (the private deploy notes have the steps). Otherwise sudo asks, once per run.
+in a group that may read it (otherwise sudo asks, once per run). The probe logs are read only as
+`BOT_USER`, through a sudo rule for exactly that read (the private deploy notes have the steps), and
+never as root: the bot's user owns those files, so a root copy would follow wherever it pointed them.
+That read is capped (100 MB, 5 minutes) and a failed read fails the fetch. On the server the copies
+sit in a folder only the login can read.
 
 ### `auto_fetch.py` - the morning fetch, by itself
 

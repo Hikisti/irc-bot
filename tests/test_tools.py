@@ -725,7 +725,7 @@ class TestFetchNight:
 
     def test_several_nights_go_in_one_login_with_a_file_pair_each(self, tmp_path):
         result = self._run(tmp_path, "a", "2026-11-23 23:00", "2026-11-24 06:00", "--probe",
-                           "b", "2026-11-24 15:30", "2026-11-25 05:30")
+                           "b", "2026-11-24 15:30", "2026-11-25 05:30", bot_user="botuser")
         assert result.returncode == 0
         command, copies = result.stdout.splitlines()
         assert command.count("~/nightcheck.sh") == 2 and command.count("$J -u") == 2
@@ -735,23 +735,25 @@ class TestFetchNight:
 
     def test_each_run_empties_its_own_folder_on_the_server_first(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00").stdout
-        assert command.split("; ")[1:3] == ["mkdir -p ~/fetch_night", "rm -f ~/fetch_night/*"]
+        assert command.split("; ")[:5] == ['ssh -t <server> "set -eo pipefail', "umask 077", "mkdir -p ~/fetch_night",
+                                           "chmod 700 ~/fetch_night", "rm -f ~/fetch_night/*"]
         assert "rm -rf" not in command
 
     def test_the_journal_is_read_without_sudo_only_by_a_login_that_may(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00").stdout
         assert "if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi" in command
 
-    def test_probe_log_without_a_bot_user_is_copied_with_sudo(self, tmp_path):
-        command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--probe").stdout
-        assert "sudo cp '/srv/bot/tools/logs/goal_probe.log' ~/fetch_night/goal_probe_server.txt" in command
-        assert "sudo -n" not in command
+    @pytest.mark.parametrize("flag", ["--probe", "--sampler"])
+    def test_a_probe_log_without_a_bot_user_is_refused_not_copied_as_root(self, tmp_path, flag):
+        result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", flag)
+        assert result.returncode == 2 and "need BOT_USER" in result.stderr and result.stdout == ""
 
-    def test_probe_log_with_a_bot_user_tries_the_passwordless_read_first(self, tmp_path):
+    def test_a_probe_log_is_read_only_as_the_bot_user_with_a_cap_and_a_time_limit(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--sampler",
                             bot_user="botuser").stdout
-        assert ("sudo -n -u 'botuser' cat '/srv/bot/tools/logs/liiga_sampler.log' > ~/fetch_night/liiga_sampler_server.txt "
-                "2>/dev/null || { sudo cp") in command
+        assert (f"timeout 300 sudo -n -u 'botuser' cat '/srv/bot/tools/logs/liiga_sampler.log' "
+                f"| head -c {100 * 1024 * 1024} > ~/fetch_night/liiga_sampler_server.txt") in command
+        assert "sudo cp" not in command and "chown" not in command  # never as root: the bot owns the file
 
     @pytest.mark.parametrize("args", [
         ("n1", "2026-11-23 23:00"),                                   # not a whole window

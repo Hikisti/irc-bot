@@ -13,8 +13,9 @@
 # server is written here. The fetched files hold chat and addresses; *.log keeps them out of git.
 #
 # Without a password where the server allows it: the journal is read without sudo when the login is
-# in a group that may read it, and with BOT_USER set in the conf the probe logs are read through a
-# sudo rule for exactly that read (DEPLOY.md). Otherwise sudo asks, once per login.
+# in a group that may read it (otherwise sudo asks, once per login). The probe logs are read only as
+# BOT_USER, through a sudo rule for exactly that read (DEPLOY.md), so --probe / --sampler need
+# BOT_USER in the conf. Never as root: the bot user owns those files and could point them anywhere.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 usage() { sed -n '7,8p' "$0" | sed 's/^# *//' >&2; exit 2; }
@@ -46,9 +47,15 @@ BOT_USER=""
 . "$conf"
 : "${SERVER:?not set in $conf}" "${SERVICE:?not set in $conf}" "${BOT_DIR:?not set in $conf}"
 [ -z "$BOT_USER" ] || [[ $BOT_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "BOT_USER in $conf is not a user name" >&2; exit 2; }
+[ $probe = 0 ] && [ $sampler = 0 ] || [ -n "$BOT_USER" ] || { echo "--probe / --sampler need BOT_USER in $conf" >&2; exit 2; }
+# A probe log is the bot user's file: a link to /dev/zero or a FIFO must not fill the disk or hang
+# the fetch. The logs are a few MB a season; past the cap the read fails rather than being cut.
+MAX_LOG_BYTES=$((100 * 1024 * 1024))
+LOG_READ_SECONDS=300
 files=()
-# The copies go in one folder on the server that each run empties first, so they never pile up there.
-remote="set -e; mkdir -p ~/fetch_night; rm -f ~/fetch_night/*; if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi"
+# The copies go in one folder on the server that each run empties first, so they never pile up there,
+# readable only by the login (they hold chat and addresses).
+remote="set -eo pipefail; umask 077; mkdir -p ~/fetch_night; chmod 700 ~/fetch_night; rm -f ~/fetch_night/*; if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi"
 for ((i = 0; i < ${#windows[@]}; i += 3)); do
     name=${windows[i]} from=${windows[i+1]} to=${windows[i+2]}
     remote+="; ~/nightcheck.sh '$from' '$to' > ~/fetch_night/nightcheck_$name.txt"
@@ -59,12 +66,7 @@ for kind in probe sampler; do
     [ "${!kind}" = 1 ] || continue
     log=$([ $kind = probe ] && echo goal_probe || echo liiga_sampler)
     src="$BOT_DIR/tools/logs/$log.log" dst="~/fetch_night/${log}_server.txt"
-    copy="sudo cp '$src' $dst; sudo chown \"\$(id -un):\" $dst"
-    if [ -n "$BOT_USER" ]; then
-        remote+="; sudo -n -u '$BOT_USER' cat '$src' > $dst 2>/dev/null || { $copy; }"
-    else
-        remote+="; $copy"
-    fi
+    remote+="; timeout $LOG_READ_SECONDS sudo -n -u '$BOT_USER' cat '$src' | head -c $MAX_LOG_BYTES > $dst"
     files+=("${log}_server.txt")
 done
 sources=()
