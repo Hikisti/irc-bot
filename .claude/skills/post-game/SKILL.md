@@ -22,6 +22,13 @@ ends, ending before 06:00 UTC when possible (an automatic update can restart the
 UTC). Add `--probe` on slates of 10+ NHL games and `--sampler` on days of 5+ Liiga games: the
 server's daily timer (`tools/start_extras.py`) starts them by itself on those days. Then stop and wait.
 
+When several nights are unfetched, give **one** command (each run is a login and a sudo password):
+one window from the first night's start to the last night's end, NAME `<first date>_<last day>`
+(e.g. `2026-11-23_25`), with `--probe`/`--sampler` if any of the nights needs it. After fetching,
+split the journal per night into the scratchpad by its UTC timestamps (each night's own window) and
+run steps 1-6 on each slice; the report would otherwise add the nights together. The nightcheck
+output covers the whole window, so attribute its lines by their times.
+
 ## The check, in this order
 
 1. **The report.** `python3 tools/journal_report.py tools/logs/journal_NAME.log --year <year>`.
