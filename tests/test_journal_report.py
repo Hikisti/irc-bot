@@ -527,6 +527,26 @@ class TestLevelFinal:
         assert "game 7: goal (team 20, 1-3) held, same as (team 20, 1-2)" in text
         assert "game 7: goal (team 20, 1-2) is now (team 20, 1-3)" in text
 
+    def test_the_bots_own_95_lines_round_trip_and_are_reported(self, capsys):
+        from nhl_command import NHLCommand
+        from tests.nhl_test_helpers import goal_play, make_pbp
+        nhl = NHLCommand()
+        known = goal_play(event_id=100, scoring_player_id=3, home_score=2, time_in_period="04:05")
+        inserted = goal_play(event_id=101, scoring_player_id=4, home_score=2, time_in_period="03:39")
+        moved = goal_play(event_id=100, scoring_player_id=3, home_score=3, time_in_period="04:05")
+        record = {}
+        held = nhl.INSERTED_GOAL_HOLD_POLLS
+        for plays in [[known], [inserted, moved], [inserted, moved], [moved]] + [[inserted, moved]] * (held + 1):
+            _, _, record = nhl._resolve_goals(make_pbp(game_id=7, plays=plays), record)
+        lines = [line("00:55:25", text) for text in capsys.readouterr().out.splitlines()]
+        kinds = [e["kind"] for e in (jr.parse_line(text, YEAR) for text in lines) if e]
+        assert kinds.count("inserted_held") == 2 and kinds.count("inserted_left") == 1
+        assert kinds.count("inserted_announced") == 1
+        text = jr.render(report(*lines))
+        assert ("a new goal listed before goals already known (#95): held 2 time(s), left the feed while held 1, "
+                "announced after the hold 1") in text
+        assert "game 7: event 101 left after 1 poll(s)" in text
+
     def test_the_overtime_mark_line_is_parsed_counted_and_listed(self):
         e = jr.parse_line(line("02:48:34", "NHL: game 2026020161: FINAL without an overtime mark, the plays say 3-2 OT; using the plays' mark"), YEAR)
         assert (e["kind"], e["gid"], e["plays"]) == ("mark_from_plays", "2026020161", "3-2 OT")

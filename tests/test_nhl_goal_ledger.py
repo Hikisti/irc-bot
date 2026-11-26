@@ -167,12 +167,16 @@ class TestAnnouncedGoalRecord:
         lines = self._poll_sequence(nhl_command, [self._pbp(winner), self._pbp(renumbered, other), self._pbp(winner, other)])
         assert len(lines) == 1
 
-    def test_a_goal_inserted_before_an_announced_one_is_announced_one_poll_late_not_lost(self, nhl_command):
+    def test_a_goal_inserted_before_an_announced_one_is_announced_after_the_hold_not_lost(self, nhl_command):
         """The same feed shape for a goal that really exists (the feed missed it and adds it earlier in the game, so
-        the announced goal moves to the next running score): held for one poll, then announced."""
+        the announced goal moves to the next running score): held one poll at the announced goal's score, then
+        INSERTED_GOAL_HOLD_POLLS polls as a goal listed before a known one, then announced."""
         winner, renumbered, other = self._overtime_pair()
-        lines = self._poll_sequence(nhl_command, [self._pbp(winner), self._pbp(other, renumbered),
-                                                  self._pbp(other, renumbered)])
+        hold = nhl_command.INSERTED_GOAL_HOLD_POLLS
+        feeds = [self._pbp(winner)] + [self._pbp(other, renumbered)] * (hold + 2)
+        lines = self._poll_sequence(nhl_command, feeds[:-1])
+        assert len(lines) == 1 and "P1" in lines[0]
+        lines = self._poll_sequence(nhl_command, feeds)
         assert len(lines) == 2 and "P1" in lines[0] and "P2" in lines[1]
 
     def test_a_replacement_when_the_old_entry_is_gone_is_still_announced_at_once(self, nhl_command):
@@ -773,3 +777,71 @@ class TestSecondListingAtAnotherScore:
                 "(team 20, 1-2), which is still listed, not announcing it") in out
         assert ("NHL: game 1: goal (team 20, 1-2) is now (team 20, 1-3) as event [880], same scorer, period and "
                 "clock, not announced again") in out
+
+
+class TestGoalListedBeforeKnownGoals:
+    """Issue #95 (2026-11-25, Detroit - Vancouver): one goal was listed twice at 2-0 (04:02 and 04:05, two
+    scorers) and announced once; the 04:05 entry moved to 3-0 and took the record along; the 04:02 entry left;
+    then a third entry for the same goal appeared at 2-0 (03:39, a third scorer) for about 100 s. It went out as
+    a GOAL and then a NO GOAL, though nothing was disallowed."""
+
+    HOME, AWAY = TestRetraction.HOME, TestRetraction.AWAY
+    _pbp, _goal, _run = TestRetraction._pbp, TestRetraction._goal, TestRetraction._run
+    _retractions, _goals = TestRetraction._retractions, TestRetraction._goals
+
+    def _entries(self):
+        g = lambda event_id, home, scorer, clock: self._goal(event_id, team=self.HOME, home=home, away=0,  # noqa: E731
+                                                            scorer=scorer, period_number=1, time_in_period=clock)
+        first = g(66, 1, 1, "01:16")
+        return first, g(99, 2, 2, "04:02"), (lambda home: g(100, home, 3, "04:05")), g(101, 2, 4, "03:39")
+
+    def _night(self):
+        first, kasper, finnie, rasmussen = self._entries()
+        return ([self._pbp(first, kasper, finnie(2)), self._pbp(first, kasper, finnie(3)), self._pbp(first, finnie(3))]
+                + [self._pbp(first, rasmussen, finnie(3))] * 4 + [self._pbp(first, finnie(2))] * 10)
+
+    def test_the_night_as_it_happened_gives_no_extra_line_and_no_retraction(self, nhl_command):
+        lines = self._run(nhl_command, self._night())
+        assert len(self._goals(lines)) == 2 and self._retractions(lines) == []
+        assert "03:39" not in " ".join(lines)
+
+    def test_a_real_goal_entered_late_is_announced_after_the_hold(self, nhl_command):
+        # one poll at the announced goal's score (#68), then the hold
+        first, _, finnie, rasmussen = self._entries()
+        hold = nhl_command.INSERTED_GOAL_HOLD_POLLS
+        feeds = [self._pbp(first, finnie(2))] + [self._pbp(first, rasmussen, finnie(3))] * (hold + 2)
+        assert len(self._goals(self._run(nhl_command, feeds[:-1]))) == 2
+        lines = self._run(nhl_command, feeds)
+        assert len(self._goals(lines)) == 3 and "03:39" in self._goals(lines)[-1] and self._retractions(lines) == []
+
+    def test_a_goal_after_every_known_goal_is_announced_at_once(self, nhl_command):
+        first, _, finnie, _ = self._entries()
+        later = self._goal(102, team=self.AWAY, home=2, away=1, scorer=5, period_number=1, time_in_period="04:30")
+        lines = self._run(nhl_command, [self._pbp(first, finnie(2)), self._pbp(first, finnie(2), later)])
+        assert len(self._goals(lines)) == 3
+
+    def test_goals_already_in_the_feed_at_tracking_start_are_not_held(self, nhl_command):
+        first, _, finnie, rasmussen = self._entries()
+        record = nhl_command._resolve_goals(self._pbp(first, rasmussen, finnie(3)), {}, seed=True)[2]
+        assert not any(key[0] == "held" for key in record) and len(record) == 3
+
+    def test_a_goal_that_reaches_a_known_ones_moment_is_not_held(self, nhl_command):
+        # the same goal re-listed with its clock a second earlier is handled before the hold (#60)
+        first, _, finnie, _ = self._entries()
+        rekeyed = self._goal(103, team=self.HOME, home=2, away=0, scorer=3, period_number=1, time_in_period="04:04")
+        lines = self._run(nhl_command, [self._pbp(first, finnie(2)), self._pbp(first, rekeyed)] + [self._pbp(first, rekeyed)] * 8)
+        assert len(self._goals(lines)) == 2 and self._retractions(lines) == []
+
+    def test_the_hold_and_its_end_are_journaled(self, nhl_command, capsys):
+        self._run(nhl_command, self._night())
+        out = capsys.readouterr().out
+        assert ("NHL: game 1: goal (team 10, 2-0) as event [101] is listed before a goal already known, holding it "
+                "up to 6 poll(s)") in out
+        assert "NHL: game 1: held goal event 101 left the feed after 4 poll(s), never announced" in out
+
+    def test_an_announcement_after_the_hold_is_journaled(self, nhl_command, capsys):
+        first, _, finnie, rasmussen = self._entries()
+        feeds = [self._pbp(first, finnie(2))] + [self._pbp(first, rasmussen, finnie(3))] * 8
+        self._run(nhl_command, feeds)
+        assert ("NHL: game 1: goal (team 10, 2-0) as event [101] is still listed after 6 poll(s) on hold, "
+                "announcing it") in capsys.readouterr().out

@@ -65,6 +65,12 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                              r"clock of goal \((?P<twin>.*?)\), which is still listed, not announcing it$")),
     ("twin_moved", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<old>.*?)\) is now \((?P<new>.*?)\) as event .*, "
                               r"same scorer, period and clock, not announced again$")),
+    ("inserted_held", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) as event (?P<ids>\[.*?\]) is listed before "
+                                 r"a goal already known, holding it up to (?P<n>\d+) poll\(s\)$")),
+    ("inserted_left", re.compile(r"^NHL: game (?P<gid>\d+): held goal event (?P<event>\d+) left the feed after "
+                                 r"(?P<n>\d+) poll\(s\), never announced$")),
+    ("inserted_announced", re.compile(r"^NHL: game (?P<gid>\d+): goal \((?P<key>.*?)\) as event (?P<ids>\[.*?\]) is still "
+                                      r"listed after (?P<n>\d+) poll\(s\) on hold, announcing it$")),
     ("guard", re.compile(r"^NHL: game (?P<gid>\d+): the feed shows no goal for (?P<n>\d+) announced one\(s\), "
                          r"not counting this poll as a miss$")),
     ("found", re.compile(r"^NHL: game (?P<gid>\d+): attendance (?P<att>\d+) found (?P<s>\d+) s after the FINAL line$")),
@@ -385,6 +391,16 @@ def render(report):
             out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']}) held, same as ({e['twin']})")
         for e in ev["twin_moved"]:
             out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['old']}) is now ({e['new']})")
+    if ev["inserted_held"]:
+        out.append(f"  a new goal listed before goals already known (#95): held {len(ev['inserted_held'])} time(s), "
+                   f"left the feed while held {len(ev['inserted_left'])}, announced after the hold "
+                   f"{len(ev['inserted_announced'])}")
+        for e in ev["inserted_held"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']}) as event {e['ids']} held")
+        for e in ev["inserted_left"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: event {e['event']} left after {e['n']} poll(s)")
+        for e in ev["inserted_announced"]:
+            out.append(f"    {e['ts']:%H:%M:%S} game {e['gid']}: goal ({e['key']}) announced after the hold")
     if ev["mark_from_plays"]:
         out.append(f"  FINAL given its overtime mark from the plays (header and endpoint had none): "
                    f"{len(ev['mark_from_plays'])}")

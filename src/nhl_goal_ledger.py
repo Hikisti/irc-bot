@@ -26,6 +26,10 @@ class NHLGoalLedgerMixin:
     REASON_WAIT_POLLS = 3
     # A goal re-listed by the feed has come back with its clock a second off (#60).
     SAME_GOAL_CLOCK_SECONDS = 2
+    # A new goal listed before a goal already known is held this many polls (about 3 min). In 32 probe runs (about
+    # 1900 goals, to 2026-11-25) every such goal with a scorer of its own was a phantom that left within 20-100 s;
+    # none was a real goal entered late (2026-11-25: a third entry for one goal went out as GOAL and NO GOAL, #95).
+    INSERTED_GOAL_HOLD_POLLS = 6
 
     # How far before/after a removed goal's clock a challenge stoppage may
     # sit and still be taken as its explanation (seen: from 31 s before the
@@ -114,7 +118,11 @@ class NHLGoalLedgerMixin:
             that is gone (a disallowed goal renumbers the team's later goals
             into its place) and is retracted in its turn;
           - an announced goal that stays missing for
-            RETRACT_AFTER_MISSING_POLLS polls: reported gone.
+            RETRACT_AFTER_MISSING_POLLS polls: reported gone;
+          - a new goal whose period and clock come before a goal already
+            known and still listed: held for INSERTED_GOAL_HOLD_POLLS polls
+            under a ("held", event id) key that holds no ids, then announced
+            if still listed; one that leaves while held is never announced.
         New goals come back in play order across both teams."""
         record = {key: dict(rec, ids=list(rec["ids"])) for key, rec in announced.items()}
         by_key = {}
@@ -189,6 +197,18 @@ class NHLGoalLedgerMixin:
                 rec["ids"] += [i for i in ids if i not in rec["ids"]]
                 rec["missing"] = 0
                 continue
+            if not seed and ids and self._listed_before_known(announced, plays[0], by_key):
+                held_key = next((k for k in record if k[0] == "held" and k[1] in ids), ("held", ids[0]))
+                polls = record.get(held_key, {}).get("polls", 0) + 1
+                if polls <= self.INSERTED_GOAL_HOLD_POLLS:
+                    if polls == 1:
+                        print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} as event {ids} is listed before "
+                              f"a goal already known, holding it up to {self.INSERTED_GOAL_HOLD_POLLS} poll(s)")
+                    record[held_key] = dict(self._new_record([], None), polls=polls)
+                    continue
+                print(f"NHL: game {pbp.get('id')}: goal {self._key_text(key)} as event {ids} is still listed after "
+                      f"{self.INSERTED_GOAL_HOLD_POLLS} poll(s) on hold, announcing it")
+                record.pop(held_key, None)
             new.append(plays[0])
             record[key] = self._new_record(ids, None if seed else self._posted_info(pbp, plays[0]))
 
@@ -216,8 +236,38 @@ class NHLGoalLedgerMixin:
             rec["retracted"] = True
             gone.append(rec["posted"])
 
+        known_ids = {i for k, r in record.items() if k[0] != "held" for i in r["ids"]}
+        for key in [k for k in record if k[0] == "held" and (k[1] not in listed_ids or k[1] in known_ids)]:
+            held = record.pop(key)
+            if key[1] not in listed_ids:
+                print(f"NHL: game {pbp.get('id')}: held goal event {key[1]} left the feed after {held['polls']} "
+                      f"poll(s), never announced")
+
         position = {id(play): index for index, play in enumerate(pbp.get("plays") or [])}
         return sorted(new, key=lambda goal: position[id(goal)]), gone, record
+
+    def _goal_moment(self, goal):
+        """(period number, seconds into it) of a non-shootout goal, or None."""
+        period = goal.get("periodDescriptor") or {}
+        seconds = self._clock_seconds(goal.get("timeInPeriod"))
+        if period.get("periodType") == "SO" or not isinstance(period.get("number"), int) or seconds is None:
+            return None
+        return period["number"], seconds
+
+    def _listed_before_known(self, announced, goal, by_key) -> bool:
+        """Whether this goal's period and clock come before those of a goal known when the poll began (announced
+        or seeded, not retracted) that is still listed: the feed inserting a goal under goals it already had."""
+        moment = self._goal_moment(goal)
+        if moment is None:
+            return False
+        known = {i for rec in announced.values() if not rec["retracted"] for i in rec["ids"]}
+        for plays in by_key.values():
+            for play in plays:
+                if play.get("eventId") in known:
+                    other = self._goal_moment(play)
+                    if other is not None and moment < other:
+                        return True
+        return False
 
     @staticmethod
     def _same_goal_rekeyed(goal, posted) -> bool:
