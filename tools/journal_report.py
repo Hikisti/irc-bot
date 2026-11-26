@@ -88,6 +88,7 @@ PRINTS = (  # the bot's own journal lines (not IRC traffic): kind, pattern
                                  r"(?P<before>\d+) -> (?P<after>\d+)$")),
     ("liiga_identity", re.compile(r"^Liiga: game (?P<gid>\d+): (?P<team>.+?): a goal's eventId (?P<what>changed|appeared), "
                                   r"still the same goal: (?P<change>.+?) \((?P<at>[^()]*)\)$")),
+    ("queue_dropped", re.compile(r"^Send queue: dropped PRIVMSG (?P<channel>\S+) after (?P<s>\d+) s in the queue$")),
     ("start", re.compile(r"^==== BOT STARTED")),
     ("disconnect", re.compile(r"^(?:DISCONNECTED|CONNECT FAILED)")),
 )
@@ -168,9 +169,17 @@ def _game(m):
     return {"home": m["home"], "away": m["away"], "h": int(m["h"]), "a": int(m["a"])}
 
 
-def _unglue(line):
+# Since this day each sent message is journalled in one write (2ec2b9f), so lines can no longer glue. After it
+# "> PRIVMSG " inside a line is message text (a link title can spell it) and splitting on it would forge a sent line.
+GLUE_FIXED = datetime(2026, 10, 12)
+
+
+def _unglue(line, year):
     """The lines of one journal line that holds several sent messages. Two threads printing at once
     (the two channels' GOAL: lines) used to run together as "...> PRIVMSG #a :x> PRIVMSG #b :y"."""
+    m = LINE.match(line)
+    if not m or datetime.strptime(f"{year} {m['mon']} {m['day']}", "%Y %b %d") >= GLUE_FIXED:
+        return [line]
     head, sep, tail = line.partition("> PRIVMSG ")
     if not sep or "> PRIVMSG " not in tail:
         return [line]
@@ -178,7 +187,7 @@ def _unglue(line):
 
 
 def parse_journal(lines, year):
-    entries = [e for line in lines for part in _unglue(line) if (e := parse_line(part, year))]
+    entries = [e for line in lines for part in _unglue(line, year) if (e := parse_line(part, year))]
     return sorted(entries, key=lambda e: e["ts"])  # stable: lines of the same second keep their order
 
 
@@ -356,6 +365,12 @@ def render(report):
             out.append(f"    {e['ts']:%H:%M:%S} {e['team']}: eventId {e['what']}: {e['change']} ({e['at']})")
     for e in ev["retract"]:
         out.append(f"    {e['ts']:%H:%M:%S} {e['label']} by {e['name']} in {e['channel']}")
+    if ev["queue_dropped"]:
+        by_channel = defaultdict(int)
+        for e in ev["queue_dropped"]:
+            by_channel[e["channel"]] += 1
+        out.append(f"  link titles dropped after a minute in the send queue (#53): {len(ev['queue_dropped'])} ("
+                   + ", ".join(f"{c} {n}" for c, n in sorted(by_channel.items())) + ")")
     out.append(f"  FINAL score source: {len(ev['disagree'])} header/endpoint disagreement(s), "
                f"{len(ev['no_endpoint'])} without an endpoint result")
     for e in ev["disagree"]:

@@ -228,6 +228,7 @@ class URLFetcher:
     MAX_URLS_PER_MESSAGE = 3
     LINK_BUDGET_SECONDS = 20
     MAX_PENDING_MESSAGES = 5
+    TITLE_MAX_WAIT_SECONDS = 60  # a title still in the send queue after this is dropped (#53)
     MAX_ABANDONED_FETCHES = 3
 
     def __init__(self, bot):
@@ -277,7 +278,7 @@ class URLFetcher:
                 # A page's declared charset (unicode_escape, utf-7) can spell a lone surrogate, which no UTF-8
                 # line can carry: it becomes '?' instead of failing the message.
                 title_info = title_info.encode("utf-8", errors="replace").decode("utf-8")
-                self.bot.send_message(channel, self.trim_message(title_info))
+                self.bot.send_message(channel, self.trim_message(title_info), max_wait=self.TITLE_MAX_WAIT_SECONDS)
 
     def _title_within_budget(self, url):
         """get_title(url) if it finishes within LINK_BUDGET_SECONDS, else None (see MAX_ABANDONED_FETCHES)."""

@@ -254,6 +254,13 @@ class TestGluedLines:
     def test_a_single_message_is_untouched(self):
         assert len(jr.parse_journal([GOAL1], YEAR)) == 1
 
+    def test_a_marker_inside_message_text_is_not_split_after_the_glue_fix(self):
+        # Since 2026-10-12 nothing glues, so "> PRIVMSG" in a line is text someone chose (a link title).
+        title = "x" + "> PRIVMSG #other :" + final_text("Reds", 9, 0, "Blues", att=5)
+        entries = jr.parse_journal([sent("01:00:00", CH, title, day="12")], YEAR)
+        assert not any(e.get("kind") == "final" for e in entries)
+        assert all(e["channel"] == CH for e in entries)
+
 
 class TestReport:
     def test_the_delay_after_the_last_goal_line(self):
@@ -670,3 +677,31 @@ class TestRoundTrip:
         liiga._announce_end(bot, CH, game)
         e = jr.parse_line(sent("01:20:00", CH, bot.send_message.call_args[0][1]), YEAR)
         assert (e["kind"], e["h"], e["a"], e["att"]) == ("final", 1, 0, 4366)
+
+
+class TestSendQueueDropLine:
+    """The line the send queue journals when it drops a link title that waited too long (#53)."""
+
+    def test_the_bots_own_line_round_trips_into_the_report(self, capsys):
+        import time
+        from send_queue import PacedSender, SendPacer
+
+        class Slow(SendPacer):
+            BASE_COST_SECONDS = 0.05
+            BYTES_PER_EXTRA_SECOND = 10**9
+            MAX_AHEAD_SECONDS = 0
+
+        written = []
+        sender = PacedSender(written.append, pacer=Slow())
+        for i in range(8):
+            sender.send(f"PRIVMSG #links :title {i}", max_wait=0.06)
+        sender.send("PRIVMSG #links :last")
+        deadline = time.monotonic() + 3
+        while written[-1:] != ["PRIVMSG #links :last"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        out = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Send queue")]
+        assert out
+        entries = [jr.parse_line(line("18:10:59", text), YEAR) for text in out]
+        assert all(e and e["kind"] == "queue_dropped" and e["channel"] == "#links" for e in entries)
+        text = jr.render(jr.build_report(entries))
+        assert f"link titles dropped after a minute in the send queue (#53): {len(out)} (#links {len(out)})" in text

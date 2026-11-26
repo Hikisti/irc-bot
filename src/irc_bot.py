@@ -8,6 +8,7 @@ import traceback
 
 from auto_start import AutoStarter
 from command_handler import CommandHandler
+from send_queue import PacedSender
 from url_fetcher import URLFetcher
 
 class IrcBot:
@@ -39,7 +40,7 @@ class IrcBot:
         self.stop_requested = False
         self.registered = False
         self.sock = None
-        self._send_lock = threading.Lock()  # serializes socket writes across threads
+        self._sender = PacedSender(self._write_line)  # paces and serializes every socket write
         self._last_sent = {}  # channel -> last message sent to it, for _report_refused_send()
         self.command_handler = CommandHandler()  # Initialize command handler
         # channels.toml names both the production channels and the debug one, the default here.
@@ -188,22 +189,19 @@ class IrcBot:
         self.send_raw(f"NICK {self.nickname}")
 
     def send_raw(self, message):
-        """Send a raw command to the IRC server."""
+        """Send a raw command to the IRC server at once, ahead of any queued channel messages."""
+        self._sender.send_now(message)
+
+    def _write_line(self, message):
+        """The one place a line reaches the socket; the PacedSender calls it under its lock, so two lines
+        never interleave on the wire, whichever thread (trackers, link titles, the listener) sent them."""
         # One write, newline included: print() writes the text and the newline separately, and a
         # second thread's line landing between them glued two "> PRIVMSG" lines into one journal
         # line (seen with the two channels' GOAL: lines, which are sent from different threads).
+        # Written when the line goes out, not when queued, so the journal's times are the channel's.
         sys.stdout.write(f"> {message}\n")
-        try:
-            # sendall() (rather than send()) guarantees the whole line goes
-            # out in one go rather than potentially partial-writing; the
-            # lock then serializes that across threads (multiple command
-            # background pollers, e.g. !liiga and !superpesis, plus the
-            # listener thread, can all call this concurrently) so two
-            # messages can never interleave mid-line on the wire.
-            with self._send_lock:
-                self.sock.sendall((message + "\r\n").encode("utf-8"))
-        except Exception as e:
-            print(f"Failed to send message: {e}")
+        # sendall() (rather than send()) guarantees the whole line goes out in one go.
+        self.sock.sendall((message + "\r\n").encode("utf-8"))
 
     def join_channels(self):
         """Join multiple channels."""
@@ -252,12 +250,14 @@ class IrcBot:
     # a line. The formatting codes the bot sends on purpose (FORMATTING_CODES) are kept.
     STRAY_CONTROLS = re.compile("[\x00\x01\x04-\x08\x0b\x0c\x0e\x10-\x15\x17-\x1c\x1e\x7f]")
 
-    def send_message(self, channel, message):
-        """Send a message to the specified IRC channel."""
+    def send_message(self, channel, message, max_wait=None):
+        """Send a message to the specified IRC channel; if it has to queue, drop it after max_wait seconds."""
         safe_message = re.sub("[\r\n\t]", " ", message)  # line breaks and tabs become spaces
         safe_message = self.STRAY_CONTROLS.sub("", safe_message)
+        # A feed's JSON can carry a lone surrogate (\udXXX), which cannot be sent as UTF-8; it becomes "?".
+        safe_message = safe_message.encode("utf-8", "replace").decode("utf-8")
         self._last_sent[channel] = safe_message
-        self.send_raw(f"PRIVMSG {channel} :{safe_message}")  # Prefix colon to prevent misinterpretation
+        self._sender.send(f"PRIVMSG {channel} :{safe_message}", max_wait=max_wait)  # Prefix colon to prevent misinterpretation
         
     def process_message(self, message):
         """Extracts sender, channel, and message, then processes commands."""

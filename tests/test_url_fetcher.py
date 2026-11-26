@@ -596,7 +596,7 @@ class TestPageEncoding:
         resp = real_response(b"<html><head><title>A" + spelled + b"B</title></head></html>", f"text/html; charset={charset}")
         with patch.object(fetcher.session, "get", return_value=resp):
             fetcher.detect_and_fetch("nick", "#chan", "https://example.com/a")
-        bot.send_message.assert_called_once_with("#chan", "A?B")
+        bot.send_message.assert_called_once_with("#chan", "A?B", max_wait=60)
 
     def test_an_unknown_declared_charset_is_logged(self, fetcher, capsys):
         resp = real_response(self.HTML.format("Plain").encode("utf-8"), "text/html; charset=no-such-charset")
@@ -628,7 +628,7 @@ class TestDetectAndFetch:
         html = "<html><head><title>Some Page</title></head></html>"
         with patch.object(fetcher.session, "get", return_value=make_response(html)):
             fetcher.detect_and_fetch("nick", "#chan", "check https://example.com/page")
-        bot.send_message.assert_called_once_with("#chan", "Some Page")
+        bot.send_message.assert_called_once_with("#chan", "Some Page", max_wait=60)
 
     def test_no_url_does_not_send_message(self, fetcher, bot):
         fetcher.detect_and_fetch("nick", "#chan", "no links here")
@@ -644,7 +644,7 @@ class TestDetectAndFetch:
     def test_one_failing_link_does_not_stop_the_others(self, fetcher, bot, capsys):
         with patch.object(fetcher, "get_title", side_effect=[RuntimeError("boom"), "Second"]):
             fetcher.detect_and_fetch("nick", "#chan", "https://a.example/ https://b.example/")
-        bot.send_message.assert_called_once_with("#chan", "Second")
+        bot.send_message.assert_called_once_with("#chan", "Second", max_wait=60)
         assert "URL title: failed: RuntimeError" in capsys.readouterr().out
 
     def test_blacklisted_url_does_not_send_message(self, fetcher, bot):
@@ -685,7 +685,7 @@ class TestOffTheListenerThread:
             bot.send_message.assert_not_called()
             release.set()
             assert wait_until(lambda: bot.send_message.called)
-        bot.send_message.assert_called_once_with("#chan", "Late")
+        bot.send_message.assert_called_once_with("#chan", "Late", max_wait=60)
 
     def test_a_message_without_links_starts_no_worker(self, fetcher):
         fetcher.submit("nick", "#chan", "no links here")
