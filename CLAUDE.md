@@ -83,8 +83,8 @@ Heikki for it) holds the server access details and runbook.
   never to a channel (see `tools/README.md`). They
   reuse tracker internals, so renaming one of the following means updating
   `tools/`: `_fetch_scores`, `_fetch_play_by_play`, `_current_season`,
-  `_fetch_today_games`, `_parse_start_dt`, `START_TIME_KEY`, the trackers'
-  timezones, the probes' command-line arguments.
+  `_fetch_today_games`, `_fetch_day`, `_parse_start_dt`, `START_TIME_KEY`, the
+  trackers' timezones, the probes' command-line arguments.
   - `journal_report.py` parses the bot's own message wording (GOAL:/NO
     GOAL:/FINAL:, the `NHL:`/`Liiga:` prints). Changing that wording or adding
     a journal print means updating it.

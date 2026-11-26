@@ -1,5 +1,6 @@
 """The pure parts of the read-only probes in tools/ (the polling loops talk to the live
 feeds and are verified by running them, see tools/README.md)."""
+import datetime
 import os
 import sys
 
@@ -9,6 +10,7 @@ TOOLS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
+import auto_fetch  # noqa: E402
 import goal_probe  # noqa: E402
 import liiga_sampler  # noqa: E402
 import pre_push  # noqa: E402
@@ -716,9 +718,10 @@ class TestFetchNight:
         result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00")
         assert result.returncode == 0
         command, copies = result.stdout.splitlines()
-        assert "~/nightcheck.sh '2026-11-23 23:00' '2026-11-24 06:00' > ~/nightcheck_n1.txt" in command
-        assert "$J -u 'botunit' -a --since '2026-11-23 23:00' --until '2026-11-24 06:00' > ~/journal_n1.txt" in command
-        assert copies == "scp <server>:nightcheck_n1.txt <server>:journal_n1.txt into tools/logs/, renamed to .log"
+        assert "~/nightcheck.sh '2026-11-23 23:00' '2026-11-24 06:00' > ~/fetch_night/nightcheck_n1.txt" in command
+        assert "$J -u 'botunit' -a --since '2026-11-23 23:00' --until '2026-11-24 06:00' > ~/fetch_night/journal_n1.txt" in command
+        assert copies == ("scp <server>:fetch_night/nightcheck_n1.txt <server>:fetch_night/journal_n1.txt into tools/logs/, "
+                          "renamed to .log")
 
     def test_several_nights_go_in_one_login_with_a_file_pair_each(self, tmp_path):
         result = self._run(tmp_path, "a", "2026-11-23 23:00", "2026-11-24 06:00", "--probe",
@@ -726,9 +729,14 @@ class TestFetchNight:
         assert result.returncode == 0
         command, copies = result.stdout.splitlines()
         assert command.count("~/nightcheck.sh") == 2 and command.count("$J -u") == 2
-        assert "--since '2026-11-24 15:30' --until '2026-11-25 05:30' > ~/journal_b.txt" in command
+        assert "--since '2026-11-24 15:30' --until '2026-11-25 05:30' > ~/fetch_night/journal_b.txt" in command
         for name in ("nightcheck_a", "journal_a", "nightcheck_b", "journal_b", "goal_probe_server"):
-            assert f"<server>:{name}.txt" in copies
+            assert f"<server>:fetch_night/{name}.txt" in copies
+
+    def test_each_run_empties_its_own_folder_on_the_server_first(self, tmp_path):
+        command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00").stdout
+        assert command.split("; ")[1:3] == ["mkdir -p ~/fetch_night", "rm -f ~/fetch_night/*"]
+        assert "rm -rf" not in command
 
     def test_the_journal_is_read_without_sudo_only_by_a_login_that_may(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00").stdout
@@ -736,13 +744,13 @@ class TestFetchNight:
 
     def test_probe_log_without_a_bot_user_is_copied_with_sudo(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--probe").stdout
-        assert "sudo cp '/srv/bot/tools/logs/goal_probe.log' ~/goal_probe_server.txt" in command
+        assert "sudo cp '/srv/bot/tools/logs/goal_probe.log' ~/fetch_night/goal_probe_server.txt" in command
         assert "sudo -n" not in command
 
     def test_probe_log_with_a_bot_user_tries_the_passwordless_read_first(self, tmp_path):
         command = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", "--sampler",
                             bot_user="botuser").stdout
-        assert ("sudo -n -u 'botuser' cat '/srv/bot/tools/logs/liiga_sampler.log' > ~/liiga_sampler_server.txt "
+        assert ("sudo -n -u 'botuser' cat '/srv/bot/tools/logs/liiga_sampler.log' > ~/fetch_night/liiga_sampler_server.txt "
                 "2>/dev/null || { sudo cp") in command
 
     @pytest.mark.parametrize("args", [
@@ -759,3 +767,83 @@ class TestFetchNight:
     def test_a_bot_user_that_is_not_a_user_name_is_refused(self, tmp_path):
         result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", bot_user="x'; rm")
         assert result.returncode == 2 and "BOT_USER" in result.stderr
+
+
+class TestAutoFetch:
+    """tools/auto_fetch.py: which nights the morning job fetches, and with which windows and flags."""
+
+    UTC = datetime.timezone.utc
+
+    def _at(self, day, hh, mm=0):
+        return datetime.datetime(2026, 11, day, hh, mm, tzinfo=self.UTC)
+
+    def test_no_games_is_no_night(self):
+        assert auto_fetch.night_window(datetime.date(2026, 11, 26), [], []) is None
+
+    def test_a_liiga_evening_gets_an_hour_before_and_two_after_the_end(self):
+        night = auto_fetch.night_window(datetime.date(2026, 11, 26), [self._at(26, 16, 30)], [])
+        assert night == auto_fetch.Night("2026-11-26_liiga", self._at(26, 15, 30), self._at(26, 21, 30), False, False)
+
+    def test_a_late_nhl_slate_ends_at_the_cutoff_when_the_games_allow(self):
+        nhl = [self._at(27, 0), self._at(27, 2)]  # last end 05:00, +2 h would be 07:00
+        night = auto_fetch.night_window(datetime.date(2026, 11, 26), [], nhl)
+        assert (night.name, night.start, night.end) == ("2026-11-26_nhl", self._at(26, 23), self._at(27, 6))
+
+    def test_a_game_ending_past_the_cutoff_still_gets_half_an_hour(self):
+        night = auto_fetch.night_window(datetime.date(2026, 11, 26), [], [self._at(27, 3, 30)])
+        assert night.end == self._at(27, 7)  # ends 06:30, so 07:00 rather than 06:00
+
+    def test_both_leagues_make_one_window_and_the_probe_flags_follow_the_server_rule(self):
+        liiga = [self._at(26, 16, 30)] * auto_fetch.LIIGA_MIN_GAMES
+        nhl = [self._at(27, 0)] * auto_fetch.NHL_MIN_GAMES
+        night = auto_fetch.night_window(datetime.date(2026, 11, 26), liiga, nhl)
+        assert night.name == "2026-11-26" and night.probe and night.sampler
+        smaller = auto_fetch.night_window(datetime.date(2026, 11, 26), liiga[1:], nhl[1:])
+        assert not smaller.probe and not smaller.sampler
+
+    def test_the_nights_after_the_newest_journal_up_to_yesterday(self):
+        today = datetime.date(2026, 11, 27)
+        assert auto_fetch.nights_to_check(today, datetime.date(2026, 11, 25)) == [datetime.date(2026, 11, 26)]
+        assert auto_fetch.nights_to_check(today, datetime.date(2026, 11, 26)) == []
+        assert len(auto_fetch.nights_to_check(today, None)) == auto_fetch.MAX_NIGHTS
+        assert auto_fetch.nights_to_check(today, datetime.date(2026, 10, 1))[0] == datetime.date(2026, 11, 20)
+
+    def test_the_newest_journal_is_read_from_the_file_names(self):
+        names = ["journal_2026-11-23_nhl.log", "journal_2026-11-25.log", "nightcheck_2026-11-26.log",
+                 "goal_probe_server.log", "journal_test.log"]
+        assert auto_fetch.last_fetched(names) == datetime.date(2026, 11, 25)
+        assert auto_fetch.last_fetched(["goal_probe_server.log"]) is None
+
+    def test_every_night_goes_in_one_fetch_with_the_flags_once(self):
+        a = auto_fetch.Night("2026-11-24", self._at(24, 15, 30), self._at(25, 6), False, True)
+        b = auto_fetch.Night("2026-11-25", self._at(25, 15, 30), self._at(26, 6, 30), True, False)
+        assert auto_fetch.fetch_args([a, b]) == ["2026-11-24", "2026-11-24 15:30", "2026-11-25 06:00",
+                                                 "2026-11-25", "2026-11-25 15:30", "2026-11-26 06:30",
+                                                 "--probe", "--sampler"]
+
+    def _main(self, monkeypatch, tmp_path, schedules, now, journals=("journal_2026-11-24.log",)):
+        for name in journals:
+            (tmp_path / name).write_text("")
+        monkeypatch.setattr(auto_fetch, "LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(auto_fetch, "starts_on", lambda night, liiga, nhl: schedules.get(night, ([], [])))
+        calls = []
+        code = auto_fetch.main([], now=now, run=lambda cmd: calls.append(cmd) or type("R", (), {"returncode": 0})())
+        return code, calls
+
+    def test_main_fetches_the_finished_nights_in_one_call(self, monkeypatch, tmp_path):
+        schedules = {datetime.date(2026, 11, 25): ([self._at(25, 16, 30)], [self._at(26, 0)])}
+        code, calls = self._main(monkeypatch, tmp_path, schedules, self._at(27, 7, 30))
+        assert code == 0 and len(calls) == 1
+        assert calls[0][1:] == ["2026-11-25", "2026-11-25 15:30", "2026-11-26 05:00"]  # 11-26 had no games
+
+    def test_main_fetches_nothing_on_a_morning_without_games(self, monkeypatch, tmp_path):
+        assert self._main(monkeypatch, tmp_path, {}, self._at(27, 7, 30)) == (0, [])
+
+    def test_a_night_not_over_yet_and_the_nights_after_it_wait(self, monkeypatch, tmp_path):
+        schedules = {datetime.date(2026, 11, 25): ([], [self._at(26, 3)])}  # its window ends 06:30
+        code, calls = self._main(monkeypatch, tmp_path, schedules, self._at(26, 6))
+        assert calls == []
+
+    def test_an_unreadable_schedule_stops_before_later_nights(self, monkeypatch, tmp_path):
+        schedules = {datetime.date(2026, 11, 25): None, datetime.date(2026, 11, 26): ([self._at(26, 16)], [])}
+        assert self._main(monkeypatch, tmp_path, schedules, self._at(27, 7, 30)) == (0, [])

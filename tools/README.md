@@ -128,6 +128,25 @@ No password is asked where the server allows it: the journal is read without sud
 in a group that may read it, and with `BOT_USER` set the probe logs are read through a sudo rule for
 exactly that read (the private deploy notes have the steps). Otherwise sudo asks, once per run.
 
+### `auto_fetch.py` - the morning fetch, by itself
+
+Run on the Mac each morning by a `launchd` job: it fetches the game nights not fetched yet, so the
+files are in `tools/logs/` before `/post-game`. A night D is the Liiga games of Helsinki date D and
+the NHL games of US-Eastern date D; its window runs from 1 h before the first start to 2 h after the
+last game's end (a game taken as 3 h), ending before 06:00 UTC when the games allow. The nights are
+those after the newest `journal_*.log` up to yesterday (at most 7), each named like a fetch by hand
+(`D`, or `D_nhl` / `D_liiga` when one league played), with `--probe` / `--sampler` by the same
+thresholds as `start_extras.py`, all in one `fetch_night.sh` call. Nights without games are skipped;
+a night not over yet, or a schedule that cannot be read, waits for the next run, and so does every
+night after it.
+
+    .venv/bin/python tools/auto_fetch.py --dry-run    # the plan and the fetch command, runs nothing
+
+The job is a `LaunchAgents` plist on the Mac (not in the repository: it names the checkout's path)
+that runs `tools/auto_fetch.py` from the checkout once a day and writes its output to
+`tools/logs/auto_fetch.log`. It logs in to the server only through `fetch_night.sh`, so it needs the
+password-free fetch set up first and an SSH key that works without a prompt.
+
 ### `pre_push.py` - the checks before a push to main
 
 Run on the Mac by the `/pre-push` skill (`.claude/skills/pre-push/`) before every push, since a push
