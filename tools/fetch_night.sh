@@ -47,17 +47,18 @@ BOT_USER=""
 : "${SERVER:?not set in $conf}" "${SERVICE:?not set in $conf}" "${BOT_DIR:?not set in $conf}"
 [ -z "$BOT_USER" ] || [[ $BOT_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "BOT_USER in $conf is not a user name" >&2; exit 2; }
 files=()
-remote="set -e; if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi"
+# The copies go in one folder on the server that each run empties first, so they never pile up there.
+remote="set -e; mkdir -p ~/fetch_night; rm -f ~/fetch_night/*; if id -nG | grep -qwE 'systemd-journal|adm'; then J=journalctl; else J='sudo journalctl'; fi"
 for ((i = 0; i < ${#windows[@]}; i += 3)); do
     name=${windows[i]} from=${windows[i+1]} to=${windows[i+2]}
-    remote+="; ~/nightcheck.sh '$from' '$to' > ~/nightcheck_$name.txt"
-    remote+="; \$J -u '$SERVICE' -a --since '$from' --until '$to' > ~/journal_$name.txt"
+    remote+="; ~/nightcheck.sh '$from' '$to' > ~/fetch_night/nightcheck_$name.txt"
+    remote+="; \$J -u '$SERVICE' -a --since '$from' --until '$to' > ~/fetch_night/journal_$name.txt"
     files+=("nightcheck_$name.txt" "journal_$name.txt")
 done
 for kind in probe sampler; do
     [ "${!kind}" = 1 ] || continue
     log=$([ $kind = probe ] && echo goal_probe || echo liiga_sampler)
-    src="$BOT_DIR/tools/logs/$log.log" dst="~/${log}_server.txt"
+    src="$BOT_DIR/tools/logs/$log.log" dst="~/fetch_night/${log}_server.txt"
     copy="sudo cp '$src' $dst; sudo chown \"\$(id -un):\" $dst"
     if [ -n "$BOT_USER" ]; then
         remote+="; sudo -n -u '$BOT_USER' cat '$src' > $dst 2>/dev/null || { $copy; }"
@@ -67,10 +68,10 @@ for kind in probe sampler; do
     files+=("${log}_server.txt")
 done
 sources=()
-for f in "${files[@]}"; do sources+=("$SERVER:$f"); done
+for f in "${files[@]}"; do sources+=("$SERVER:fetch_night/$f"); done
 if [ $dry_run = 1 ]; then
     echo "ssh -t <server> \"$remote\""
-    echo "scp ${files[*]/#/<server>:} into tools/logs/, renamed to .log"
+    echo "scp ${files[*]/#/<server>:fetch_night/} into tools/logs/, renamed to .log"
     exit 0
 fi
 mkdir -p tools/logs
