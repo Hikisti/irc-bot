@@ -793,6 +793,17 @@ class TestFetchNight:
         result = self._run(tmp_path, *args)
         assert result.returncode == 2 and result.stdout == ""
 
+    @pytest.mark.parametrize("line,word", [('SERVICE="bot\'unit"', "SERVICE"), ('BOT_DIR="srv/bot"', "BOT_DIR"),
+                                            ('BOT_DIR="/srv/bot dir"', "BOT_DIR")])
+    def test_a_service_or_checkout_value_that_could_break_the_command_is_refused(self, tmp_path, line, word):
+        self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00")  # writes the script and a good conf
+        conf = tmp_path / "tools" / "fetch_night.conf"
+        conf.write_text(conf.read_text() + line + "\n")
+        import subprocess
+        result = subprocess.run(["bash", str(tmp_path / "tools" / "fetch_night.sh"), "n1", "2026-11-23 23:00",
+                                 "2026-11-24 06:00", "--dry-run"], capture_output=True, text=True, timeout=20)
+        assert result.returncode == 2 and word in result.stderr and result.stdout == ""
+
     def test_a_bot_user_that_is_not_a_user_name_is_refused(self, tmp_path):
         result = self._run(tmp_path, "n1", "2026-11-23 23:00", "2026-11-24 06:00", bot_user="x'; rm")
         assert result.returncode == 2 and "BOT_USER" in result.stderr
@@ -858,6 +869,21 @@ class TestAutoFetch:
         calls = []
         code = auto_fetch.main([], now=now, run=lambda cmd: calls.append(cmd) or type("R", (), {"returncode": 0})())
         return code, calls
+
+    def test_a_journal_name_with_an_impossible_date_is_ignored(self):
+        assert auto_fetch.last_fetched(["journal_2026-13-01.log", "journal_2026-11-24.log"]) == datetime.date(2026, 11, 24)
+
+    def test_an_odd_feed_value_stops_before_later_nights_without_a_traceback(self, monkeypatch, tmp_path, capsys):
+        (tmp_path / "journal_2026-11-24.log").write_text("")
+        monkeypatch.setattr(auto_fetch, "LOG_DIR", str(tmp_path))
+        def broken(night, liiga, nhl):
+            if night == datetime.date(2026, 11, 25):
+                raise OverflowError("date value out of range")
+            return [self._at(26, 16)], []
+        monkeypatch.setattr(auto_fetch, "starts_on", broken)
+        calls = []
+        assert auto_fetch.main([], now=self._at(27, 7, 30), run=calls.append) == 0 and calls == []
+        assert "2026-11-25: could not work out the night (OverflowError" in capsys.readouterr().out
 
     def test_main_fetches_the_finished_nights_in_one_call(self, monkeypatch, tmp_path):
         schedules = {datetime.date(2026, 11, 25): ([self._at(25, 16, 30)], [self._at(26, 0)])}

@@ -71,8 +71,14 @@ def nights_to_check(today, last_fetched):
 
 
 def last_fetched(names):
-    """The newest night among journal file names (journal_YYYY-MM-DD...), or None."""
-    dates = [datetime.date.fromisoformat(m.group(1)) for m in map(JOURNAL_NAME.match, names) if m]
+    """The newest night among journal file names (journal_YYYY-MM-DD...), or None. A name whose date
+    is not a real one (journal_2026-13-01) is ignored, not fatal: the job runs with nobody watching."""
+    dates = []
+    for match in filter(None, map(JOURNAL_NAME.match, names)):
+        try:
+            dates.append(datetime.date.fromisoformat(match.group(1)))
+        except ValueError:
+            continue
     return max(dates, default=None)
 
 
@@ -106,11 +112,15 @@ def main(argv, now=None, run=subprocess.run):
     liiga, nhl = LiigaCommand(), NHLCommand()
     nights = []
     for night in nights_to_check(now.date(), last_fetched(os.listdir(LOG_DIR) if os.path.isdir(LOG_DIR) else [])):
-        starts = starts_on(night, liiga, nhl)
+        try:
+            starts = starts_on(night, liiga, nhl)
+            window = night_window(night, *starts) if starts is not None else None
+        except Exception as e:  # an odd feed value must not end the unattended run with a traceback
+            print(f"  {night}: could not work out the night ({type(e).__name__}: {e}), left for the next run")
+            break
         if starts is None:
             print(f"  {night}: a schedule could not be read, left for the next run")
             break  # a later night must not be fetched past a gap, or this one is never caught up
-        window = night_window(night, *starts)
         if window is None:
             print(f"  {night}: no games")
         elif window.end > now:

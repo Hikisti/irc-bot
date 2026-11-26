@@ -46,6 +46,9 @@ BOT_USER=""
 # shellcheck source=/dev/null
 . "$conf"
 : "${SERVER:?not set in $conf}" "${SERVICE:?not set in $conf}" "${BOT_DIR:?not set in $conf}"
+# They go into the server command too, so a typo fails here instead of building a broken command.
+[[ $SERVICE =~ ^[A-Za-z0-9@._:-]+$ ]] || { echo "SERVICE in $conf is not a unit name" >&2; exit 2; }
+[[ $BOT_DIR =~ ^/[A-Za-z0-9/._-]+$ ]] || { echo "BOT_DIR in $conf is not an absolute path" >&2; exit 2; }
 [ -z "$BOT_USER" ] || [[ $BOT_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "BOT_USER in $conf is not a user name" >&2; exit 2; }
 [ $probe = 0 ] && [ $sampler = 0 ] || [ -n "$BOT_USER" ] || { echo "--probe / --sampler need BOT_USER in $conf" >&2; exit 2; }
 # A probe log is the bot user's file: a link to /dev/zero or a FIFO must not fill the disk or hang
