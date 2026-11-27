@@ -137,6 +137,8 @@ def main(argv, now=None, run=subprocess.run):
     if dry_run:
         print("  would run: " + " ".join(f'"{a}"' if " " in a else a for a in command))
         return 0
+    # Under launchd stdout is a file, so the plan would otherwise land after fetch_night.sh's own output.
+    sys.stdout.flush()
     return run(command).returncode
 
 
