@@ -146,7 +146,8 @@ night after it.
     .venv/bin/python tools/auto_fetch.py --dry-run    # the plan and the fetch command, runs nothing
 
 The job is a `LaunchAgents` plist on the Mac (not in the repository: it names the checkout's path)
-that runs `tools/auto_fetch.py` from the checkout once a day and writes its output to
+that runs `tools/auto_fetch.py` from the checkout once a day and at login (`RunAtLoad`, since launchd
+skips a scheduled run the Mac was shut down for), and writes its output to
 `tools/logs/auto_fetch.log`. It logs in to the server only through `fetch_night.sh`, so it needs the
 password-free fetch set up first and an SSH key that works without a prompt.
 
